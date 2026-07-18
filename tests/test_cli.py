@@ -87,3 +87,17 @@ def test_templates_command_runs(capsys):
 def test_new_unknown_template(tmp_path, capsys):
     rc = main(["new", "not-a-template", "-o", str(tmp_path / "x.mmp")])
     assert rc == 2
+
+
+def test_export_missing_scene_clean_error(tmp_path, capsys):
+    rc = main(["export", str(tmp_path / "nope.mmp"), "-o", str(tmp_path / "x.stl")])
+    assert rc == 2
+    assert "could not load" in capsys.readouterr().err
+
+
+def test_preview_corrupt_scene_clean_error(tmp_path, capsys):
+    bad = tmp_path / "bad.mmp"
+    bad.write_text("{broken")
+    rc = main(["preview", str(bad), "-o", str(tmp_path / "x.png")])
+    assert rc == 2
+    assert "could not load" in capsys.readouterr().err

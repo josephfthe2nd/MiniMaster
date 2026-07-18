@@ -2,9 +2,11 @@
 
 A mesh here is always a triangle soup with shared vertices: ``vertices`` is
 (n, 3) float64 and ``faces`` is (m, 3) int64 indices. Printable shells must be
-watertight and consistently outward-oriented; ``integrity_report`` verifies
-both. A scene exports as several overlapping watertight shells in one STL,
-which every slicer unions at slice time.
+watertight and consistently outward-oriented; ``integrity_report`` reports
+topology in ``watertight`` and orientation (positive signed volume, valid for
+single shells) in ``outward``. A scene exports as several overlapping
+watertight shells in one STL, which every slicer unions at slice time; the
+export pipeline checks each shell for both properties before merging.
 """
 
 from __future__ import annotations
@@ -103,6 +105,7 @@ class Mesh:
         if not len(f):
             return {
                 "watertight": False,
+                "outward": False,
                 "boundary_edges": 0,
                 "nonmanifold_edges": 0,
                 "duplicate_directed_edges": 0,
@@ -127,6 +130,9 @@ class Mesh:
         )
         return {
             "watertight": watertight,
+            # Positive signed volume = outward orientation. Meaningful for a
+            # single shell; a merged mesh needs its shells checked one by one.
+            "outward": watertight and vol > 0.0,
             "boundary_edges": boundary,
             "nonmanifold_edges": nonmanifold,
             "duplicate_directed_edges": dup_directed,

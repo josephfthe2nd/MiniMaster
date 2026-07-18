@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .bases import build_base
 from .core import math3d as m3
 from .core.mesh import Mesh
 
@@ -153,8 +154,6 @@ def render_scene(
     **kwargs,
 ) -> np.ndarray:
     """Render a scene's posed shapes (plus base) with their shape colors."""
-    from .bases import build_base
-
     colored: list[tuple[Mesh, str]] = [
         (mesh, shape.color) for shape, mesh in scene.build_shape_meshes(pose_name)
     ]

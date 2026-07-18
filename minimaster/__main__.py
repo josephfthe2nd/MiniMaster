@@ -32,6 +32,15 @@ def _resolve_pose(arg: str) -> str | None:
     return None if arg == "rest" else arg
 
 
+def _load_scene(path: str) -> Scene | None:
+    """Load a scene, or print the CLI-convention error and return None."""
+    try:
+        return Scene.load(path)
+    except Exception as exc:
+        print(f"error: could not load {path}: {exc}", file=sys.stderr)
+        return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="minimaster",
@@ -106,7 +115,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if command == "export":
-        scene = Scene.load(args.scene)
+        scene = _load_scene(args.scene)
+        if scene is None:
+            return 2
         try:
             report = export_stl(
                 scene,
@@ -141,7 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "preview":
         from .render import render_scene
 
-        scene = Scene.load(args.scene)
+        scene = _load_scene(args.scene)
+        if scene is None:
+            return 2
         try:
             render_scene(
                 scene,
@@ -152,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                 azimuth=args.azimuth,
                 elevation=args.elevation,
             )
-        except KeyError as exc:
+        except (KeyError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(f"wrote {args.output}")

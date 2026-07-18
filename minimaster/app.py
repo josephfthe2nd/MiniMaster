@@ -10,15 +10,13 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-import numpy as np
-
 from . import __version__
 from .export import ExportError, export_stl
 from .panels import ExportPanel, ModelPanel, PosePanel, RigPanel
 from .render import render_scene
 from .scene import Scene, UndoStack
 from .templates import list_templates, load_template
-from .viewport import Viewport
+from .viewport import RenderItem, Viewport
 
 NEW_SHAPE_SCALE = 6.0  # mm; unit primitives arrive at a useful mini-part size
 
@@ -58,10 +56,15 @@ class MiniMasterApp(tk.Tk):
         self.rig_panel = RigPanel(self.notebook, self)
         self.pose_panel = PosePanel(self.notebook, self)
         self.export_panel = ExportPanel(self.notebook, self)
-        self.notebook.add(self.model_panel, text="Model")
-        self.notebook.add(self.rig_panel, text="Rig")
-        self.notebook.add(self.pose_panel, text="Pose")
-        self.notebook.add(self.export_panel, text="Export")
+        self._mode_by_tab: dict[str, str] = {}
+        for panel, mode_name, label in (
+            (self.model_panel, "model", "Model"),
+            (self.rig_panel, "rig", "Rig"),
+            (self.pose_panel, "pose", "Pose"),
+            (self.export_panel, "export", "Export"),
+        ):
+            self.notebook.add(panel, text=label)
+            self._mode_by_tab[str(panel)] = mode_name
         self.notebook.bind("<<NotebookTabChanged>>", lambda e: self.refresh())
 
         self._build_menu()
@@ -73,10 +76,9 @@ class MiniMasterApp(tk.Tk):
 
     def mode(self) -> str:
         try:
-            idx = self.notebook.index(self.notebook.select())
+            return self._mode_by_tab.get(self.notebook.select(), "model")
         except tk.TclError:
-            idx = 0
-        return ("model", "rig", "pose", "export")[idx]
+            return "model"
 
     # -- selection --------------------------------------------------------
 
@@ -110,7 +112,15 @@ class MiniMasterApp(tk.Tk):
     def push_undo_snapshot(self):
         self.undo_stack.push(self.scene.to_json())
 
+    def _abort_grab(self):
+        """Cancel any in-progress grab (restoring the pre-grab scene) before
+        another mutation or history jump — otherwise _grab_end would later
+        restore/push a snapshot from a different timeline."""
+        if self.viewport.grabbing:
+            self.viewport.cancel_grab()
+
     def mutate(self, fn):
+        self._abort_grab()
         snapshot = self.scene.to_json()
         try:
             fn(self.scene)
@@ -123,12 +133,14 @@ class MiniMasterApp(tk.Tk):
         self.refresh()
 
     def undo(self, _e=None):
+        self._abort_grab()
         prev = self.undo_stack.undo(self.scene.to_json())
         if prev is not None:
             self.scene = Scene.from_json(prev)
             self.refresh()
 
     def redo(self, _e=None):
+        self._abort_grab()
         nxt = self.undo_stack.redo(self.scene.to_json())
         if nxt is not None:
             self.scene = Scene.from_json(nxt)
@@ -219,35 +231,39 @@ class MiniMasterApp(tk.Tk):
 
     # -- refresh ----------------------------------------------------------
 
-    def refresh(self):
+    def _viewport_content(self):
+        """(items, joints, bones, show_joints) for the current mode, healing a
+        dangling active pose along the way."""
         mode = self.mode()
         posed = mode in ("pose", "export")
         pose_name = "__active__" if posed else None
-        items = []
         try:
             shape_meshes = self.scene.build_shape_meshes(pose_name)
         except KeyError:
             self.scene.active_pose = None
             shape_meshes = self.scene.build_shape_meshes(None)
-        from .viewport import RenderItem
-
-        for shape, mesh in shape_meshes:
-            items.append(RenderItem(shape.name, mesh.vertices, mesh.faces, shape.color))
-
+        items = [
+            RenderItem(shape.name, mesh.vertices, mesh.faces, shape.color)
+            for shape, mesh in shape_meshes
+        ]
+        joints: dict = {}
+        bones: list = []
         show_joints = mode in ("rig", "pose")
-        joints = {}
-        bones = []
         if show_joints:
-            arm = self.scene.armature
             pose = self.scene.resolve_pose(pose_name) if posed else {}
-            joints = arm.posed_positions(pose)
-            bones = arm.bones()
+            joints = self.scene.armature.posed_positions(pose)
+            bones = self.scene.armature.bones()
+        return items, joints, bones, show_joints
 
-        self.viewport.set_content(items, joints, bones, show_joints)
+    def refresh(self):
+        mode = self.mode()
+        items, joints, bones, show_joints = self._viewport_content()
         self.viewport.set_selection(
             shape=self.selected_shape if mode == "model" else None,
             joint=self.selected_joint if show_joints else None,
+            redraw=False,
         )
+        self.viewport.set_content(items, joints, bones, show_joints)
         for panel in (self.model_panel, self.rig_panel, self.pose_panel,
                       self.export_panel):
             panel.sync()
@@ -255,22 +271,7 @@ class MiniMasterApp(tk.Tk):
 
     def light_refresh(self):
         """Viewport-only refresh during continuous edits (sliders, grabs)."""
-        mode = self.mode()
-        posed = mode in ("pose", "export")
-        pose_name = "__active__" if posed else None
-        from .viewport import RenderItem
-
-        items = [
-            RenderItem(shape.name, mesh.vertices, mesh.faces, shape.color)
-            for shape, mesh in self.scene.build_shape_meshes(pose_name)
-        ]
-        joints = {}
-        bones = []
-        if mode in ("rig", "pose"):
-            pose = self.scene.resolve_pose(pose_name) if posed else {}
-            joints = self.scene.armature.posed_positions(pose)
-            bones = self.scene.armature.bones()
-        self.viewport.set_content(items, joints, bones, mode in ("rig", "pose"))
+        self.viewport.set_content(*self._viewport_content())
 
     def set_status(self, text: str):
         self.status.configure(text=text)
@@ -311,8 +312,7 @@ class MiniMasterApp(tk.Tk):
         filemenu.add_command(label="Save As…", command=self.save_as)
         filemenu.add_separator()
         filemenu.add_command(label="Export STL…",
-                             command=lambda: self.export_stl_dialog(
-                                 self.export_panel.export_options()))
+                             command=lambda: self.export_panel._export())
         filemenu.add_separator()
         filemenu.add_command(label="Quit", command=self.destroy)
         menubar.add_cascade(label="File", menu=filemenu)
@@ -351,7 +351,7 @@ class MiniMasterApp(tk.Tk):
                         ("x", self.delete_selected),
                         ("f", lambda e: self.viewport.frame_content())):
             self.bind(key, self._only_in_viewport(fn))
-        self.bind("<Delete>", self.delete_selected)
+        self.bind("<Delete>", self._only_in_viewport(self.delete_selected))
 
     def _only_in_viewport(self, fn):
         def handler(e):
@@ -442,9 +442,14 @@ class MiniMasterApp(tk.Tk):
         if not path:
             return
         pose = options.get("pose_name", "__active__")
-        render_scene(self.scene, path=path, pose_name=pose,
-                     with_base=options.get("with_base", True),
-                     azimuth=self.viewport.azimuth, elevation=self.viewport.elevation)
+        try:
+            render_scene(self.scene, path=path, pose_name=pose,
+                         with_base=options.get("with_base", True),
+                         azimuth=self.viewport.azimuth,
+                         elevation=self.viewport.elevation)
+        except (ValueError, KeyError) as exc:
+            messagebox.showerror("Save PNG", str(exc), parent=self)
+            return
         self.set_status(f"wrote {path}")
 
     def _about(self):

@@ -92,3 +92,26 @@ def test_export_stl_round_trip(tmp_path):
     assert loaded.integrity_report()["watertight"]
     lo, hi = loaded.bounds
     assert hi[2] - lo[2] == pytest.approx(35.0, rel=1e-5)  # 32 figure + 3 base
+
+
+def test_assemble_rejects_inverted_shell(monkeypatch):
+    from minimaster.core.mesh import Mesh
+
+    scene = figure_scene()
+    orig = scene.build_shape_meshes
+
+    def flipped(pose_name="__active__"):
+        return [
+            (s, Mesh(m.vertices, m.faces[:, [0, 2, 1]])) for s, m in orig(pose_name)
+        ]
+
+    monkeypatch.setattr(scene, "build_shape_meshes", flipped)
+    with pytest.raises(ExportError, match="not a printable shell"):
+        assemble(scene, pose_name=None)
+
+
+def test_assemble_wraps_bad_base_as_export_error():
+    scene = figure_scene()
+    scene.base = {"style": "round", "diameter": 0.0}
+    with pytest.raises(ExportError, match="positive"):
+        assemble(scene, pose_name=None)

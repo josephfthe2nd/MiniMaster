@@ -8,7 +8,7 @@ widget callbacks from firing while sync writes to them.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import colorchooser, messagebox, ttk
 
 import numpy as np
 
@@ -148,7 +148,9 @@ class ModelPanel(ttk.Frame):
                 new_params[key] = int(val) if key in _INT_PARAMS else val
         except ValueError:
             return
-        if new_params == shape.params:
+        # The entries show defaults merged in; only mutate on a real change.
+        shown = {**primitives.default_params(shape.kind), **shape.params}
+        if new_params == shown:
             return
 
         def apply(scene):
@@ -343,28 +345,20 @@ class RigPanel(ttk.Frame):
         self._syncing = True
         try:
             arm = self.app.scene.armature
-            existing = set(self.tree.get_children(""))
 
-            def rebuild():
+            have = []
+
+            def collect(node=""):
+                for child in self.tree.get_children(node):
+                    have.append(child)
+                    collect(child)
+
+            collect()
+            if [j.name for j in arm._ordered()] != have:
                 self.tree.delete(*self.tree.get_children(""))
                 for j in arm._ordered():
                     parent = j.parent if j.parent is not None else ""
                     self.tree.insert(parent, "end", iid=j.name, text=j.name, open=True)
-
-            try:
-                want = [j.name for j in arm._ordered()]
-                have = []
-
-                def collect(node=""):
-                    for child in self.tree.get_children(node):
-                        have.append(child)
-                        collect(child)
-
-                collect()
-                if want != have:
-                    rebuild()
-            except tk.TclError:
-                rebuild()
 
             sel = self.app.selected_joint
             current = self.tree.selection()
@@ -389,6 +383,7 @@ class PosePanel(ttk.Frame):
         super().__init__(master, padding=6)
         self.app = app
         self._syncing = False
+        self._stroke_open = False
 
         pf = ttk.LabelFrame(self, text="Poses", padding=4)
         pf.pack(fill="x")
@@ -419,7 +414,7 @@ class PosePanel(ttk.Frame):
                 row, from_=-180, to=180, variable=var,
                 command=lambda _v, a=len(self.scales): self._slider_moved(a))
             scale.pack(side="left", fill="x", expand=True, padx=4)
-            scale.bind("<ButtonPress-1>", self._slider_pressed)
+            scale.bind("<ButtonRelease-1>", lambda e: self._end_slider_stroke())
             val = ttk.Label(row, width=5)
             val.pack(side="left")
             self.scales.append((scale, val))
@@ -441,8 +436,14 @@ class PosePanel(ttk.Frame):
         if not self._syncing:
             self._set_active(self.pose_var.get())
 
+    RESERVED_POSE_NAMES = {"(active)", "(rest)", "rest", "__active__"}
+
     def _new_pose(self):
         name = self.new_var.get().strip() or "pose"
+        if name in self.RESERVED_POSE_NAMES:
+            messagebox.showerror(
+                "New pose", f"{name!r} is reserved; pick another name.", parent=self)
+            return
         scene = self.app.scene
         base = name
         i = 1
@@ -468,10 +469,8 @@ class PosePanel(ttk.Frame):
 
         self.app.mutate(apply)
 
-    def _slider_pressed(self, _e):
-        # One undo snapshot per drag, pushed before the first change.
-        if self.app.scene.active_pose:
-            self.app.push_undo_snapshot()
+    def _end_slider_stroke(self):
+        self._stroke_open = False
 
     def _slider_moved(self, _axis_idx):
         if self._syncing:
@@ -482,6 +481,14 @@ class PosePanel(ttk.Frame):
             return
         angles = tuple(round(v.get(), 1) for v in self.scale_vars)
         pose = scene.poses[scene.active_pose]
+        if angles == tuple(pose.get(joint, (0.0, 0.0, 0.0))):
+            return
+        # One undo snapshot per stroke (mouse drag or run of key presses),
+        # pushed before the first actual change — this also catches keyboard
+        # edits, which never see a ButtonPress.
+        if not getattr(self, "_stroke_open", False):
+            self.app.push_undo_snapshot()
+            self._stroke_open = True
         if not any(angles):
             pose.pop(joint, None)
         else:
@@ -499,6 +506,7 @@ class PosePanel(ttk.Frame):
 
     def sync(self):
         self._syncing = True
+        self._stroke_open = False
         try:
             scene = self.app.scene
             self.pose_combo.configure(values=list(scene.poses))
@@ -578,6 +586,7 @@ class ExportPanel(ttk.Frame):
         self.stats.pack(fill="x", pady=(8, 0))
 
     def export_options(self) -> dict:
+        """Collect export options; raises ValueError for bad numeric input."""
         size = self.size_var.get()
         opts: dict = {"pose_name": None, "with_base": True}
         pose = self.pose_var.get()
@@ -588,12 +597,23 @@ class ExportPanel(ttk.Frame):
         else:
             opts["pose_name"] = pose
         if size == "custom":
-            opts["height"] = float(self.height_var.get() or 32.0)
+            text = self.height_var.get().strip() or "32"
+            try:
+                opts["height"] = float(text)
+            except ValueError:
+                raise ValueError(f"custom height must be a number, got {text!r}")
         elif size != "scene units":
             opts["size"] = size
         if self.base_style.get() == "none":
             opts["with_base"] = False
         return opts
+
+    def _options_or_error(self) -> dict | None:
+        try:
+            return self.export_options()
+        except ValueError as exc:
+            messagebox.showerror("Export", str(exc), parent=self)
+            return None
 
     def _apply_base(self, _e=None):
         if self._syncing:
@@ -604,23 +624,32 @@ class ExportPanel(ttk.Frame):
             diameter = float(self.base_diam.get() or scene.base.get("diameter", 25.0))
         except ValueError:
             return
+        if style != "none" and diameter <= 0:
+            messagebox.showerror(
+                "Base", "Base diameter must be positive.", parent=self)
+            self.sync()  # restore the shown value
+            return
         new = {**scene.base, "style": style, "diameter": diameter}
         if new == scene.base:
             return
         self.app.mutate(lambda s: setattr(s, "base", new))
 
     def _export(self):
-        self.app.export_stl_dialog(self.export_options())
+        opts = self._options_or_error()
+        if opts is not None:
+            self.app.export_stl_dialog(opts)
 
     def _save_png(self):
-        self.app.save_png_dialog(self.export_options())
+        opts = self._options_or_error()
+        if opts is not None:
+            self.app.save_png_dialog(opts)
 
     def _check(self):
         from .export import ExportError, assemble
 
         try:
             mesh = assemble(self.app.scene, **self.export_options())
-        except ExportError as exc:
+        except (ExportError, ValueError, KeyError) as exc:
             self.stats.configure(text=f"error: {exc}", foreground="#aa2222")
             return
         rep = mesh.integrity_report()

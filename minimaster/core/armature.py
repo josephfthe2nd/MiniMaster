@@ -19,7 +19,7 @@ At rest (all rotations zero) every skin matrix is the identity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -55,7 +55,7 @@ class Armature:
             raise ValueError(f"joint {name!r} already exists")
         if parent is not None and parent not in self.joints:
             raise ValueError(f"parent joint {parent!r} does not exist")
-        j = Joint(name, np.asarray(position, dtype=np.float64).copy(), parent)
+        j = Joint(name, np.array(position, dtype=np.float64), parent)
         self.joints[name] = j
         return j
 
@@ -84,7 +84,7 @@ class Armature:
             self.joints[joint.name] = joint
 
     def move_joint(self, name: str, position) -> None:
-        self.joints[name].position = np.asarray(position, dtype=np.float64).copy()
+        self.joints[name].position = np.array(position, dtype=np.float64)
 
     def reparent_joint(self, name: str, new_parent: str | None) -> None:
         if new_parent is not None:

@@ -43,9 +43,11 @@ class Shape:
     color: str = "#b08d57"
 
     def __post_init__(self):
-        self.position = np.asarray(self.position, dtype=np.float64).copy()
-        self.rotation = np.asarray(self.rotation, dtype=np.float64).copy()
-        self.scale = np.asarray(self.scale, dtype=np.float64).copy()
+        # np.array always copies: the shape owns its vectors even when a
+        # caller passes a shared ndarray.
+        self.position = np.array(self.position, dtype=np.float64)
+        self.rotation = np.array(self.rotation, dtype=np.float64)
+        self.scale = np.array(self.scale, dtype=np.float64)
         if self.kind not in primitives.PRIMITIVES:
             raise ValueError(f"unknown primitive kind {self.kind!r}")
 
@@ -156,13 +158,16 @@ class Scene:
     # -- armature interplay ----------------------------------------------
 
     def remove_joint(self, name: str) -> None:
-        removed_bones = {name} | {
-            child for child in self.armature.children(name)
-        }  # bones keyed by these children change shape; conservatively unbind
+        """Remove a joint; children reparent to its parent (Armature policy).
+
+        Shapes bound to the removed bone are unbound. Shapes bound to a
+        reparented child's bone stay bound — that bone still exists, now
+        pivoting at the grandparent.
+        """
         self.armature.remove_joint(name)
         valid = set(self.armature.bone_names())
         for s in self.shapes:
-            if s.bone == name or (s.bone in removed_bones and s.bone not in valid):
+            if s.bone is not None and s.bone not in valid:
                 s.bone = None
         for pose in self.poses.values():
             pose.pop(name, None)
@@ -256,8 +261,13 @@ class Scene:
         for s in scene.shapes:
             if s.bone is not None and s.bone not in valid_bones:
                 s.bone = None
+        joints = set(scene.armature.joints)
         scene.poses = {
-            name: {j: tuple(float(a) for a in ang) for j, ang in pose.items()}
+            name: {
+                j: tuple(float(a) for a in ang)
+                for j, ang in pose.items()
+                if j in joints  # drop entries for joints that no longer exist
+            }
             for name, pose in data.get("poses", {}).items()
         }
         scene.active_pose = data.get("active_pose")

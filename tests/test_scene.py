@@ -143,3 +143,12 @@ def test_undo_stack():
     assert undo.redo("v1") == "v2"
     undo.push("v4")
     assert not undo.can_redo  # push clears redo
+
+
+def test_load_filters_ghost_pose_joints():
+    scene = simple_scene()
+    data = scene.to_dict()
+    data["poses"]["bend"]["ghost"] = [90, 0, 0]
+    loaded = Scene.from_dict(data)
+    assert "ghost" not in loaded.poses["bend"]
+    assert loaded.poses["bend"]["elbow"] == (0.0, -90.0, 0.0)

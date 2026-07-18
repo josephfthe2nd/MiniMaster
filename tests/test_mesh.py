@@ -76,3 +76,15 @@ def test_empty_merge():
     m = Mesh.merge([])
     assert len(m.faces) == 0
     assert not m.integrity_report()["watertight"]
+
+
+def test_outward_field_detects_inverted_shell():
+    good = box(1, 1, 1)
+    rep = good.integrity_report()
+    assert rep["watertight"] and rep["outward"]
+
+    inverted = Mesh(good.vertices, good.faces[:, [0, 2, 1]])
+    rep = inverted.integrity_report()
+    assert rep["watertight"]  # topology alone can't see the inversion...
+    assert not rep["outward"]  # ...orientation can
+    assert rep["volume"] < 0

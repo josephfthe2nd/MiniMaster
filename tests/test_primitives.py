@@ -106,3 +106,32 @@ def test_revolve_rejects_bad_profiles():
         prim._revolve([(0.5, 0), (1, 0.5), (0, 1)], 8)  # doesn't start at axis
     with pytest.raises(ValueError):
         prim.cylinder(segments=2)
+
+
+@pytest.mark.parametrize(
+    "kind,params",
+    [
+        ("box", {"width": -1.0}),
+        ("box", {"height": 0.0}),
+        ("wedge", {"depth": -2.0}),
+        ("cylinder", {"radius": -0.5}),
+        ("cylinder", {"height": -1.0}),
+        ("cylinder", {"taper": -0.5}),
+        ("capsule", {"radius": 0.0}),
+        ("icosphere", {"radius": -0.5}),
+        ("torus", {"radius": -0.5}),
+        ("torus", {"thickness": -0.1}),
+    ],
+)
+def test_bad_dimensions_rejected(kind, params):
+    """Negative/zero dimensions would build inverted shells that slice as
+    cavities — they must be rejected, not silently accepted."""
+    with pytest.raises(ValueError):
+        prim.build(kind, params)
+
+
+def test_torus_self_intersection_rejected():
+    with pytest.raises(ValueError, match="thickness"):
+        prim.torus(radius=0.5, thickness=1.2)
+    with pytest.raises(ValueError, match="thickness"):
+        prim.torus(radius=0.5, thickness=1.0)  # tube touching the axis

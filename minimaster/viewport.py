@@ -36,6 +36,23 @@ def shade_hex(color: str, factor: float) -> str:
     return "#%02x%02x%02x" % tuple(rgb)
 
 
+_SHADE_LEVELS = 32
+_SHADE_LUT: dict[str, list[str]] = {}
+
+
+def _shade_lut(color: str) -> list[str]:
+    """Precomputed Lambert shades per color, so redraw never formats hex
+    strings per triangle."""
+    lut = _SHADE_LUT.get(color)
+    if lut is None:
+        lut = [
+            shade_hex(color, 0.35 + 0.65 * i / (_SHADE_LEVELS - 1))
+            for i in range(_SHADE_LEVELS)
+        ]
+        _SHADE_LUT[color] = lut
+    return lut
+
+
 @dataclass
 class RenderItem:
     name: str | None  # shape name for picking, None = not pickable
@@ -69,6 +86,7 @@ class Viewport(tk.Canvas):
         self._light = np.array([-0.45, -0.6, 0.75])
         self._light = self._light / np.linalg.norm(self._light)
         self._drag: tuple[int, int] | None = None
+        self._press_pos = (0, 0)
         self._drag_button = 0
         self._drag_moved = False
         self._grab: dict | None = None
@@ -94,10 +112,12 @@ class Viewport(tk.Canvas):
         self.show_joints = show_joints
         self.redraw()
 
-    def set_selection(self, shape: str | None = None, joint: str | None = None):
+    def set_selection(self, shape: str | None = None, joint: str | None = None,
+                      redraw: bool = True):
         self.selected_shape = shape
         self.selected_joint = joint
-        self.redraw()
+        if redraw:
+            self.redraw()
 
     def frame_content(self):
         """Center and fit the current content."""
@@ -166,6 +186,7 @@ class Viewport(tk.Canvas):
             self._confirm_grab()
             return
         self._drag = (e.x, e.y)
+        self._press_pos = (e.x, e.y)
         self._drag_button = 1
         self._drag_moved = False
 
@@ -176,7 +197,9 @@ class Viewport(tk.Canvas):
         if self._drag is None:
             return
         dx, dy = e.x - self._drag[0], e.y - self._drag[1]
-        if abs(dx) + abs(dy) > 2:
+        # Click-vs-drag is judged from the press origin, not per event, so a
+        # slow orbit can't masquerade as a click on release.
+        if abs(e.x - self._press_pos[0]) + abs(e.y - self._press_pos[1]) > 3:
             self._drag_moved = True
         self.azimuth = (self.azimuth + dx * 0.5) % 360.0
         self.elevation = float(np.clip(self.elevation + dy * 0.4, -89.0, 89.0))
@@ -264,31 +287,30 @@ class Viewport(tk.Canvas):
         self._draw_grid(view, focal)
 
         polys = []  # (depth, screen coords, fill, outline, shape name)
+        eye = self._eye()
         for it in self.items:
             if not len(it.faces):
                 continue
             sx, sy, depth = self._project(it.vertices, view, focal)
-            if (depth <= 1e-6).any():
-                keep_v = depth > 1e-6
-            else:
-                keep_v = None
+            keep_v = depth > 1e-6
             tris = it.faces
-            v = it.vertices
-            t = v[tris]
+            t = it.vertices[tris]
             n = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
             lens = np.linalg.norm(n, axis=1, keepdims=True)
             n = np.divide(n, lens, out=np.zeros_like(n), where=lens > 1e-14)
-            eye = self._eye()
             facing = np.einsum("ij,ij->i", n, t.mean(axis=1) - eye) < 0
-            shade = 0.35 + 0.65 * np.clip(n @ self._light, 0.0, None)
+            levels = (
+                np.clip(n @ self._light, 0.0, 1.0) * (_SHADE_LEVELS - 1)
+            ).astype(int)
+            lut = _shade_lut(it.color)
             td = depth[tris].mean(axis=1)
             selected = it.name is not None and it.name == self.selected_shape
             for i in np.nonzero(facing)[0]:
                 f = tris[i]
-                if keep_v is not None and not keep_v[f].all():
+                if not keep_v[f].all():
                     continue
                 coords = (sx[f[0]], sy[f[0]], sx[f[1]], sy[f[1]], sx[f[2]], sy[f[2]])
-                fill = shade_hex(it.color, float(shade[i]))
+                fill = lut[levels[i]]
                 outline = OUTLINE_SELECTED if selected else fill
                 polys.append((float(td[i]), coords, fill, outline, it.name))
 

@@ -69,8 +69,17 @@ def _revolve(profile, segments: int) -> Mesh:
     return Mesh(vertices, np.array(faces, dtype=np.int64))
 
 
+def _require_positive(**dims: float) -> None:
+    """Negative or zero dimensions would build inverted or degenerate shells
+    (inward-facing normals slice as cavities), so reject them up front."""
+    for name, value in dims.items():
+        if not value > 0.0:
+            raise ValueError(f"{name} must be positive, got {value}")
+
+
 def box(width: float = 1.0, depth: float = 1.0, height: float = 1.0) -> Mesh:
     """Axis-aligned box: width along X, depth along Y, height along Z."""
+    _require_positive(width=width, depth=depth, height=height)
     x, y, z = width / 2.0, depth / 2.0, height / 2.0
     v = np.array(
         [
@@ -95,6 +104,7 @@ def box(width: float = 1.0, depth: float = 1.0, height: float = 1.0) -> Mesh:
 def wedge(width: float = 1.0, depth: float = 1.0, height: float = 1.0) -> Mesh:
     """Right-triangular prism: rectangular base, vertical face at -X, sloped
     face falling toward +X, extruded along Y. Bounding-box centered."""
+    _require_positive(width=width, depth=depth, height=height)
     x, y, z = width / 2.0, depth / 2.0, height / 2.0
     v = np.array(
         [
@@ -123,6 +133,9 @@ def cylinder(
 ) -> Mesh:
     """N-gon prism. ``taper`` scales the top radius: 1 = prism, 0 = cone,
     values between give a frustum. ``segments=4`` with taper gives pyramids."""
+    _require_positive(radius=radius, height=height)
+    if taper < 0.0:
+        raise ValueError(f"taper must be >= 0, got {taper}")
     r_top = radius * float(taper)
     z = height / 2.0
     profile: list[tuple[float, float]] = [(0.0, -z), (radius, -z)]
@@ -135,6 +148,7 @@ def cylinder(
 def capsule(radius: float = 0.5, height: float = 1.0, segments: int = 8) -> Mesh:
     """Capsule of total height ``height`` (clamped to >= 2*radius) with
     low-poly faceted caps."""
+    _require_positive(radius=radius, height=height)
     height = max(float(height), 2.0 * radius)
     mid = height / 2.0 - radius
     profile: list[tuple[float, float]] = [(0.0, -mid - radius)]
@@ -177,6 +191,7 @@ _ICO_FACES = np.array(
 def icosphere(radius: float = 0.5, subdivisions: int = 1) -> Mesh:
     """Icosphere. ``subdivisions=0`` is a raw icosahedron (the most 'carved'
     ball); 1-2 get progressively rounder."""
+    _require_positive(radius=radius)
     subdivisions = int(subdivisions)
     if not 0 <= subdivisions <= 3:
         raise ValueError("subdivisions must be in 0..3")
@@ -209,9 +224,15 @@ def torus(
 ) -> Mesh:
     """Torus in the XY plane: ``radius`` to the tube center, tube diameter
     ``thickness``."""
+    _require_positive(radius=radius, thickness=thickness)
     segments, minor_segments = int(segments), int(minor_segments)
     if segments < 3 or minor_segments < 3:
         raise ValueError("torus needs >= 3 segments on both axes")
+    if thickness >= 2.0 * radius:
+        raise ValueError(
+            f"torus thickness ({thickness}) must be < 2*radius ({2 * radius}); "
+            "a fatter tube would pass through its own axis"
+        )
     r_minor = float(thickness) / 2.0
     theta = np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False)
     phi = np.linspace(0.0, 2.0 * np.pi, minor_segments, endpoint=False)

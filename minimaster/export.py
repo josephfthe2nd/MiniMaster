@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 from .bases import build_base
 from .core.mesh import Mesh
 from .core.stl import write_stl
@@ -48,7 +46,17 @@ def assemble(
             raise ExportError(f"unknown size {size!r}; known: {sorted(SIZE_PRESETS)}")
         height = SIZE_PRESETS[size]
 
-    figure = scene.build_merged_mesh(pose_name)
+    shape_meshes = scene.build_shape_meshes(pose_name)
+    if check:
+        for shape, mesh in shape_meshes:
+            rep = mesh.integrity_report()
+            if not rep["watertight"] or not rep["outward"]:
+                raise ExportError(
+                    f"shape {shape.name!r} is not a printable shell "
+                    f"(watertight={rep['watertight']}, outward={rep['outward']}, "
+                    f"volume={rep['volume']:.3f})"
+                )
+    figure = Mesh.merge([mesh for _, mesh in shape_meshes])
     if not len(figure.faces):
         raise ExportError("scene has no shapes to export")
 
@@ -64,7 +72,12 @@ def assemble(
 
     parts = [figure]
     if with_base:
-        base_mesh = build_base(base_override if base_override is not None else scene.base)
+        try:
+            base_mesh = build_base(
+                base_override if base_override is not None else scene.base
+            )
+        except ValueError as exc:
+            raise ExportError(str(exc)) from exc
         if base_mesh is not None:
             parts.append(base_mesh)
     merged = Mesh.merge(parts)
@@ -78,7 +91,8 @@ def assemble(
 
 def export_stl(scene: Scene, path, **kwargs) -> dict:
     """Assemble and write a binary STL. Returns a summary report."""
-    mesh = assemble(scene, **kwargs)
+    check = kwargs.pop("check", True)
+    mesh = assemble(scene, check=check, **kwargs)
     path = Path(path)
     write_stl(mesh, path, name=scene.name)
     lo, hi = mesh.bounds
@@ -87,5 +101,7 @@ def export_stl(scene: Scene, path, **kwargs) -> dict:
         "triangles": int(len(mesh.faces)),
         "size_mm": [float(v) for v in (hi - lo)],
         "volume_mm3": mesh.volume(),
-        "watertight": bool(mesh.integrity_report()["watertight"]),
+        # assemble(check=True) raises on any integrity problem, so reaching
+        # this point with check on means the mesh passed the gate.
+        "watertight": check or bool(mesh.integrity_report()["watertight"]),
     }
