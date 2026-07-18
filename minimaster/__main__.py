@@ -1,0 +1,192 @@
+"""MiniMaster command line: launch the studio or run headless operations.
+
+    minimaster                     launch the GUI
+    minimaster templates           list starter templates
+    minimaster new NAME -o f.mmp   start a project from a template
+    minimaster export f.mmp -o out.stl [--pose P] [--size medium | --height MM]
+    minimaster preview f.mmp -o out.png [--pose P]
+    minimaster validate f.mmp
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from . import __version__
+from .export import SIZE_PRESETS, ExportError, export_stl
+from .scene import Scene
+from .templates import list_templates, load_template
+
+
+def _add_pose_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--pose",
+        default="__active__",
+        help="pose name to apply (default: the scene's active pose); use 'rest' for the rest pose",
+    )
+
+
+def _resolve_pose(arg: str) -> str | None:
+    return None if arg == "rest" else arg
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="minimaster",
+        description="Design, rig, pose, and export 3D-printable miniatures.",
+    )
+    parser.add_argument("--version", action="version", version=f"minimaster {__version__}")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("gui", help="launch the studio (default)")
+
+    sub.add_parser("templates", help="list starter templates")
+
+    p_new = sub.add_parser("new", help="create a project from a starter template")
+    p_new.add_argument("template", help="template name (see 'minimaster templates')")
+    p_new.add_argument("-o", "--output", required=True, help="output .mmp path")
+
+    p_exp = sub.add_parser("export", help="export a project to binary STL")
+    p_exp.add_argument("scene", help="input .mmp project")
+    p_exp.add_argument("-o", "--output", required=True, help="output .stl path")
+    _add_pose_arg(p_exp)
+    group = p_exp.add_mutually_exclusive_group()
+    group.add_argument(
+        "--size", choices=sorted(SIZE_PRESETS), help="scale figure to a size category"
+    )
+    group.add_argument("--height", type=float, help="scale figure to this height in mm")
+    p_exp.add_argument("--no-base", action="store_true", help="export without the base")
+    p_exp.add_argument("--png", help="also write a PNG preview to this path")
+
+    p_pre = sub.add_parser("preview", help="render a PNG preview of a project")
+    p_pre.add_argument("scene", help="input .mmp project")
+    p_pre.add_argument("-o", "--output", required=True, help="output .png path")
+    _add_pose_arg(p_pre)
+    p_pre.add_argument("--width", type=int, default=800)
+    p_pre.add_argument("--height", type=int, default=800)
+    p_pre.add_argument("--azimuth", type=float, default=35.0)
+    p_pre.add_argument("--elevation", type=float, default=22.0)
+    p_pre.add_argument("--no-base", action="store_true")
+
+    p_val = sub.add_parser("validate", help="check a project file and its geometry")
+    p_val.add_argument("scene", help="input .mmp project")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    command = args.command or "gui"
+
+    if command == "gui":
+        from .app import run_app  # tkinter imported only when actually needed
+
+        run_app()
+        return 0
+
+    if command == "templates":
+        names = list_templates()
+        if not names:
+            print("no templates installed")
+        for name in names:
+            print(name)
+        return 0
+
+    if command == "new":
+        try:
+            scene = load_template(args.template)
+        except KeyError as exc:
+            print(f"error: {exc.args[0]}", file=sys.stderr)
+            return 2
+        out = Path(args.output)
+        scene.save(out)
+        print(f"created {out} from template {args.template!r}")
+        return 0
+
+    if command == "export":
+        scene = Scene.load(args.scene)
+        try:
+            report = export_stl(
+                scene,
+                args.output,
+                pose_name=_resolve_pose(args.pose),
+                size=args.size,
+                height=args.height,
+                with_base=not args.no_base,
+            )
+        except (ExportError, KeyError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        sx, sy, sz = report["size_mm"]
+        print(
+            f"wrote {report['path']}: {report['triangles']} triangles, "
+            f"{sx:.1f} x {sy:.1f} x {sz:.1f} mm, "
+            f"{report['volume_mm3'] / 1000.0:.1f} cm3, "
+            f"watertight={report['watertight']}"
+        )
+        if args.png:
+            from .render import render_scene
+
+            render_scene(
+                scene,
+                path=args.png,
+                pose_name=_resolve_pose(args.pose),
+                with_base=not args.no_base,
+            )
+            print(f"wrote {args.png}")
+        return 0
+
+    if command == "preview":
+        from .render import render_scene
+
+        scene = Scene.load(args.scene)
+        try:
+            render_scene(
+                scene,
+                path=args.output,
+                pose_name=_resolve_pose(args.pose),
+                with_base=not args.no_base,
+                size=(args.width, args.height),
+                azimuth=args.azimuth,
+                elevation=args.elevation,
+            )
+        except KeyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"wrote {args.output}")
+        return 0
+
+    if command == "validate":
+        try:
+            scene = Scene.load(args.scene)
+        except Exception as exc:
+            print(f"invalid scene file: {exc}", file=sys.stderr)
+            return 2
+        problems = []
+        for shape, mesh in scene.build_shape_meshes(None):
+            rep = mesh.integrity_report()
+            if not rep["watertight"]:
+                problems.append(f"shape {shape.name!r}: {rep}")
+        for pose_name in scene.poses:
+            merged = scene.build_merged_mesh(pose_name)
+            rep = merged.integrity_report()
+            if not rep["watertight"]:
+                problems.append(f"pose {pose_name!r}: merged mesh not watertight")
+        if problems:
+            print(f"{args.scene}: PROBLEMS FOUND", file=sys.stderr)
+            for p in problems:
+                print(f"  - {p}", file=sys.stderr)
+            return 1
+        print(
+            f"{args.scene}: ok ({len(scene.shapes)} shapes, "
+            f"{len(scene.armature)} joints, {len(scene.poses)} poses)"
+        )
+        return 0
+
+    raise AssertionError(f"unhandled command {command!r}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
