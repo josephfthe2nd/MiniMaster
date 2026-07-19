@@ -55,3 +55,51 @@ def test_look_at_centers_target():
     assert p[0] == pytest.approx(0.0, abs=1e-12)
     assert p[1] == pytest.approx(0.0, abs=1e-12)
     assert p[2] == pytest.approx(-np.sqrt(300), rel=1e-12)  # in front (-Z)
+
+
+def test_axis_angle_matches_primitive_rotations():
+    assert np.allclose(m3.axis_angle([1, 0, 0], 37), m3.rot_x(37))
+    assert np.allclose(m3.axis_angle([0, 1, 0], -71), m3.rot_y(-71))
+    assert np.allclose(m3.axis_angle([0, 0, 2], 123), m3.rot_z(123))
+    with pytest.raises(ValueError):
+        m3.axis_angle([0, 0, 0], 10)
+
+
+def test_rotation_between_cases():
+    rng = np.random.default_rng(11)
+    for _ in range(100):
+        a = rng.normal(size=3)
+        b = rng.normal(size=3)
+        if np.linalg.norm(a) < 1e-3 or np.linalg.norm(b) < 1e-3:
+            continue
+        r = m3.rotation_between(a, b)
+        assert np.allclose(r @ r.T, np.eye(3), atol=1e-12)
+        assert np.linalg.det(r) == pytest.approx(1.0)
+        mapped = r @ (a / np.linalg.norm(a))
+        assert np.allclose(mapped, b / np.linalg.norm(b), atol=1e-9)
+    # parallel and anti-parallel
+    assert np.allclose(m3.rotation_between([0, 0, 1], [0, 0, 2]), np.eye(3))
+    r = m3.rotation_between([0, 0, 1], [0, 0, -1])
+    assert np.allclose(r @ np.array([0, 0, 1.0]), [0, 0, -1.0], atol=1e-12)
+    assert np.linalg.det(r) == pytest.approx(1.0)
+    # near-anti-parallel stays stable
+    r = m3.rotation_between([0, 0, 1], [1e-8, 0, -1])
+    assert np.allclose(r @ np.array([0, 0, 1.0]), [1e-8, 0, -1] / np.linalg.norm([1e-8, 0, -1]), atol=1e-6)
+
+
+def test_matrix_to_euler_round_trip():
+    rng = np.random.default_rng(23)
+    for _ in range(300):
+        angles = rng.uniform(-180, 180, 3)
+        r = m3.euler_rotation(*angles)
+        back = m3.euler_rotation(*m3.matrix_to_euler_xyz(r))
+        assert np.allclose(back, r, atol=1e-9)
+
+
+@pytest.mark.parametrize("ry", [90.0, -90.0])
+def test_matrix_to_euler_gimbal_lock(ry):
+    for rx in (0.0, 30.0, -120.0):
+        for rz in (0.0, 45.0):
+            r = m3.euler_rotation(rx, ry, rz)
+            back = m3.euler_rotation(*m3.matrix_to_euler_xyz(r))
+            assert np.allclose(back, r, atol=1e-9)

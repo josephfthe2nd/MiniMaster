@@ -83,6 +83,72 @@ def point_segment_distance(p, a, b) -> float:
     return float(np.linalg.norm(p - (a + t * ab)))
 
 
+def axis_angle(axis, degrees: float) -> np.ndarray:
+    """3x3 rotation of ``degrees`` about an arbitrary axis (Rodrigues)."""
+    axis = np.asarray(axis, dtype=np.float64)
+    n = np.linalg.norm(axis)
+    if n < 1e-12:
+        raise ValueError("axis must be non-zero")
+    x, y, z = axis / n
+    a = np.radians(degrees)
+    c, s = np.cos(a), np.sin(a)
+    cc = 1.0 - c
+    return np.array(
+        [
+            [c + x * x * cc, x * y * cc - z * s, x * z * cc + y * s],
+            [y * x * cc + z * s, c + y * y * cc, y * z * cc - x * s],
+            [z * x * cc - y * s, z * y * cc + x * s, c + z * z * cc],
+        ]
+    )
+
+
+def rotation_between(a, b) -> np.ndarray:
+    """3x3 rotation taking direction a onto direction b (Rodrigues).
+
+    Degenerate cases: parallel vectors give the identity; anti-parallel
+    vectors give a 180-degree flip about an arbitrary perpendicular axis.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    v = np.cross(a, b)
+    c = float(a @ b)
+    s2 = float(v @ v)
+    if s2 < 1e-16:
+        if c > 0:
+            return np.eye(3)
+        # anti-parallel: rotate 180 degrees about any axis perpendicular to a
+        axis = np.cross(a, [1.0, 0.0, 0.0])
+        if axis @ axis < 1e-12:
+            axis = np.cross(a, [0.0, 1.0, 0.0])
+        axis = axis / np.linalg.norm(axis)
+        return 2.0 * np.outer(axis, axis) - np.eye(3)
+    vx = np.array(
+        [[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]], dtype=np.float64
+    )
+    return np.eye(3) + vx + vx @ vx * ((1.0 - c) / s2)
+
+
+def matrix_to_euler_xyz(r: np.ndarray) -> tuple[float, float, float]:
+    """Inverse of :func:`euler_rotation`: R = Rz(rz) @ Ry(ry) @ Rx(rx),
+    angles in degrees."""
+    r = np.asarray(r, dtype=np.float64)
+    sy = float(np.clip(-r[2, 0], -1.0, 1.0))
+    if abs(sy) < 1.0 - 1e-9:
+        ry = np.arcsin(sy)
+        rx = np.arctan2(r[2, 1], r[2, 2])
+        rz = np.arctan2(r[1, 0], r[0, 0])
+    else:  # gimbal lock: only rx +- rz is determined, pick rz = 0
+        ry = np.pi / 2.0 * np.sign(sy)
+        rz = 0.0
+        if sy > 0:
+            rx = np.arctan2(r[0, 1], r[0, 2])
+        else:
+            rx = np.arctan2(-r[0, 1], -r[0, 2])
+    return (float(np.degrees(rx)), float(np.degrees(ry)), float(np.degrees(rz)))
+
+
 def look_at(eye, target, up=(0.0, 0.0, 1.0)) -> np.ndarray:
     """World-to-camera 4x4. Camera looks down -Z, +X right, +Y up."""
     eye = np.asarray(eye, dtype=np.float64)
