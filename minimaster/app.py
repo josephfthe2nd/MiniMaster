@@ -11,8 +11,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
+from .core.raycast import raycast_meshes
 from .export import ExportError, export_stl
-from .panels import ExportPanel, ModelPanel, PosePanel, RigPanel
+from .panels import ExportPanel, ModelPanel, PartsPanel, PosePanel, RigPanel
+from .parts import load_part, place_part
 from .render import render_scene
 from .scene import Scene, UndoStack
 from .templates import list_templates, load_template
@@ -34,6 +36,7 @@ class MiniMasterApp(tk.Tk):
         self.selected_shape: str | None = None
         self.selected_joint: str | None = None
         self._grab_snapshot: str | None = None
+        self._placement = None  # Part armed for snap-to-surface placement
 
         self.status = ttk.Label(self, text="", anchor="w", padding=(6, 2))
         self.status.pack(side="bottom", fill="x")
@@ -53,19 +56,22 @@ class MiniMasterApp(tk.Tk):
         self.notebook = ttk.Notebook(right)
         self.notebook.pack(fill="both", expand=True)
         self.model_panel = ModelPanel(self.notebook, self)
+        self.parts_panel = PartsPanel(self.notebook, self)
         self.rig_panel = RigPanel(self.notebook, self)
         self.pose_panel = PosePanel(self.notebook, self)
         self.export_panel = ExportPanel(self.notebook, self)
         self._mode_by_tab: dict[str, str] = {}
         for panel, mode_name, label in (
             (self.model_panel, "model", "Model"),
+            (self.parts_panel, "parts", "Parts"),
             (self.rig_panel, "rig", "Rig"),
             (self.pose_panel, "pose", "Pose"),
             (self.export_panel, "export", "Export"),
         ):
             self.notebook.add(panel, text=label)
             self._mode_by_tab[str(panel)] = mode_name
-        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self.refresh())
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self.viewport.pick_override = self._placement_click
 
         self._build_menu()
         self._bind_keys()
@@ -99,8 +105,13 @@ class MiniMasterApp(tk.Tk):
         self.selected_joint = name
         self.refresh()
 
+    def _on_tab_changed(self, _e=None):
+        if self.mode() != "parts":
+            self.cancel_placement()
+        self.refresh()
+
     def _viewport_select_shape(self, name):
-        if self.mode() in ("model",):
+        if self.mode() in ("model", "parts"):
             self.select_shape(name)
 
     def _viewport_select_joint(self, name):
@@ -171,19 +182,40 @@ class MiniMasterApp(tk.Tk):
     def mirror_selected(self, _e=None):
         if self.selected_shape is None:
             return
+        shape = self.selected_shape_obj()
+        if shape is None:
+            return
+        if self.mode() == "parts" and shape.group:
+            group = shape.group
 
-        def apply(scene):
-            dup = scene.mirror_shape(self.selected_shape)
-            self.selected_shape = dup.name
+            def apply(scene):
+                new = scene.mirror_group(group)
+                members = scene.group_members(new)
+                if members:
+                    self.selected_shape = members[0].name
+
+        else:
+
+            def apply(scene):
+                dup = scene.mirror_shape(self.selected_shape)
+                self.selected_shape = dup.name
 
         self.mutate(apply)
 
     def delete_selected(self, _e=None):
-        if self.mode() != "model" or self.selected_shape is None:
+        mode = self.mode()
+        if mode not in ("model", "parts") or self.selected_shape is None:
             return
-        name = self.selected_shape
+        shape = self.selected_shape_obj()
+        if shape is None:
+            return
         self.selected_shape = None
-        self.mutate(lambda scene: scene.remove_shape(name))
+        if mode == "parts" and shape.group:
+            group = shape.group
+            self.mutate(lambda scene: scene.remove_group(group))
+        else:
+            name = shape.name
+            self.mutate(lambda scene: scene.remove_shape(name))
 
     def auto_bind_all(self):
         if not self.scene.armature.bones():
@@ -195,8 +227,9 @@ class MiniMasterApp(tk.Tk):
     # -- grab (move in view plane) ---------------------------------------
 
     def start_grab(self, _e=None):
-        if self.mode() != "model" or self.selected_shape is None:
+        if self.mode() not in ("model", "parts") or self.selected_shape is None:
             return
+        self.cancel_placement()
         if self.viewport.start_grab():
             self._grab_snapshot = self.scene.to_json()
             self.set_status("grab: move mouse, click/Enter to confirm, Esc to cancel")
@@ -206,7 +239,11 @@ class MiniMasterApp(tk.Tk):
             shape = self.scene.get_shape(name)
         except KeyError:
             return
-        shape.position = shape.position + delta
+        if self.mode() == "parts" and shape.group in self.scene.groups:
+            # move the whole part instance, grafted joints included
+            self.scene.translate_group(shape.group, delta)
+        else:
+            shape.position = shape.position + delta
         self.light_refresh()
 
     def _grab_end(self, name, committed):
@@ -219,8 +256,66 @@ class MiniMasterApp(tk.Tk):
         self._grab_snapshot = None
         self.refresh()
 
+    # -- part placement ---------------------------------------------------
+
+    def arm_placement(self, info):
+        """Enter snap-to-surface placement: the next viewport click stamps the
+        part."""
+        self._abort_grab()
+        try:
+            part = load_part(info)
+            part.validate()
+        except Exception as exc:
+            messagebox.showerror("Place part", str(exc), parent=self)
+            return
+        self._placement = part
+        self.viewport.configure(cursor="crosshair")
+        self.set_status(
+            f"click the model to place {part.name!r} — Esc cancels")
+
+    def cancel_placement(self):
+        if self._placement is not None:
+            self._placement = None
+            self.viewport.configure(cursor="")
+            self._update_status()
+
+    def _placement_click(self, x, y) -> bool:
+        """Viewport pick override: returns True when the click was consumed by
+        placement mode."""
+        if self._placement is None or self.mode() != "parts":
+            return False
+        if min(self.viewport.winfo_width(), self.viewport.winfo_height()) < 10:
+            return True
+        origin, direction = self.viewport.screen_ray(x, y)
+        named = [
+            (shape.name, mesh)
+            for shape, mesh in self.scene.build_shape_meshes(None)
+        ]
+        hit = raycast_meshes(named, origin, direction)
+        if hit is None:
+            self.set_status("missed — click on the model (Esc cancels)")
+            return True
+        shape_name, ray_hit = hit
+        part = self._placement
+
+        def apply(scene):
+            group = place_part(
+                scene, part,
+                point=ray_hit.point, normal=ray_hit.normal,
+                attach_shape=shape_name,
+            )
+            members = scene.group_members(group)
+            if members:
+                self.selected_shape = members[0].name
+
+        self.cancel_placement()
+        self.mutate(apply)
+        return True
+
     def _escape(self, _e=None):
-        if self.viewport.grabbing:
+        if self._placement is not None:
+            self.cancel_placement()
+        elif self.viewport.grabbing:
             self.viewport.cancel_grab()
         else:
             self.select_shape(None)
@@ -258,14 +353,20 @@ class MiniMasterApp(tk.Tk):
     def refresh(self):
         mode = self.mode()
         items, joints, bones, show_joints = self._viewport_content()
+        group_shapes: set[str] = set()
+        if mode == "parts":
+            shape = self.selected_shape_obj()
+            if shape is not None and shape.group:
+                group_shapes = {s.name for s in self.scene.group_members(shape.group)}
         self.viewport.set_selection(
-            shape=self.selected_shape if mode == "model" else None,
+            shape=self.selected_shape if mode in ("model", "parts") else None,
             joint=self.selected_joint if show_joints else None,
+            shapes=group_shapes,
             redraw=False,
         )
         self.viewport.set_content(items, joints, bones, show_joints)
-        for panel in (self.model_panel, self.rig_panel, self.pose_panel,
-                      self.export_panel):
+        for panel in (self.model_panel, self.parts_panel, self.rig_panel,
+                      self.pose_panel, self.export_panel):
             panel.sync()
         self._update_status()
 
@@ -283,7 +384,17 @@ class MiniMasterApp(tk.Tk):
             bits.append(self.path.name)
         bits.append(f"{len(self.scene.shapes)} shapes / "
                     f"{len(self.scene.armature)} joints")
-        if mode == "model" and self.selected_shape:
+        if self._placement is not None:
+            bits.append(f"placing {self._placement.name!r}: click the model  "
+                        "(Esc cancels)")
+        elif mode == "parts" and self.selected_shape:
+            shape = self.selected_shape_obj()
+            if shape is not None and shape.group:
+                bits.append(f"part: {shape.group}  "
+                            "(g=grab  m=mirror  x=delete)")
+            else:
+                bits.append(f"selected: {self.selected_shape}")
+        elif mode == "model" and self.selected_shape:
             bits.append(f"selected: {self.selected_shape}  "
                         "(g=grab  Ctrl+D=dup  m=mirror  x=delete)")
         elif mode in ("rig", "pose") and self.selected_joint:
@@ -368,6 +479,7 @@ class MiniMasterApp(tk.Tk):
     def new_blank(self):
         if not self._confirm_discard():
             return
+        self.cancel_placement()
         self.scene = Scene(name="untitled")
         self.path = None
         self.undo_stack = UndoStack()
@@ -378,6 +490,7 @@ class MiniMasterApp(tk.Tk):
     def new_from_template(self, name: str):
         if not self._confirm_discard():
             return
+        self.cancel_placement()
         self.scene = load_template(name)
         self.path = None
         self.undo_stack = UndoStack()
@@ -395,6 +508,7 @@ class MiniMasterApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Open", f"Could not open {path}:\n{exc}", parent=self)
             return
+        self.cancel_placement()
         self.scene = scene
         self.path = Path(path)
         self.undo_stack = UndoStack()

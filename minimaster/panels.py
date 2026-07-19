@@ -12,6 +12,8 @@ from tkinter import colorchooser, messagebox, ttk
 
 import numpy as np
 
+from . import parts as partlib
+from .core import math3d as m3
 from .core import primitives
 from .export import SIZE_PRESETS
 
@@ -533,6 +535,269 @@ class PosePanel(ttk.Frame):
                     label.configure(text="")
         finally:
             self._syncing = False
+
+
+class PartsPanel(ttk.Frame):
+    """Spore-style part palette: pick a part, click the model to place it,
+    then adjust/mirror/delete the placed instance as a unit."""
+
+    def __init__(self, master, app):
+        super().__init__(master, padding=6)
+        self.app = app
+        self._syncing = False
+        self._infos: dict[str, partlib.PartInfo] = {}
+        self._thumbs: dict[str, tk.PhotoImage] = {}
+        self._listing_key = None
+
+        lf = ttk.LabelFrame(self, text="Part library", padding=4)
+        lf.pack(fill="both", expand=True)
+        top = ttk.Frame(lf)
+        top.pack(fill="x")
+        ttk.Label(top, text="category").pack(side="left")
+        self.cat_var = tk.StringVar(value="(all)")
+        self.cat_combo = ttk.Combobox(top, textvariable=self.cat_var,
+                                      state="readonly", width=10)
+        self.cat_combo.pack(side="left", padx=4)
+        self.cat_combo.bind("<<ComboboxSelected>>", lambda e: self.sync())
+
+        style = ttk.Style()
+        style.configure("Parts.Treeview", rowheight=38)
+        self.tree = ttk.Treeview(lf, show="tree", height=8, selectmode="browse",
+                                 style="Parts.Treeview")
+        self.tree.pack(side="left", fill="both", expand=True, pady=(4, 0))
+        sb = ttk.Scrollbar(lf, command=self.tree.yview)
+        sb.pack(side="right", fill="y")
+        self.tree.configure(yscrollcommand=sb.set)
+
+        ttk.Button(self, text="Place on model", command=self._arm).pack(
+            fill="x", pady=(6, 2))
+        ttk.Label(self, text="then click the mini in the viewport",
+                  foreground="#777777").pack(fill="x")
+
+        inst = ttk.LabelFrame(self, text="Selected part instance", padding=4)
+        inst.pack(fill="x", pady=(8, 0))
+        self.inst_label = ttk.Label(inst, text="(click a placed part)")
+        self.inst_label.grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(inst, text="spin °").grid(row=1, column=0, sticky="w")
+        self.spin_var = tk.StringVar(value="15")
+        ttk.Entry(inst, textvariable=self.spin_var, width=6).grid(row=1, column=1)
+        ttk.Button(inst, text="Spin", command=self._spin).grid(row=1, column=2,
+                                                               padx=2)
+        ttk.Label(inst, text="size ×").grid(row=2, column=0, sticky="w")
+        self.scale_var = tk.StringVar(value="1.25")
+        ttk.Entry(inst, textvariable=self.scale_var, width=6).grid(row=2, column=1)
+        ttk.Button(inst, text="Scale", command=self._scale).grid(row=2, column=2,
+                                                                 padx=2)
+        btns = ttk.Frame(inst)
+        btns.grid(row=3, column=0, columnspan=3, pady=(4, 0), sticky="w")
+        ttk.Button(btns, text="Mirror", command=self.app.mirror_selected).pack(
+            side="left", padx=1)
+        ttk.Button(btns, text="Ungroup", command=self._ungroup).pack(
+            side="left", padx=1)
+        ttk.Button(btns, text="Delete", command=self.app.delete_selected).pack(
+            side="left", padx=1)
+
+        ttk.Button(self, text="Save selection as part…",
+                   command=self._save_as_part).pack(fill="x", pady=(8, 0))
+
+    # -- library ----------------------------------------------------------
+
+    def _selected_info(self) -> partlib.PartInfo | None:
+        sel = self.tree.selection()
+        return self._infos.get(sel[0]) if sel else None
+
+    def _arm(self):
+        info = self._selected_info()
+        if info is None:
+            messagebox.showinfo("Place part", "Pick a part from the library first.",
+                                parent=self)
+            return
+        self.app.arm_placement(info)
+
+    # -- instance ops -----------------------------------------------------
+
+    def _selected_group(self) -> str | None:
+        shape = self.app.selected_shape_obj()
+        return shape.group if shape is not None else None
+
+    def _spin(self):
+        group = self._selected_group()
+        if not group:
+            return
+        try:
+            degrees = float(self.spin_var.get())
+        except ValueError:
+            return
+        axis = self.app.scene.group_outward_axis(group)
+        self.app.mutate(
+            lambda s: s.transform_group(group, rotation=m3.axis_angle(axis, degrees))
+        )
+
+    def _scale(self):
+        group = self._selected_group()
+        if not group:
+            return
+        try:
+            factor = float(self.scale_var.get())
+        except ValueError:
+            return
+        if factor <= 0:
+            messagebox.showerror("Scale part", "Scale factor must be positive.",
+                                 parent=self)
+            return
+        self.app.mutate(lambda s: s.transform_group(group, scale=factor))
+
+    def _ungroup(self):
+        group = self._selected_group()
+        if not group:
+            return
+        self.app.mutate(lambda s: s.ungroup(group))
+
+    def _save_as_part(self):
+        SavePartDialog(self.app)
+
+    # -- sync -------------------------------------------------------------
+
+    def sync(self):
+        self._syncing = True
+        try:
+            infos = partlib.list_parts()
+            categories = ["(all)"] + sorted({i.category for i in infos})
+            self.cat_combo.configure(values=categories)
+            if self.cat_var.get() not in categories:
+                self.cat_var.set("(all)")
+            wanted = [
+                i for i in infos
+                if self.cat_var.get() in ("(all)", i.category)
+            ]
+            key = tuple((str(i.path), i.name, i.category) for i in wanted)
+            if key != self._listing_key:
+                self._listing_key = key
+                self.tree.delete(*self.tree.get_children(""))
+                self._infos = {}
+                self._thumbs = {}
+                for info in wanted:
+                    iid = str(info.path)
+                    self._infos[iid] = info
+                    label = f"{info.name}  ({info.category})"
+                    if info.user:
+                        label += "  [user]"
+                    kwargs = {}
+                    if info.thumbnail is not None:
+                        try:
+                            img = tk.PhotoImage(file=str(info.thumbnail))
+                            factor = max(1, img.width() // 34)
+                            img = img.subsample(factor, factor)
+                            self._thumbs[iid] = img
+                            kwargs["image"] = img
+                        except tk.TclError:
+                            pass
+                    self.tree.insert("", "end", iid=iid, text=label, **kwargs)
+
+            shape = self.app.selected_shape_obj()
+            group = shape.group if shape is not None else None
+            if group and group in self.app.scene.groups:
+                meta = self.app.scene.groups[group]
+                joints = [j for j in meta.get("joints", [])
+                          if j in self.app.scene.armature.joints]
+                self.inst_label.configure(
+                    text=(f"{group}  —  {meta.get('part', '?')}: "
+                          f"{len(self.app.scene.group_members(group))} shapes, "
+                          f"{len(joints)} joints")
+                )
+            else:
+                self.inst_label.configure(text="(click a placed part)")
+        finally:
+            self._syncing = False
+
+
+class SavePartDialog(tk.Toplevel):
+    """Capture selected shapes (and optionally a joint subtree) as a reusable
+    user-library part."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Save as part")
+        self.transient(app)
+        self.resizable(False, False)
+
+        frame = ttk.Frame(self, padding=8)
+        frame.pack(fill="both", expand=True)
+
+        scene = app.scene
+        selected = app.selected_shape_obj()
+        default_name = "part"
+        preselect: set[str] = set()
+        default_root = "(none)"
+        if selected is not None:
+            if selected.group and selected.group in scene.groups:
+                meta = scene.groups[selected.group]
+                default_name = meta.get("part", "part")
+                preselect = {s.name for s in scene.group_members(selected.group)}
+                group_joints = set(meta.get("joints", []))
+                roots = [
+                    j for j in meta.get("joints", [])
+                    if j in scene.armature.joints
+                    and scene.armature.joints[j].parent not in group_joints
+                ]
+                if roots:
+                    default_root = roots[0]
+            else:
+                default_name = selected.name
+                preselect = {selected.name}
+
+        ttk.Label(frame, text="name").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar(value=default_name)
+        ttk.Entry(frame, textvariable=self.name_var, width=18).grid(
+            row=0, column=1, sticky="w", pady=2)
+        ttk.Label(frame, text="category").grid(row=1, column=0, sticky="w")
+        self.cat_var = tk.StringVar(value="custom")
+        ttk.Entry(frame, textvariable=self.cat_var, width=18).grid(
+            row=1, column=1, sticky="w", pady=2)
+
+        ttk.Label(frame, text="shapes to include").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.listbox = tk.Listbox(frame, selectmode="extended", height=8,
+                                  exportselection=False, width=28)
+        self.listbox.grid(row=3, column=0, columnspan=2, sticky="we")
+        names = [s.name for s in scene.shapes]
+        for i, n in enumerate(names):
+            self.listbox.insert("end", n)
+            if n in preselect:
+                self.listbox.selection_set(i)
+
+        ttk.Label(frame, text="posable root joint").grid(
+            row=4, column=0, sticky="w", pady=(6, 0))
+        self.root_var = tk.StringVar(value=default_root)
+        joints = ["(none)"] + list(scene.armature.joints)
+        ttk.Combobox(frame, textvariable=self.root_var, values=joints,
+                     state="readonly", width=16).grid(row=4, column=1, sticky="w")
+
+        row = ttk.Frame(frame)
+        row.grid(row=5, column=0, columnspan=2, pady=(8, 0), sticky="e")
+        ttk.Button(row, text="Cancel", command=self.destroy).pack(side="right",
+                                                                  padx=2)
+        ttk.Button(row, text="Save", command=self._save).pack(side="right")
+
+    def _save(self):
+        names = [self.listbox.get(i) for i in self.listbox.curselection()]
+        root = self.root_var.get()
+        try:
+            part = partlib.part_from_selection(
+                self.app.scene,
+                names,
+                name=self.name_var.get().strip() or "part",
+                category=self.cat_var.get().strip() or "custom",
+                joint_root=None if root == "(none)" else root,
+            )
+            path = partlib.save_user_part(part)
+        except ValueError as exc:
+            messagebox.showerror("Save as part", str(exc), parent=self)
+            return
+        self.destroy()
+        self.app.set_status(f"saved part to {path}")
+        self.app.refresh()  # the palette picks up the new part
 
 
 class ExportPanel(ttk.Frame):

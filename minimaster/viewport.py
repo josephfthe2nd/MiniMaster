@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .core import math3d as m3
+from .core import raycast as rc
 
 BG = "#1e1d1b"
 GRID = "#33312e"
@@ -81,7 +82,11 @@ class Viewport(tk.Canvas):
         self.bones: list[tuple[str, str]] = []
         self.show_joints = False
         self.selected_shape: str | None = None
+        self.selected_shapes: set[str] = set()  # extra outlines (part groups)
         self.selected_joint: str | None = None
+        # When set, gets first crack at clicks: pick_override(x, y) -> bool
+        # (True = consumed). Used by part placement mode.
+        self.pick_override = None
 
         self._light = np.array([-0.45, -0.6, 0.75])
         self._light = self._light / np.linalg.norm(self._light)
@@ -113,11 +118,20 @@ class Viewport(tk.Canvas):
         self.redraw()
 
     def set_selection(self, shape: str | None = None, joint: str | None = None,
-                      redraw: bool = True):
+                      shapes: set[str] | None = None, redraw: bool = True):
         self.selected_shape = shape
+        self.selected_shapes = shapes or set()
         self.selected_joint = joint
         if redraw:
             self.redraw()
+
+    def screen_ray(self, x: float, y: float):
+        """World-space (origin, direction) for a canvas pixel."""
+        view, focal = self._camera()
+        return rc.screen_ray(
+            x, y, max(self.winfo_width(), 1), max(self.winfo_height(), 1),
+            view, focal,
+        )
 
     def frame_content(self):
         """Center and fit the current content."""
@@ -250,6 +264,8 @@ class Viewport(tk.Canvas):
             self.on_grab_move(self._grab["name"], delta)
 
     def _pick(self, x, y):
+        if self.pick_override is not None and self.pick_override(x, y):
+            return
         # Joints first (drawn on top).
         if self.show_joints:
             hits = self.find_overlapping(x - 4, y - 4, x + 4, y + 4)
@@ -304,7 +320,9 @@ class Viewport(tk.Canvas):
             ).astype(int)
             lut = _shade_lut(it.color)
             td = depth[tris].mean(axis=1)
-            selected = it.name is not None and it.name == self.selected_shape
+            selected = it.name is not None and (
+                it.name == self.selected_shape or it.name in self.selected_shapes
+            )
             for i in np.nonzero(facing)[0]:
                 f = tris[i]
                 if not keep_v[f].all():
