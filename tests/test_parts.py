@@ -1,4 +1,5 @@
 import numpy as np
+from pathlib import Path
 import pytest
 
 from minimaster.core import math3d as m3
@@ -310,3 +311,62 @@ def test_thumbnail_render(tmp_path):
     out = tmp_path / "t.png"
     render_part_thumbnail(tail_part(), out, size=(48, 48))
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# -- shipped library -------------------------------------------------------
+
+EXPECTED_SHIPPED = {
+    "eye", "horn", "ear", "spike", "claw", "wing", "tail",
+    "sword", "shield", "axe", "club", "dagger",
+}
+
+
+def test_expected_parts_ship_with_thumbnails():
+    shipped = {i.name: i for i in list_parts() if not i.user}
+    assert EXPECTED_SHIPPED.issubset(set(shipped))
+    for name in EXPECTED_SHIPPED:
+        info = shipped[name]
+        assert info.thumbnail is not None, name
+        assert info.thumbnail.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_SHIPPED))
+def test_shipped_part_valid_and_placeable(name):
+    info = {i.name: i for i in list_parts() if not i.user}[name]
+    part = load_part(info)
+    part.validate()
+    scene = rigged_scene()
+    group = place_part(scene, part, point=[0, -2.5, 20], normal=[0, -1, 0],
+                       attach_shape="torso")
+    for _, mesh in scene.build_shape_meshes(None):
+        rep = mesh.integrity_report()
+        assert rep["watertight"] and rep["outward"]
+    assert scene.groups[group]["part"] == name
+
+
+def test_shipped_tail_is_posable():
+    info = {i.name: i for i in list_parts() if not i.user}["tail"]
+    assert "posable" in load_part(info).tags
+
+
+def test_generator_matches_shipped_files(tmp_path):
+    """tools/make_parts.py output must match the committed .mmpart files
+    (thumbnails excluded: PNG bytes vary by zlib)."""
+    import subprocess
+    import sys as _sys
+
+    repo = Path(__file__).resolve().parent.parent
+    script = (
+        "from pathlib import Path; "
+        "import tools.make_parts as mp; "
+        f"mp.OUT_DIR = Path(r'{tmp_path}'); "
+        "mp.render_part_thumbnail = lambda *a, **k: None; "
+        "mp.main()"
+    )
+    subprocess.run(
+        [_sys.executable, "-c", script], cwd=repo, check=True, capture_output=True
+    )
+    for name in sorted(EXPECTED_SHIPPED):
+        generated = (tmp_path / f"{name}.mmpart").read_text()
+        shipped = (repo / "minimaster" / "parts" / f"{name}.mmpart").read_text()
+        assert generated == shipped, f"{name}: regenerate minimaster/parts"

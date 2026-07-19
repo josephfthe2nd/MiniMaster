@@ -1,0 +1,58 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "eye",
+  "category": "face",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "ball",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.45
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.8,
+        1.8,
+        1.8
+      ],
+      "bone": null,
+      "color": "#ece7da"
+    },
+    {
+      "name": "pupil",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 0
+      },
+      "position": [
+        0.0,
+        0.0,
+        1.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "bone": null,
+      "color": "#3a3733"
+    }
+  ],
+  "joints": []
+}

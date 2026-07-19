@@ -1,0 +1,59 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "club",
+  "category": "gear",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "shaft",
+      "kind": "cylinder",
+      "params": {
+        "segments": 6,
+        "taper": 0.45
+      },
+      "position": [
+        0.0,
+        0.0,
+        5.1
+      ],
+      "rotation": [
+        180.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.0,
+        3.0,
+        13.8
+      ],
+      "bone": null,
+      "color": "#7b5c39"
+    },
+    {
+      "name": "knob",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 0
+      },
+      "position": [
+        0.0,
+        0.0,
+        11.4
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.6,
+        3.6,
+        3.6
+      ],
+      "bone": null,
+      "color": "#7b5c39"
+    }
+  ],
+  "joints": []
+}

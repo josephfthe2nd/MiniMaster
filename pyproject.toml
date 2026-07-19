@@ -21,7 +21,7 @@ dev = ["pytest>=7"]
 include = ["minimaster*"]
 
 [tool.setuptools.package-data]
-minimaster = ["templates/*.mmp"]
+minimaster = ["templates/*.mmp", "parts/*.mmpart", "parts/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

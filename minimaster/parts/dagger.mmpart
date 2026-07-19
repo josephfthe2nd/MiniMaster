@@ -1,0 +1,57 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "dagger",
+  "category": "gear",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "blade",
+      "kind": "cylinder",
+      "params": {
+        "segments": 4,
+        "taper": 0.08
+      },
+      "position": [
+        0.0,
+        0.0,
+        3.9
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.5,
+        0.6,
+        6.6
+      ],
+      "bone": null,
+      "color": "#b9c2c9"
+    },
+    {
+      "name": "guard",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        0.0,
+        1.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.7,
+        0.84,
+        0.6
+      ],
+      "bone": null,
+      "color": "#5d4a33"
+    }
+  ],
+  "joints": []
+}

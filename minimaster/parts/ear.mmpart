@@ -1,0 +1,35 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "ear",
+  "category": "face",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "flap",
+      "kind": "cylinder",
+      "params": {
+        "segments": 3,
+        "taper": 0.08
+      },
+      "position": [
+        0.0,
+        0.0,
+        1.4
+      ],
+      "rotation": [
+        -10.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.7,
+        0.9,
+        3.2
+      ],
+      "bone": null,
+      "color": "#b08d57"
+    }
+  ],
+  "joints": []
+}

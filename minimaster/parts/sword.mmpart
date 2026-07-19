@@ -1,0 +1,127 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "sword",
+  "category": "gear",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "blade",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        0.0,
+        7.8
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.35,
+        0.42,
+        12.6
+      ],
+      "bone": null,
+      "color": "#b9c2c9"
+    },
+    {
+      "name": "point",
+      "kind": "cylinder",
+      "params": {
+        "segments": 4,
+        "taper": 0.0
+      },
+      "position": [
+        0.0,
+        0.0,
+        14.85
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.35,
+        0.42,
+        1.5
+      ],
+      "bone": null,
+      "color": "#b9c2c9"
+    },
+    {
+      "name": "guard",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        0.0,
+        1.35
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.3,
+        0.9,
+        0.66
+      ],
+      "bone": null,
+      "color": "#6b543a"
+    },
+    {
+      "name": "grip",
+      "kind": "cylinder",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        0.0,
+        -1.35
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.9,
+        0.9,
+        2.7
+      ],
+      "bone": null,
+      "color": "#6b543a"
+    },
+    {
+      "name": "pommel",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 0
+      },
+      "position": [
+        0.0,
+        0.0,
+        -3.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.35,
+        1.35,
+        1.35
+      ],
+      "bone": null,
+      "color": "#b9c2c9"
+    }
+  ],
+  "joints": []
+}

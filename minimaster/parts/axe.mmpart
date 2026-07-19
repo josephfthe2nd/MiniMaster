@@ -1,0 +1,56 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "axe",
+  "category": "gear",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "haft",
+      "kind": "cylinder",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        0.0,
+        4.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.05,
+        1.05,
+        15.0
+      ],
+      "bone": null,
+      "color": "#6b543a"
+    },
+    {
+      "name": "head",
+      "kind": "wedge",
+      "params": {},
+      "position": [
+        0.0,
+        -2.25,
+        6.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "scale": [
+        4.8,
+        1.2,
+        4.2
+      ],
+      "bone": null,
+      "color": "#b9c2c9"
+    }
+  ],
+  "joints": []
+}

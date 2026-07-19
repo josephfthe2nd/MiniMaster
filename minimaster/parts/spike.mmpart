@@ -1,0 +1,35 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "spike",
+  "category": "body",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "cone",
+      "kind": "cylinder",
+      "params": {
+        "segments": 6,
+        "taper": 0.0
+      },
+      "position": [
+        0.0,
+        0.0,
+        1.6
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.9,
+        1.9,
+        3.4
+      ],
+      "bone": null,
+      "color": "#e8ddc4"
+    }
+  ],
+  "joints": []
+}

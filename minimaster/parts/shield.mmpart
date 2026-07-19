@@ -1,0 +1,59 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "shield",
+  "category": "gear",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "disc",
+      "kind": "cylinder",
+      "params": {
+        "segments": 12
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.45
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        10.2,
+        10.2,
+        0.85
+      ],
+      "bone": null,
+      "color": "#7d6a4d"
+    },
+    {
+      "name": "boss",
+      "kind": "cylinder",
+      "params": {
+        "segments": 8,
+        "taper": 0.55
+      },
+      "position": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.0,
+        3.0,
+        1.05
+      ],
+      "bone": null,
+      "color": "#b9c2c9"
+    }
+  ],
+  "joints": []
+}

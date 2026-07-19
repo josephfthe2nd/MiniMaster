@@ -1,0 +1,81 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "wing",
+  "category": "body",
+  "tags": [],
+  "shapes": [
+    {
+      "name": "membrane",
+      "kind": "wedge",
+      "params": {},
+      "position": [
+        3.4,
+        0.0,
+        3.6
+      ],
+      "rotation": [
+        0.0,
+        148.0,
+        0.0
+      ],
+      "scale": [
+        8.4,
+        0.7,
+        6.4
+      ],
+      "bone": null,
+      "color": "#8a7256"
+    },
+    {
+      "name": "spar",
+      "kind": "cylinder",
+      "params": {
+        "segments": 5,
+        "taper": 0.55
+      },
+      "position": [
+        2.6,
+        0.0,
+        4.6
+      ],
+      "rotation": [
+        0.0,
+        38.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        9.6
+      ],
+      "bone": null,
+      "color": "#6b543a"
+    },
+    {
+      "name": "shoulder",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 0
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.7
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.0,
+        2.0,
+        2.0
+      ],
+      "bone": null,
+      "color": "#6b543a"
+    }
+  ],
+  "joints": []
+}
