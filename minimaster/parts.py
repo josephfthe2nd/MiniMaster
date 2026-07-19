@@ -358,6 +358,6 @@ def render_part_thumbnail(part: Part, path, size: tuple[int, int] = (96, 96)) ->
         pose_name=None,
         with_base=False,
         size=size,
-        azimuth=335.0,
-        elevation=18.0,
+        azimuth=305.0,
+        elevation=30.0,  # high 3/4 view keeps flat/swept parts legible
     )

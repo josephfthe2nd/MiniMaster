@@ -51,6 +51,30 @@
       ],
       "bone": null,
       "color": "#5d4a33"
+    },
+    {
+      "name": "grip",
+      "kind": "cylinder",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.1
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.75,
+        0.75,
+        1.9
+      ],
+      "bone": null,
+      "color": "#7d6a4d"
     }
   ],
   "joints": []

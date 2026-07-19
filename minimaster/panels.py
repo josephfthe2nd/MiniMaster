@@ -825,7 +825,7 @@ class ExportPanel(ttk.Frame):
         self.base_style = tk.StringVar()
         ttk.Label(bf, text="style").grid(row=0, column=0, sticky="w")
         combo = ttk.Combobox(bf, textvariable=self.base_style, state="readonly",
-                             values=["round", "square", "none"], width=8)
+                             values=["round", "cobble", "square", "none"], width=8)
         combo.grid(row=0, column=1, padx=4)
         combo.bind("<<ComboboxSelected>>", self._apply_base)
         ttk.Label(bf, text="diameter").grid(row=1, column=0, sticky="w")

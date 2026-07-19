@@ -7,28 +7,47 @@
   "shapes": [
     {
       "name": "flap",
-      "kind": "cylinder",
-      "params": {
-        "segments": 3,
-        "taper": 0.08
-      },
+      "kind": "wedge",
+      "params": {},
       "position": [
         0.0,
-        0.0,
-        1.4
+        0.4,
+        1.6
       ],
       "rotation": [
-        -10.0,
-        0.0,
+        22.0,
+        -90.0,
         0.0
       ],
       "scale": [
-        1.7,
-        0.9,
-        3.2
+        2.6,
+        0.55,
+        3.6
       ],
       "bone": null,
       "color": "#b08d57"
+    },
+    {
+      "name": "fold",
+      "kind": "wedge",
+      "params": {},
+      "position": [
+        0.0,
+        0.25,
+        1.0
+      ],
+      "rotation": [
+        22.0,
+        -90.0,
+        0.0
+      ],
+      "scale": [
+        1.5,
+        0.4,
+        1.9
+      ],
+      "bone": null,
+      "color": "#8d6f4a"
     }
   ],
   "joints": []

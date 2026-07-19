@@ -56,7 +56,7 @@ def render_meshes(
     elevation: float = 22.0,
     background: str | None = "#f2efe9",
     fov: float = 28.0,
-    light_dir=(-0.45, -0.6, 0.75),
+    light_dir=None,
 ) -> np.ndarray:
     """Render meshes (each with a #rrggbb color) to an (h, w, 4) uint8 image.
 
@@ -81,14 +81,19 @@ def render_meshes(
         radius = 1.0
 
     az, el = np.radians(azimuth), np.radians(elevation)
-    distance = radius / np.tan(np.radians(fov) / 2.0) * 1.15
+    distance = radius / np.tan(np.radians(fov) / 2.0) * 1.02
     eye = center + distance * np.array(
         [np.sin(az) * np.cos(el), -np.cos(az) * np.cos(el), np.sin(el)]
     )
     view = m3.look_at(eye, center)
     focal = (h / 2.0) / np.tan(np.radians(fov) / 2.0)
 
-    light = np.asarray(light_dir, dtype=np.float64)
+    if light_dir is None:
+        # Camera-relative key light (up-left of the eye) so every viewing
+        # angle is lit — a fixed world light leaves back views pitch black.
+        light = view[:3, :3].T @ np.array([-0.35, 0.45, 0.82])
+    else:
+        light = np.asarray(light_dir, dtype=np.float64)
     light = light / np.linalg.norm(light)
 
     zbuf = np.full((h, w), np.inf)

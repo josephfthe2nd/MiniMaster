@@ -19,7 +19,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from minimaster.core import math3d as m3  # noqa: E402
 from minimaster.parts import Part, render_part_thumbnail  # noqa: E402
+
+
+def _euler(mat) -> tuple[float, float, float]:
+    return tuple(round(v, 4) for v in m3.matrix_to_euler_xyz(mat))
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "minimaster" / "parts"
 
@@ -69,8 +74,8 @@ def make_horn() -> Part:
         shapes=[
             sd("base", "cylinder", (0, 0, 1.3), (1.7, 1.7, 2.8),
                params={"segments": 5, "taper": 0.55}, color=BONE_COL),
-            sd("tip", "cylinder", (0, -0.5, 3.5), (1.0, 1.0, 2.6),
-               rot=(18, 0, 0), params={"segments": 5, "taper": 0.12},
+            sd("tip", "cylinder", (0, -0.85, 3.4), (1.0, 1.0, 2.7),
+               rot=(34, 0, 0), params={"segments": 5, "taper": 0.12},
                color=BONE_COL),
         ],
     )
@@ -81,8 +86,12 @@ def make_ear() -> Part:
         name="ear",
         category="face",
         shapes=[
-            sd("flap", "cylinder", (0, 0, 1.4), (1.7, 0.9, 3.2),
-               rot=(-10, 0, 0), params={"segments": 3, "taper": 0.08}),
+            # flat swept-back flap with a small inner fold: reads "ear",
+            # not "spike"
+            sd("flap", "wedge", (0, 0.4, 1.6), (2.6, 0.55, 3.6),
+               rot=(22, -90, 0)),
+            sd("fold", "wedge", (0, 0.25, 1.0), (1.5, 0.4, 1.9),
+               rot=(22, -90, 0), color="#8d6f4a"),
         ],
     )
 
@@ -103,10 +112,13 @@ def make_claw() -> Part:
         name="claw",
         category="body",
         shapes=[
-            sd("knuckle", "cylinder", (0, 0, 0.9), (1.5, 1.5, 2.1),
+            sd("knuckle", "cylinder", (0, 0, 0.8), (1.5, 1.5, 1.9),
                params={"segments": 4, "taper": 0.55}, color=BONE_COL),
-            sd("talon", "cylinder", (0, -0.55, 2.7), (0.9, 0.9, 2.3),
-               rot=(24, 0, 0), params={"segments": 4, "taper": 0.1},
+            sd("mid", "cylinder", (0, -0.5, 2.1), (1.0, 1.0, 1.7),
+               rot=(30, 0, 0), params={"segments": 4, "taper": 0.6},
+               color=BONE_COL),
+            sd("talon", "cylinder", (0, -1.5, 3.1), (0.7, 0.7, 2.1),
+               rot=(58, 0, 0), params={"segments": 4, "taper": 0.08},
                color=BONE_COL),
         ],
     )
@@ -117,11 +129,15 @@ def make_wing() -> Part:
         name="wing",
         category="body",
         shapes=[
-            sd("membrane", "wedge", (3.4, 0, 3.6), (8.4, 0.7, 6.4),
-               rot=(0, 148, 0), color="#8a7256"),
-            sd("spar", "cylinder", (2.6, 0, 4.6), (1.0, 1.0, 9.6),
-               rot=(0, 38, 0), params={"segments": 5, "taper": 0.55},
-               color="#6b543a"),
+            # Authored sweeping into part -Y: on a back (normal +Y) the
+            # placement rotation maps part -Y to world UP, so the wing rises
+            # instead of gliding out flat.
+            sd("membrane", "wedge", (3.4, -3.4, 1.1), (8.4, 0.7, 6.4),
+               rot=_euler(m3.rot_x(90) @ m3.euler_rotation(0, 148, 0)),
+               color="#8a7256"),
+            sd("spar", "cylinder", (2.6, -4.4, 1.1), (1.0, 1.0, 9.6),
+               rot=_euler(m3.rot_x(90) @ m3.euler_rotation(0, 38, 0)),
+               params={"segments": 5, "taper": 0.55}, color="#6b543a"),
             sd("shoulder", "icosphere", (0, 0, 0.7), (2.0, 2.0, 2.0),
                params={"subdivisions": 0}, color="#6b543a"),
         ],
@@ -186,7 +202,9 @@ def make_axe() -> Part:
         shapes=[
             sd("haft", "cylinder", (0, 0, 4.2), (1.05, 1.05, 15.0),
                params={"segments": 6}, color=WOOD),
-            sd("head", "wedge", (0, -2.25, 6.0), (4.8, 1.2, 4.2),
+            # chunky head hugging the haft, wedge cutting edge out front
+            sd("head", "box", (0, -1.9, 6.2), (1.3, 3.2, 3.6), color=METAL),
+            sd("edge", "wedge", (0, -4.3, 6.2), (1.9, 1.3, 3.6),
                rot=(0, 0, -90), color=METAL),
         ],
     )
@@ -214,6 +232,8 @@ def make_dagger() -> Part:
             sd("blade", "cylinder", (0, 0, 3.9), (1.5, 0.6, 6.6),
                params={"segments": 4, "taper": 0.08}, color=METAL),
             sd("guard", "box", (0, 0, 1.2), (2.7, 0.84, 0.6), color="#5d4a33"),
+            sd("grip", "cylinder", (0, 0, 0.1), (0.75, 0.75, 1.9),
+               params={"segments": 6}, color=LEATHER),
         ],
     )
 

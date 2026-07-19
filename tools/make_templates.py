@@ -105,6 +105,10 @@ def build_humanoid(
     boot_color: str = "#6b543a",
     slim_torso: bool = False,
     nose: float = 1.0,
+    eye_scale: float = 1.0,
+    eye_color: str = "#2e2b28",
+    eye_depth: float = 0.44,
+    brow: bool = False,
 ) -> Scene:
     """Rig + carved body for a humanoid. Returns the scene plus joint layout
     stashed on ``scene._layout`` for feature/gear builders."""
@@ -165,10 +169,11 @@ def build_humanoid(
         color=torso_color,
     )
     scene.add_shape(
-        "box",
+        "cylinder",
         name="belly",
+        params={"segments": 6, "taper": 1.25},  # narrow waist widening upward
         position=[0, 0, (spine_z + pelvis_z) / 2 + 0.01 * H],
-        scale=[torso_w * 0.82, torso_d * 0.95, 0.13 * H],
+        scale=[torso_w * 0.74, torso_d * 1.05, 0.14 * H],
         bone="chest",
         color=torso_color,
     )
@@ -214,6 +219,28 @@ def build_humanoid(
         bone="head_top",
         color=skin,
     )
+    eye_d = head_d * 0.24 * eye_scale
+    for side, sx in (("l", +1.0), ("r", -1.0)):
+        scene.add_shape(
+            "icosphere",
+            name=f"eye_{side}",
+            params={"subdivisions": 0},
+            position=[sx * head_d * 0.17, -head_d * eye_depth,
+                      head_c + head_d * 0.04],
+            scale=[eye_d, eye_d, eye_d],
+            bone="head_top",
+            color=eye_color,
+        )
+    if brow:
+        scene.add_shape(
+            "box",
+            name="brow",
+            position=[0, -head_d * 0.42, head_c + head_d * 0.19],
+            rotation=[-24.0, 0.0, 0.0],
+            scale=[head_d * 0.58, head_d * 0.22, head_d * 0.13],
+            bone="head_top",
+            color=skin,
+        )
 
     # ---- arms + legs
     thigh_t = 0.095 * H * bulk
@@ -223,17 +250,29 @@ def build_humanoid(
     for side in ("l", "r"):
         sh, el, wr, hd = (J[f"{k}_{side}"] for k in ("shoulder", "elbow", "wrist", "hand"))
         hp, kn, an, to = (J[f"{k}_{side}"] for k in ("hip", "knee", "ankle", "toe"))
-        ball(scene, f"shoulder_{side}", sh + [0, 0, 0.008 * H], uarm_t * 1.5,
-             f"elbow_{side}", torso_color)
+        sxp = +1.0 if side == "l" else -1.0
+        ball(scene, f"shoulder_{side}", sh + [sxp * 0.008 * H, 0, 0.002 * H],
+             uarm_t * 1.5, f"elbow_{side}", torso_color)
         limb(scene, f"upper_arm_{side}", sh, el, uarm_t, f"elbow_{side}", limb_color)
         ball(scene, f"elbow_pad_{side}", el, farm_t * 1.35, f"wrist_{side}", limb_color)
         limb(scene, f"forearm_{side}", el, wr, farm_t, f"wrist_{side}", limb_color,
              taper=0.8)
+        sxs = +1.0 if side == "l" else -1.0
         scene.add_shape(
             "box",
             name=f"hand_{side}",
             position=(wr + hd) / 2.0 + [0, 0, -0.002 * H],
-            scale=[0.055 * H, 0.07 * H, 0.075 * H],
+            rotation=[0.0, 0.0, sxs * 8.0],  # palms turn slightly inward
+            scale=[0.052 * H, 0.068 * H, 0.075 * H],
+            bone=f"hand_{side}",
+            color=skin,
+        )
+        scene.add_shape(
+            "box",
+            name=f"thumb_{side}",
+            position=(wr + hd) / 2.0 + [-sxs * 0.028 * H, -0.02 * H, 0.012 * H],
+            rotation=[0.0, sxs * 18.0, sxs * 24.0],
+            scale=[0.026 * H, 0.032 * H, 0.045 * H],
             bone=f"hand_{side}",
             color=skin,
         )
@@ -328,13 +367,13 @@ def add_ribs(scene: Scene, color: str):
     )
     w = L["torso_w"]
     for i in range(3):
-        z = spine_z + (i + 0.75) * (chest_z - spine_z) / 3.2
+        z = spine_z + (i + 0.55) * (chest_z - spine_z) / 2.7
         scene.add_shape(
             "torus",
             name=f"rib_{i}",
-            params={"segments": 8, "minor_segments": 4},
+            params={"segments": 10, "minor_segments": 4},
             position=[0, 0, z],
-            scale=[w * (1.0 - 0.1 * i), L["torso_d"] * 1.35, 0.075 * H],
+            scale=[w * (1.12 - 0.14 * i), L["torso_d"] * 1.7, 0.042 * H],
             bone="chest",
             color=color,
         )
@@ -516,10 +555,11 @@ def humanoid_poses(hunch: float = 0.0) -> dict[str, dict]:
 
     poses = {
         "idle": {
-            "shoulder_l": (0, -4, 0),
-            "shoulder_r": (0, 4, 0),
-            "elbow_l": (-8, 0, 0),
-            "elbow_r": (-8, 0, 0),
+            "shoulder_l": (2, -5, 0),
+            "shoulder_r": (2, 5, 0),
+            "elbow_l": (-15, 0, 0),
+            "elbow_r": (-15, 0, 0),
+            "spine": (2, 0, 0),
         },
         "walk": {
             "shoulder_l": (16, 0, 0),
@@ -557,6 +597,34 @@ def humanoid_poses(hunch: float = 0.0) -> dict[str, dict]:
             "knee_r": (12, 0, 0),
             "spine": (7, 0, 6),
         },
+        "charge": {  # running lunge, weapon arm trailing for the swing
+            "spine": (14, 0, -10),
+            "neck": (-10, 0, 6),
+            "hip_l": (-38, 0, 0),
+            "knee_l": (20, 0, 0),
+            "ankle_l": (-10, 0, 0),
+            "hip_r": (26, 0, 0),
+            "knee_r": (42, 0, 0),
+            "ankle_r": (-20, 0, 0),
+            "shoulder_r": (38, 8, 0),
+            "elbow_r": (-30, 0, 0),
+            "shoulder_l": (-46, -12, 0),
+            "elbow_l": (-40, 0, 0),
+        },
+        "rage": {  # both arms up and out, roaring at the sky
+            "spine": (-8, 0, 0),
+            "neck": (-14, 0, 0),
+            "shoulder_l": (-125, -35, 0),
+            "elbow_l": (-25, 0, 0),
+            "wrist_l": (-15, 0, 0),
+            "shoulder_r": (-125, 35, 0),
+            "elbow_r": (-25, 0, 0),
+            "wrist_r": (-15, 0, 0),
+            "hip_l": (-8, 0, 0),
+            "hip_r": (8, 0, 0),
+            "knee_l": (4, 0, 0),
+            "knee_r": (8, 0, 0),
+        },
     }
     return {name: merged(pose) for name, pose in poses.items()}
 
@@ -567,7 +635,7 @@ def humanoid_poses(hunch: float = 0.0) -> dict[str, dict]:
 
 def make_human_fighter() -> Scene:
     scene = build_humanoid(
-        "Human Fighter", height=30.0,
+        "Human Fighter", height=30.0, head=1.05,
         skin="#c9a172", torso_color="#8d6f4a", limb_color="#a5824f",
     )
     add_sword(scene, "r")
@@ -580,10 +648,12 @@ def make_human_fighter() -> Scene:
 def make_dwarf() -> Scene:
     scene = build_humanoid(
         "Dwarf Warrior", height=24.0,
-        head=1.15, legs=0.72, arms=0.9, bulk=1.3, shoulders=1.25,
+        head=1.2, legs=0.72, arms=0.9, bulk=1.3, shoulders=1.25,
         skin="#c99b6f", torso_color="#7a5c3d", limb_color="#8e6d45",
+        brow=True,
     )
     add_beard(scene, "#9a6432")
+    scene.base["style"] = "cobble"
     add_axe(scene, "r")
     add_shield(scene, "l")
     scene.poses = humanoid_poses()
@@ -598,6 +668,7 @@ def make_goblin() -> Scene:
         head=1.35, legs=0.9, arms=1.1, bulk=0.78, shoulders=0.9,
         skin="#8aa050", torso_color="#5f6b3c", limb_color="#76894a",
         slim_torso=True, nose=1.8,
+        eye_scale=1.55, eye_color="#c9a13b",  # big amber goblin eyes
     )
     add_ears(scene, length=1.5, tilt=35.0)
     add_dagger(scene, "r")
@@ -611,10 +682,12 @@ def make_orc() -> Scene:
         "Orc Brute", height=34.0,
         head=0.95, legs=0.95, arms=1.1, bulk=1.35, shoulders=1.3,
         skin="#7e9150", torso_color="#5c6b3f", limb_color="#6f8446",
+        eye_scale=0.85, eye_color="#b8352c", brow=True,  # small angry red eyes
     )
     add_tusks(scene)
     add_ears(scene, length=0.9, tilt=15.0)
     add_club(scene, "r")
+    scene.base["style"] = "cobble"
     scene.poses = humanoid_poses(hunch=6.0)
     scene.active_pose = "idle"
     scene.base["diameter"] = 32.0
@@ -628,6 +701,7 @@ def make_skeleton() -> Scene:
         head=1.0, bulk=0.55, shoulders=0.92,
         skin=bone_col, torso_color=bone_col, limb_color=bone_col,
         boot_color=bone_col, slim_torso=True,
+        eye_scale=1.4, eye_color="#181614", eye_depth=0.34,  # sunken sockets
     )
     # swap the solid torso for a ribcage
     scene.remove_shape("belly")

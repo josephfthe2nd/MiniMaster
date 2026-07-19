@@ -304,6 +304,9 @@ class Viewport(tk.Canvas):
 
         polys = []  # (depth, screen coords, fill, outline, shape name)
         eye = self._eye()
+        # Camera-relative key light: the model stays readable from any orbit.
+        light = view[:3, :3].T @ np.array([-0.35, 0.45, 0.82])
+        light = light / np.linalg.norm(light)
         for it in self.items:
             if not len(it.faces):
                 continue
@@ -316,7 +319,7 @@ class Viewport(tk.Canvas):
             n = np.divide(n, lens, out=np.zeros_like(n), where=lens > 1e-14)
             facing = np.einsum("ij,ij->i", n, t.mean(axis=1) - eye) < 0
             levels = (
-                np.clip(n @ self._light, 0.0, 1.0) * (_SHADE_LEVELS - 1)
+                np.clip(n @ light, 0.0, 1.0) * (_SHADE_LEVELS - 1)
             ).astype(int)
             lut = _shade_lut(it.color)
             td = depth[tris].mean(axis=1)
