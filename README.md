@@ -56,6 +56,29 @@ zoom · **click** select · **g** grab (move the selected shape in the view
 plane, click to confirm, Esc to cancel) · **Ctrl+D** duplicate · **m**
 mirror · **x** delete · **f** frame · **Ctrl+Z / Ctrl+Y** undo/redo.
 
+## Part library (Spore-style)
+
+The **Parts** tab is a snap-on part palette: pick a part, click anywhere on
+the mini, and it lands on that surface point oriented outward along the
+surface normal, auto-bound to the bone of the body part you clicked. Placed
+parts edit as a unit — grab-move, spin about their outward axis, uniform
+scale, **Mirror** for symmetric pairs (wings, horns), ungroup, delete — all
+undoable.
+
+Parts can be **posable**: a part may carry its own joint chain (the shipped
+tail does), which grafts onto the character's skeleton on placement and shows
+up in the Pose tab like any other joints. Removing the part removes its
+joints; every pose still exports watertight.
+
+Twelve parts ship in the box (eyes, horns, ears, claws, spikes, wings, a
+posable tail, and sword/shield/axe/club/dagger), and the library is yours to
+grow: model something in the Model tab (origin = attachment point, +Z =
+outward), then **Save selection as part…** writes it to `~/.minimaster/parts`
+with a thumbnail, ready to snap onto any future mini. Placed parts flatten
+into the project, so `.mmp` files stay self-contained and shareable. See
+`examples/goblin_gargoyle.mmp` for a goblin with snapped-on horns, a third
+eye, mirrored wings, and a pose-curled tail.
+
 ## Starter templates
 
 `File → New from template` (or `minimaster new <name> -o my.mmp`) opens a
