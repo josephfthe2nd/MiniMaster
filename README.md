@@ -83,10 +83,13 @@ eye, mirrored wings, and a pose-curled tail.
 
 `File → New from template` (or `minimaster new <name> -o my.mmp`) opens a
 fully rigged, fully posed figure to reshape instead of a blank scene:
-`human_fighter`, `dwarf`, `goblin`, `orc`, `skeleton`. All five come from one
-parameterized humanoid (21 joints) with proportion multipliers and feature
-add-ons (beard, ears, tusks, ribcage, gear), built by
-`tools/make_templates.py` — add your own factory there and re-run it to grow
+`human_fighter`, `dwarf`, `goblin`, `orc`, `skeleton`, and a four-armed
+`four_arms` horror. They come from one parameterized humanoid (21 joints) with
+proportion multipliers, anatomy-informed muscle masses (see `docs/anatomy.md`),
+a `feminine` build variant, and feature add-ons (beard, ears, tusks, ribcage,
+cape, gear). `four_arms` uses `add_arm_pair()` to graft a second shoulder
+girdle — extra limbs plus their anchoring muscles — onto the base body. Built
+by `tools/make_templates.py`; add your own factory there and re-run it to grow
 the roster.
 
 ## Blender backend (optional)

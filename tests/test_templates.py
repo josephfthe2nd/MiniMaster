@@ -11,17 +11,19 @@ from minimaster.export import assemble
 from minimaster.templates import list_templates, load_template
 
 EXPECTED = {"human_fighter", "dwarf", "goblin", "orc", "skeleton"}
+EXTRA = {"four_arms"}  # non-standard rigs (extra limb pairs)
+ALL_TEMPLATES = EXPECTED | EXTRA
 
 
 def test_all_expected_templates_ship():
-    assert EXPECTED.issubset(set(list_templates()))
+    assert ALL_TEMPLATES.issubset(set(list_templates()))
 
 
-@pytest.mark.parametrize("name", sorted(EXPECTED))
+@pytest.mark.parametrize("name", sorted(ALL_TEMPLATES))
 def test_template_loads_and_is_rigged(name):
     scene = load_template(name)
     assert len(scene.shapes) >= 20
-    assert len(scene.armature) == 21
+    assert len(scene.armature) >= 21  # four_arms carries a second girdle
     assert scene.poses, "template should ship poses"
     assert scene.active_pose in scene.poses
     # every shape is bound to a real bone
@@ -34,7 +36,7 @@ def test_template_loads_and_is_rigged(name):
             assert joint in scene.armature.joints, f"{pose_name} poses ghost {joint}"
 
 
-@pytest.mark.parametrize("name", sorted(EXPECTED))
+@pytest.mark.parametrize("name", sorted(ALL_TEMPLATES))
 def test_template_shapes_watertight(name):
     scene = load_template(name)
     for shape, mesh in scene.build_shape_meshes(None):
@@ -43,7 +45,7 @@ def test_template_shapes_watertight(name):
         assert rep["volume"] > 0
 
 
-@pytest.mark.parametrize("name", sorted(EXPECTED))
+@pytest.mark.parametrize("name", sorted(ALL_TEMPLATES))
 def test_template_exports_watertight_in_every_pose(name):
     scene = load_template(name)
     for pose_name in [None, *scene.poses]:
@@ -69,7 +71,7 @@ def test_generator_matches_shipped_files(tmp_path):
     subprocess.run(
         [sys.executable, "-c", env_script], cwd=repo, check=True, capture_output=True
     )
-    for name in sorted(EXPECTED):
+    for name in sorted(ALL_TEMPLATES):
         generated = (tmp_path / f"{name}.mmp").read_text()
         shipped = (repo / "minimaster" / "templates" / f"{name}.mmp").read_text()
         assert generated == shipped, f"{name}: regenerate minimaster/templates"

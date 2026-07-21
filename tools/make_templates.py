@@ -477,6 +477,67 @@ def add_tusks(scene: Scene, color: str = "#e8ddc4"):
         )
 
 
+def add_arm_pair(scene: Scene, *, limb_color: str, torso_color: str, skin: str,
+                 bulk: float = 1.0, scale: float = 0.9, drop: float = 0.16):
+    """Graft a second (lower) pair of arms onto a built humanoid, with the
+    second shoulder girdle's anchoring muscles (four deltoids total, a lower
+    pec band, a second trapezius yoke, broadened lats). Additive — see
+    docs/anatomy.md §7. Requires the base shoulder/elbow/wrist/hand joints.
+    """
+    L = scene._layout
+    H = L["H"]
+    arm = scene.armature
+    torso_w, torso_d = L["torso_w"], L["torso_d"]
+
+    def jp(n):
+        return arm.joints[n].position.copy()
+
+    sh_z = jp("shoulder_l")[2]
+    z2 = sh_z - drop * H  # lower girdle near the bottom of the ribcage
+    uarm_t = 0.076 * H * bulk * scale
+    farm_t = 0.062 * H * bulk * scale
+    for side, sx in (("l", +1.0), ("r", -1.0)):
+        sh, el, wr, hd = (jp(f"{k}_{side}") for k in ("shoulder", "elbow", "wrist", "hand"))
+        sh2 = np.array([sh[0] * 1.06, sh[1], z2])
+        el2 = sh2 + (el - sh) * scale
+        wr2 = sh2 + (wr - sh) * scale
+        hd2 = sh2 + (hd - sh) * scale
+        arm.add_joint(f"shoulder2_{side}", sh2, parent="chest")
+        arm.add_joint(f"elbow2_{side}", el2, parent=f"shoulder2_{side}")
+        arm.add_joint(f"wrist2_{side}", wr2, parent=f"elbow2_{side}")
+        arm.add_joint(f"hand2_{side}", hd2, parent=f"wrist2_{side}")
+        ball(scene, f"deltoid2_{side}", sh2 + [sx * 0.002 * H, 0, 0.004 * H],
+             uarm_t * 1.12, f"elbow2_{side}", limb_color, subdiv=1)
+        limb(scene, f"upper_arm2_{side}", sh2, el2, uarm_t, f"elbow2_{side}",
+             limb_color, taper=0.74, segments=8)
+        ball(scene, f"elbow2pad_{side}", el2, farm_t * 1.08, f"wrist2_{side}",
+             limb_color)
+        limb(scene, f"forearm2_{side}", el2, wr2, farm_t * 0.92, f"wrist2_{side}",
+             limb_color, taper=0.5, segments=8)
+        scene.add_shape("box", name=f"hand2_{side}", position=(wr2 + hd2) / 2.0,
+                        rotation=[0, 0, sx * 8.0],
+                        scale=[0.046 * H, 0.06 * H, 0.068 * H],
+                        bone=f"hand2_{side}", color=skin)
+    # second-girdle anchoring muscles
+    for sx in (+1.0, -1.0):
+        s = "l" if sx > 0 else "r"
+        scene.add_shape("capsule", name=f"lowpec_{s}", params={"segments": 6},
+                        position=[sx * torso_w * 0.4, -torso_d * 0.6, z2 + 0.02 * H],
+                        scale=[torso_w * 0.62, torso_d * 0.66, 0.1 * H],
+                        bone="chest", color=torso_color)
+        scene.add_shape("capsule", name=f"trap2_{s}", params={"segments": 6},
+                        position=[sx * torso_w * 0.5, torso_d * 0.5,
+                                  (sh_z + z2) / 2 + 0.02 * H],
+                        rotation=[0, 60 * sx, 0],
+                        scale=[0.1 * H, torso_d * 0.7, torso_w * 0.95],
+                        bone="chest", color=torso_color)
+        scene.add_shape("capsule", name=f"lat_{s}", params={"segments": 6},
+                        position=[sx * torso_w * 0.6, torso_d * 0.25,
+                                  (sh_z + z2) / 2 - 0.02 * H],
+                        scale=[0.07 * H, torso_d * 1.0, 0.26 * H],
+                        bone="chest", color=torso_color)
+
+
 def add_cape(scene: Scene, color: str = "#8a2f2f", trim: str | None = None):
     """Iconic OSRS cape: a wide slab hanging off the upper back, bound to the
     chest so it sways with the torso. Slight backward tilt + a collar."""
@@ -882,12 +943,39 @@ def make_skeleton() -> Scene:
     return scene
 
 
+def make_four_arms() -> Scene:
+    skin, torso, limb, boot = "#8a6a54", "#4a3a44", "#5c4a54", "#33272f"
+    scene = build_humanoid(
+        "Four-Armed Horror", height=36.0,
+        head=0.92, legs=0.9, arms=1.15, bulk=1.4, shoulders=1.4,
+        skin=skin, torso_color=torso, limb_color=limb, boot_color=boot,
+        eye_scale=0.8, eye_color="#d8c23a", brow=True,
+    )
+    add_arm_pair(scene, limb_color=limb, torso_color=torso, skin=skin,
+                 bulk=1.4, scale=0.9)
+    # a combat pose spreading all four arms
+    base = humanoid_poses()
+    combat = dict(base["attack"])
+    combat.update({
+        "shoulder_l": (6, -20, 0), "elbow_l": (-30, 0, 0),
+        "shoulder_r": (6, 20, 0), "elbow_r": (-30, 0, 0),
+        "shoulder2_l": (-24, -40, 0), "elbow2_l": (-52, 0, 0),
+        "shoulder2_r": (-24, 40, 0), "elbow2_r": (-52, 0, 0),
+        "spine": (4, 0, 0),
+    })
+    scene.poses = {"idle": base["idle"], "combat": combat}
+    scene.active_pose = "combat"
+    scene.base = {"style": "cobble", "diameter": 40.0, "height": 3.0}
+    return scene
+
+
 TEMPLATES = {
     "human_fighter": make_human_fighter,
     "dwarf": make_dwarf,
     "goblin": make_goblin,
     "orc": make_orc,
     "skeleton": make_skeleton,
+    "four_arms": make_four_arms,
 }
 
 

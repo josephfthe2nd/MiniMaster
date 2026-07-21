@@ -257,3 +257,9 @@ Because it's additive, it composes: `arm_pairs = 2` (or a shipped
 shoulder heights and adds the second set of anchoring muscles. The rule
 generalises to **N** pairs (centipede-of-arms) — each pair is another girdle
 down a proportionally longer thorax.
+
+> **Implemented.** `tools/make_templates.py:add_arm_pair()` is exactly this
+> additive builder (grafts `shoulder2→elbow2→wrist2→hand2` per side plus the
+> four-deltoid / lower-pec / trap-yoke / lat muscles), and the shipped
+> `four_arms` template (`make_four_arms`) uses it. Call it after
+> `build_humanoid` on any base to make that creature four-armed.
