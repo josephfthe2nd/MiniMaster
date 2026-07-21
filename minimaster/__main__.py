@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .export import SIZE_PRESETS, ExportError, export_stl
+from .export import SIZE_PRESETS, ExportError, assemble_body, export_stl
 from .scene import Scene
 from .templates import list_templates, load_template
 
@@ -82,11 +82,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_val = sub.add_parser("validate", help="check a project file and its geometry")
     p_val.add_argument("scene", help="input .mmp project")
 
-    # -- Blender backend (optional) --------------------------------------
     def _add_size(p):
         g = p.add_mutually_exclusive_group()
         g.add_argument("--size", choices=sorted(SIZE_PRESETS))
         g.add_argument("--height", type=float)
+
+    # -- dynamic body mesh (pure-Python isosurface, no Blender) ----------
+    p_bake = sub.add_parser(
+        "bake",
+        help="fuse the shapes into ONE continuous skinned body (STL or PNG)")
+    p_bake.add_argument("scene", help="input .mmp project")
+    p_bake.add_argument("-o", "--output", required=True,
+                        help="output path; .stl bakes a solid, .png renders the body")
+    _add_pose_arg(p_bake)
+    _add_size(p_bake)
+    p_bake.add_argument("--resolution", type=float, default=0.6,
+                        help="voxel size in scene units (smaller = smoother, slower)")
+    p_bake.add_argument("--blend", type=float, default=0.6,
+                        help="smooth-union width; higher fuses limbs more")
+    p_bake.add_argument("--all-shapes", action="store_true",
+                        help="fuse gear/detail too (default keeps them out of the body)")
+    p_bake.add_argument("--no-base", action="store_true")
+    p_bake.add_argument("--azimuth", type=float, default=35.0, help="PNG only")
+    p_bake.add_argument("--elevation", type=float, default=14.0, help="PNG only")
+    p_bake.add_argument("--res", type=int, nargs=2, default=[700, 900], help="PNG size")
+
+    # -- Blender backend (optional) --------------------------------------
 
     p_fuse = sub.add_parser(
         "fuse", help="[Blender] union the shells into one watertight solid STL")
@@ -232,6 +253,68 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.scene}: ok ({len(scene.shapes)} shapes, "
             f"{len(scene.armature)} joints, {len(scene.poses)} poses)"
         )
+        return 0
+
+    if command == "bake":
+        scene = _load_scene(args.scene)
+        if scene is None:
+            return 2
+        pose = _resolve_pose(args.pose)
+        exclude = () if args.all_shapes else None
+        out = Path(args.output)
+        if out.suffix.lower() == ".png":
+            from .core import bodymesh
+            from .core.mesh import Mesh
+            from .bases import build_base
+            from .render import render_meshes, write_png
+
+            kw = {} if exclude is None else {"exclude": exclude}
+            body = bodymesh.body_from_scene(
+                scene, args.resolution, args.blend, pose, **kw)
+            if not len(body.faces):
+                print("error: scene baked to an empty body", file=sys.stderr)
+                return 2
+            colored = [(body, "#6c5560")]
+            skins = scene.armature.skin_matrices(scene.resolve_pose(pose))
+            for s in scene.shapes:  # overlay eyes so the face still reads
+                if not any(k in s.name for k in ("eye", "brow")):
+                    continue
+                m = s.build_mesh()
+                if s.bone in skins:
+                    m = m.transform(skins[s.bone])
+                colored.append((m, s.color))
+            fig = Mesh.merge([m for m, _ in colored])
+            lo, hi = fig.bounds
+            c = (lo + hi) / 2.0
+            colored = [(m.translated([-c[0], -c[1], -lo[2]]), col)
+                       for m, col in colored]
+            if not args.no_base:
+                base = build_base(scene.base)
+                if base is not None:
+                    colored.append((base, "#6e6a63"))
+            write_png(out, render_meshes(
+                colored, size=tuple(args.res),
+                azimuth=args.azimuth, elevation=args.elevation))
+            print(f"wrote {out}")
+            return 0
+
+        from .core.stl import write_stl
+
+        try:
+            mesh, rep = assemble_body(
+                scene, pose_name=pose, resolution=args.resolution,
+                blend=args.blend, size=args.size, height=args.height,
+                with_base=not args.no_base, exclude=exclude)
+        except (ExportError, KeyError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        write_stl(mesh, out, name=scene.name)
+        lo, hi = mesh.bounds
+        sx, sy, sz = (hi - lo)
+        note = "" if rep["watertight"] else "  (NOT watertight — try --blend higher or --resolution finer)"
+        print(f"wrote {out}: {rep['triangles']} triangles, "
+              f"{sx:.1f} x {sy:.1f} x {sz:.1f} mm, "
+              f"blend={rep['blend']:.2f}, watertight={rep['watertight']}{note}")
         return 0
 
     if command in ("fuse", "hq-render"):

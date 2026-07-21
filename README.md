@@ -127,6 +127,37 @@ bases) and print a clean error (exit 2) if Blender isn't installed — `export`
 and `preview` always work without it. The in-Blender script is
 `tools/blender_build.py`; the bpy-free launcher is `minimaster/blender.py`.
 
+## Dynamic body mesh (experimental)
+
+By default a figure exports as a **pile of independent shells** — one closed
+mesh per primitive — that the slicer unions at print time. `bake` offers a
+different representation: it treats every body shape as a **signed-distance
+field**, fuses them with a smooth minimum, and extracts **one continuous
+watertight skin** with a native (pure-numpy) Surface Nets isosurface. Muscles
+melt into the torso instead of stacking as separate lumps, and the result is a
+single solid — no reliance on slicer union.
+
+```bash
+minimaster bake orc.mmp -o orc_body.png                       # render the fused body
+minimaster bake orc.mmp -o orc_body.stl --size large --pose attack
+minimaster bake orc.mmp -o smooth.stl --resolution 0.4 --blend 1.0   # smoother
+minimaster bake orc.mmp -o chunky.stl --resolution 0.9              # chunkier/faster
+```
+
+`--resolution` is the voxel size (smaller = smoother, slower); `--blend` is the
+smooth-union width (higher fuses limbs more). Gear and face detail are kept out
+of the body by default (`--all-shapes` fuses everything). Extraction takes a
+couple of seconds, so it's a bake step, not the live authoring view.
+
+The same kernel (`minimaster/core/bodymesh.py`) also **smooth-skins** the baked
+mesh to the armature (distance-weighted linear blend), so the body deforms
+continuously across a joint rather than transforming as rigid shells — the
+foundation for posing the mesh directly. Isolated/crossing geometry (four arms
+in a tight pose) can exceed the isosurface's one-vertex-per-cell manifold
+guarantee; the exporter widens the blend automatically to recover a watertight
+solid, and the classic shell export (`minimaster export`) is always available
+as the robust fallback.
+
 ## Headless CLI
 
 Everything the Export tab does works without a display:
@@ -137,6 +168,7 @@ minimaster new orc -o my_orc.mmp                      # start from a template
 minimaster export my_orc.mmp -o orc.stl --size large --pose attack
 minimaster export my_orc.mmp -o orc.stl --height 40 --no-base
 minimaster preview my_orc.mmp -o orc.png --azimuth 335
+minimaster bake my_orc.mmp -o orc_body.stl --size large  # fuse into one skin
 minimaster validate my_orc.mmp                        # watertightness gate
 ```
 
@@ -165,7 +197,8 @@ generate from scripts — the starter templates are built exactly that way.
 ```
 minimaster/
   core/        geometry kernel: math3d, Mesh (+integrity checks),
-               watertight primitive builders, armature FK, binary STL I/O
+               watertight primitive builders, armature FK, binary STL I/O,
+               bodymesh (SDF blend -> Surface Nets isosurface + skinning)
   scene.py     the document: shapes + armature + poses + undo snapshots
   export.py    pose → scale → base → merged STL (shared by GUI, CLI, tests)
   render.py    headless z-buffer flat-shade renderer → PNG (no imaging deps)
