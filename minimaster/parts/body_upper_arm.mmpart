@@ -36,7 +36,7 @@
       "kind": "cylinder",
       "params": {
         "segments": 8,
-        "taper": 0.82
+        "taper": 0.74
       },
       "position": [
         0.0,
@@ -52,6 +52,30 @@
         2.3,
         2.3,
         4.6
+      ],
+      "bone": null,
+      "color": "#6f5640"
+    },
+    {
+      "name": "biceps",
+      "kind": "capsule",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        -1.15,
+        -1.7
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.8859999999999997,
+        1.8859999999999997,
+        2.6
       ],
       "bone": null,
       "color": "#6f5640"

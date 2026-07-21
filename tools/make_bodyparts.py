@@ -90,8 +90,11 @@ def make_torso() -> Part:
         shapes=[
             sd("belly", "capsule", (0, 0, 2.4), (w * 0.78, d * 0.86, 4.6),
                params={"segments": 8}, color=TUNIC),
-            sd("chest", "capsule", (0, -d * 0.04, 5.6), (w * 1.02, d, 5.4),
+            sd("chest", "capsule", (0, -d * 0.12, 5.6), (w * 1.02, d * 1.12, 5.4),
                params={"segments": 8}, color=TUNIC),
+            *[sd(f"pec_{s}", "capsule", (sx * w * 0.3, -d * 0.7, 6.1),
+                 (w * 0.6, d * 0.42, 0.8), params={"segments": 6}, color=TUNIC)
+              for s, sx in (("l", 1), ("r", -1))],
             sd("collar", "cylinder", (0, 0, 7.6), (2.2, 2.2, 1.0),
                params={"segments": 8, "taper": 0.85}, color=TUNIC),
         ],
@@ -123,7 +126,9 @@ def make_upper_arm() -> Part:
             sd("shoulder", "icosphere", (0, 0, -0.2), (t * 1.18, t * 1.18, t * 1.18),
                params={"subdivisions": 1}, color=SLEEVE),
             sd("upper_arm", "cylinder", (0, 0, -2.6), (t, t, 4.6),
-               params={"segments": 8, "taper": 0.82}, color=SLEEVE),
+               params={"segments": 8, "taper": 0.74}, color=SLEEVE),
+            sd("biceps", "capsule", (0, -t * 0.5, -1.7), (t * 0.82, t * 0.82, 2.6),
+               params={"segments": 6}, color=SLEEVE),
         ],
     )
 
@@ -133,10 +138,12 @@ def make_forearm() -> Part:
     return Part(
         name="forearm", category="body", tags=["arm"],
         shapes=[
-            sd("elbow", "icosphere", (0, 0, -0.1), (t * 1.1, t * 1.1, t * 1.1),
+            sd("elbow", "icosphere", (0, 0, -0.1), (t * 1.08, t * 1.08, t * 1.08),
                params={"subdivisions": 1}, color=SLEEVE),
-            sd("forearm", "cylinder", (0, 0, -2.3), (t, t, 4.2),
-               params={"segments": 8, "taper": 0.7}, color=SKIN),
+            sd("flexor", "capsule", (0, -t * 0.12, -1.3), (t * 1.15, t * 1.15, 2.3),
+               params={"segments": 6}, color=SKIN),
+            sd("forearm", "cylinder", (0, 0, -2.3), (t * 0.92, t * 0.92, 4.2),
+               params={"segments": 8, "taper": 0.5}, color=SKIN),  # thin wrist
         ],
     )
 
