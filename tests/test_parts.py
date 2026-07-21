@@ -370,3 +370,72 @@ def test_generator_matches_shipped_files(tmp_path):
         generated = (tmp_path / f"{name}.mmpart").read_text()
         shipped = (repo / "minimaster" / "parts" / f"{name}.mmpart").read_text()
         assert generated == shipped, f"{name}: regenerate minimaster/parts"
+
+
+# -- base body parts -------------------------------------------------------
+
+EXPECTED_BODY = {
+    "head", "neck", "torso", "pelvis", "upper_arm", "forearm",
+    "hand", "thigh", "shin", "foot",
+}
+
+
+def test_body_parts_ship_in_body_category():
+    body = {i.name for i in list_parts() if i.category == "body"}
+    assert EXPECTED_BODY.issubset(body)
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_BODY))
+def test_body_part_valid_and_placeable(name):
+    info = {i.name: i for i in list_parts()
+            if i.category == "body" and i.name == name}[name]
+    part = load_part(info)
+    part.validate()
+    scene = rigged_scene()
+    place_part(scene, part, point=[0, -2.5, 20], normal=[0, -1, 0],
+               attach_shape="torso")
+    for _, mesh in scene.build_shape_meshes(None):
+        assert mesh.integrity_report()["watertight"]
+
+
+def test_body_parts_assemble_watertight():
+    """The 10 parts, positioned anatomically, form a coherent watertight
+    figure — the foundation the assembly system builds on."""
+    from minimaster.scene import Scene, Shape
+
+    infos = {i.name: i for i in list_parts() if i.category == "body"}
+    scene = Scene(name="assembled")
+
+    def place(name, off, tag=""):
+        for sd in load_part(infos[name]).shapes:
+            d = dict(sd)
+            d["name"] = f"{tag}{d['name']}"
+            d["position"] = [d["position"][j] + off[j] for j in range(3)]
+            scene.shapes.append(Shape.from_dict({**d, "group": None}))
+
+    place("pelvis", (0, 0, 14)); place("torso", (0, 0, 14.6))
+    place("neck", (0, 0, 22)); place("head", (0, 0, 22.4))
+    for sx, tag in ((1, "l_"), (-1, "r_")):
+        place("upper_arm", (sx * 3.7, 0, 21.6), tag)
+        place("thigh", (sx * 1.9, 0, 13.6), tag)
+    assert len(scene.shapes) >= 20
+    for shape, mesh in scene.build_shape_meshes(None):
+        assert mesh.integrity_report()["watertight"], shape.name
+
+
+def test_bodyparts_generator_matches_shipped(tmp_path):
+    import subprocess
+    import sys as _sys
+
+    repo = Path(__file__).resolve().parent.parent
+    script = (
+        "from pathlib import Path; import tools.make_bodyparts as mb; "
+        f"mb.OUT_DIR = Path(r'{tmp_path}'); "
+        "mb.render_part_thumbnail = lambda *a, **k: None; mb.main()"
+    )
+    subprocess.run([_sys.executable, "-c", script], cwd=repo, check=True,
+                   capture_output=True)
+    for stem in sorted(f"body_{n}" for n in EXPECTED_BODY):
+        gen = (tmp_path / f"{stem}.mmpart").read_text()
+        shipped = (repo / "minimaster" / "parts" / f"{stem}.mmpart").read_text()
+        assert gen == shipped, f"{stem}: regenerate minimaster/parts"

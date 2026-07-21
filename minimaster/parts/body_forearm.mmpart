@@ -1,0 +1,61 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "forearm",
+  "category": "body",
+  "tags": [
+    "arm"
+  ],
+  "shapes": [
+    {
+      "name": "elbow",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.0,
+        -0.1
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.09,
+        2.09,
+        2.09
+      ],
+      "bone": null,
+      "color": "#6f5640"
+    },
+    {
+      "name": "forearm",
+      "kind": "cylinder",
+      "params": {
+        "segments": 8,
+        "taper": 0.7
+      },
+      "position": [
+        0.0,
+        0.0,
+        -2.3
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.9,
+        1.9,
+        4.2
+      ],
+      "bone": null,
+      "color": "#b78a5c"
+    }
+  ],
+  "joints": []
+}

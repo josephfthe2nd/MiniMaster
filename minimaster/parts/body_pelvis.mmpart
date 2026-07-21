@@ -1,0 +1,106 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "pelvis",
+  "category": "body",
+  "tags": [
+    "crotch"
+  ],
+  "shapes": [
+    {
+      "name": "hips",
+      "kind": "capsule",
+      "params": {
+        "segments": 8
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        7.0,
+        5.0,
+        3.6
+      ],
+      "bone": null,
+      "color": "#4f4030"
+    },
+    {
+      "name": "glutes",
+      "kind": "capsule",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        1.7000000000000002,
+        0.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        5.32,
+        3.1,
+        3.0
+      ],
+      "bone": null,
+      "color": "#4f4030"
+    },
+    {
+      "name": "groin",
+      "kind": "wedge",
+      "params": {},
+      "position": [
+        0.0,
+        -0.4,
+        -1.7
+      ],
+      "rotation": [
+        90.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.5,
+        2.5,
+        2.2
+      ],
+      "bone": null,
+      "color": "#4f4030"
+    },
+    {
+      "name": "belt",
+      "kind": "cylinder",
+      "params": {
+        "segments": 8
+      },
+      "position": [
+        0.0,
+        0.0,
+        1.7
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        7.28,
+        5.300000000000001,
+        0.9
+      ],
+      "bone": null,
+      "color": "#3a2c1d"
+    }
+  ],
+  "joints": []
+}

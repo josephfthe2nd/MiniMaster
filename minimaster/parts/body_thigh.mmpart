@@ -1,0 +1,61 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "thigh",
+  "category": "body",
+  "tags": [
+    "leg"
+  ],
+  "shapes": [
+    {
+      "name": "hip",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.0,
+        -0.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.045,
+        3.045,
+        3.045
+      ],
+      "bone": null,
+      "color": "#4f4030"
+    },
+    {
+      "name": "thigh",
+      "kind": "cylinder",
+      "params": {
+        "segments": 8,
+        "taper": 0.82
+      },
+      "position": [
+        0.0,
+        0.0,
+        -3.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.9,
+        2.9,
+        5.8
+      ],
+      "bone": null,
+      "color": "#4f4030"
+    }
+  ],
+  "joints": []
+}

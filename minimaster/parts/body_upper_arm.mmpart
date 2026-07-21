@@ -1,0 +1,61 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "upper_arm",
+  "category": "body",
+  "tags": [
+    "arm"
+  ],
+  "shapes": [
+    {
+      "name": "shoulder",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.0,
+        -0.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.7139999999999995,
+        2.7139999999999995,
+        2.7139999999999995
+      ],
+      "bone": null,
+      "color": "#6f5640"
+    },
+    {
+      "name": "upper_arm",
+      "kind": "cylinder",
+      "params": {
+        "segments": 8,
+        "taper": 0.82
+      },
+      "position": [
+        0.0,
+        0.0,
+        -2.6
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.3,
+        2.3,
+        4.6
+      ],
+      "bone": null,
+      "color": "#6f5640"
+    }
+  ],
+  "joints": []
+}

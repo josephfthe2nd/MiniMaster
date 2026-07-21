@@ -1,0 +1,85 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "shin",
+  "category": "body",
+  "tags": [
+    "leg"
+  ],
+  "shapes": [
+    {
+      "name": "knee",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.0,
+        -0.1
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.576,
+        2.576,
+        2.576
+      ],
+      "bone": null,
+      "color": "#4f4030"
+    },
+    {
+      "name": "calf",
+      "kind": "capsule",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        0.644,
+        -1.9
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.3459999999999996,
+        2.7139999999999995,
+        3.2
+      ],
+      "bone": null,
+      "color": "#3f3020"
+    },
+    {
+      "name": "shin",
+      "kind": "cylinder",
+      "params": {
+        "segments": 8,
+        "taper": 0.62
+      },
+      "position": [
+        0.0,
+        0.0,
+        -2.9
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.07,
+        2.07,
+        5.6
+      ],
+      "bone": null,
+      "color": "#3f3020"
+    }
+  ],
+  "joints": []
+}

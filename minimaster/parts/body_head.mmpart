@@ -1,0 +1,150 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "head",
+  "category": "body",
+  "tags": [
+    "head"
+  ],
+  "shapes": [
+    {
+      "name": "skull",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.15,
+        2.9
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        4.41,
+        5.292000000000001,
+        4.9
+      ],
+      "bone": null,
+      "color": "#b78a5c"
+    },
+    {
+      "name": "jaw",
+      "kind": "capsule",
+      "params": {
+        "segments": 6
+      },
+      "position": [
+        0.0,
+        -0.588,
+        1.136
+      ],
+      "rotation": [
+        80.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.2540000000000004,
+        1.6660000000000001,
+        2.45
+      ],
+      "bone": null,
+      "color": "#b78a5c"
+    },
+    {
+      "name": "nose",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        -2.45,
+        2.4099999999999997
+      ],
+      "rotation": [
+        -12.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.22,
+        0.3,
+        0.3
+      ],
+      "bone": null,
+      "color": "#b78a5c"
+    },
+    {
+      "name": "eye_l",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.931,
+        -2.153,
+        3.194
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.588,
+        0.294,
+        0.6860000000000002
+      ],
+      "bone": null,
+      "color": "#241f1a"
+    },
+    {
+      "name": "eye_r",
+      "kind": "box",
+      "params": {},
+      "position": [
+        -0.931,
+        -2.153,
+        3.194
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.588,
+        0.294,
+        0.6860000000000002
+      ],
+      "bone": null,
+      "color": "#241f1a"
+    },
+    {
+      "name": "hair",
+      "kind": "icosphere",
+      "params": {
+        "subdivisions": 1
+      },
+      "position": [
+        0.0,
+        0.738,
+        3.88
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        4.704,
+        4.508000000000001,
+        3.43
+      ],
+      "bone": null,
+      "color": "#4f3b28"
+    }
+  ],
+  "joints": []
+}

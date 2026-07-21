@@ -1,0 +1,78 @@
+{
+  "format": "minimaster-part",
+  "version": 1,
+  "name": "foot",
+  "category": "body",
+  "tags": [
+    "foot"
+  ],
+  "shapes": [
+    {
+      "name": "heel",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        0.7,
+        -0.9
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.7,
+        1.1,
+        1.5
+      ],
+      "bone": null,
+      "color": "#3f3020"
+    },
+    {
+      "name": "foot",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        -0.4,
+        -1.3
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.0,
+        2.6,
+        1.4
+      ],
+      "bone": null,
+      "color": "#3f3020"
+    },
+    {
+      "name": "toe",
+      "kind": "wedge",
+      "params": {},
+      "position": [
+        0.0,
+        -1.8,
+        -1.6
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "scale": [
+        1.8,
+        1.4,
+        1.1
+      ],
+      "bone": null,
+      "color": "#3f3020"
+    }
+  ],
+  "joints": []
+}
