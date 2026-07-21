@@ -52,6 +52,7 @@ class BuildOptions:
     render: str | None = None
     stl: str | None = None
     glb: str | None = None
+    check_watertight: bool = False
     resolution: tuple[int, int] = (600, 600)
     samples: int = 48
     azimuth: float = 335.0
@@ -81,6 +82,8 @@ class BuildOptions:
             args += ["--stl", str(self.stl)]
         if self.glb:
             args += ["--glb", str(self.glb)]
+        if self.check_watertight:
+            args.append("--check-watertight")
         args += ["--res", str(self.resolution[0]), str(self.resolution[1])]
         args += ["--samples", str(self.samples)]
         args += ["--azimuth", str(self.azimuth), "--elevation", str(self.elevation)]

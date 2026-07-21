@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "fuse":
             opts = BuildOptions(
                 union=args.method, voxel=args.voxel, subdiv=args.subdiv,
-                stl=args.output, **common,
+                stl=args.output, check_watertight=True, **common,
             )
         else:
             opts = BuildOptions(

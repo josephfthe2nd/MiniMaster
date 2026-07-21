@@ -107,6 +107,23 @@ def test_hq_render_writes_png(tmp_path):
 
 
 @needs_blender
+def test_fuse_watertight_gate_rejects_bad_solid(tmp_path):
+    """A voxel far larger than the figure's features remeshes to garbage; the
+    watertight gate must fail loudly rather than write a bad STL."""
+    out = tmp_path / "bad.stl"
+    with pytest.raises(BlenderError, match="not a printable solid|not watertight"):
+        run_build(template_path("human_fighter"),
+                  BuildOptions(size="small", union="voxel", voxel=40.0,
+                               stl=str(out), check_watertight=True))
+
+
+def test_check_watertight_flag_emitted():
+    args = BuildOptions(stl="o.stl", check_watertight=True).script_args("s.mmp")
+    assert "--check-watertight" in args
+    assert "--check-watertight" not in BuildOptions(stl="o.stl").script_args("s.mmp")
+
+
+@needs_blender
 def test_cli_fuse_and_error(tmp_path):
     from minimaster.__main__ import main
 

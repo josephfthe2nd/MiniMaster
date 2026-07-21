@@ -59,12 +59,17 @@ def _material(color: str) -> "bpy.types.Material":
         mat = bpy.data.materials.new(name=f"mm_{color.lstrip('#')}")
         mat.use_nodes = True
         bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        bsdf.inputs["Base Color"].default_value = _hex_to_linear(color)
-        bsdf.inputs["Roughness"].default_value = 0.62
-        # a touch of specular so edges catch the light without looking wet
-        spec = bsdf.inputs.get("Specular IOR Level") or bsdf.inputs.get("Specular")
-        if spec is not None:
-            spec.default_value = 0.25
+        if bsdf is None:  # unusual build; fall back to any BSDF node
+            bsdf = next(
+                (n for n in mat.node_tree.nodes if n.type.startswith("BSDF")), None
+            )
+        if bsdf is not None and "Base Color" in bsdf.inputs:
+            bsdf.inputs["Base Color"].default_value = _hex_to_linear(color)
+            bsdf.inputs["Roughness"].default_value = 0.62
+            # a touch of specular so edges catch the light without looking wet
+            spec = bsdf.inputs.get("Specular IOR Level") or bsdf.inputs.get("Specular")
+            if spec is not None:
+                spec.default_value = 0.25
         _MATERIALS[color] = mat
     return mat
 
@@ -163,6 +168,8 @@ def union_boolean(objs: list):
 def union_voxel(objs: list, voxel: float):
     """Join then voxel-remesh into a single watertight organic solid — always
     manifold, auto-smooths (good for bodies/creatures)."""
+    if not objs:
+        return None
     for o in objs:
         o.select_set(True)
     bpy.context.view_layer.objects.active = objs[0]
@@ -318,6 +325,8 @@ def parse_args(argv):
     p.add_argument("--render")
     p.add_argument("--stl")
     p.add_argument("--glb")
+    p.add_argument("--check-watertight", action="store_true",
+                   help="verify the exported STL is watertight+outward, fail if not")
     p.add_argument("--res", type=int, nargs=2, default=[600, 600])
     p.add_argument("--samples", type=int, default=48)
     p.add_argument("--azimuth", type=float, default=335.0)
@@ -350,6 +359,21 @@ def main():
 
     if args.stl:
         export_stl(args.stl)
+        if args.check_watertight:
+            # Re-read with MiniMaster's own reader and hold the Blender solid
+            # to the same bar as `minimaster export`: watertight + outward.
+            from minimaster.core.stl import read_stl
+
+            rep = read_stl(args.stl).integrity_report()
+            if not rep["watertight"] or not rep["outward"]:
+                print(
+                    f"BUILD_FAIL fused STL is not a printable solid "
+                    f"(watertight={rep['watertight']}, outward={rep['outward']}, "
+                    f"boundary_edges={rep['boundary_edges']}, "
+                    f"nonmanifold_edges={rep['nonmanifold_edges']}) — try "
+                    f"--method voxel or a smaller --voxel"
+                )
+                raise SystemExit(1)
         print(f"BUILD_STL {args.stl}")
     if args.glb:
         export_glb(args.glb)
