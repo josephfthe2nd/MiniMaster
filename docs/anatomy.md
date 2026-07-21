@@ -190,3 +190,70 @@ The generator lays joints out as fractions of `H`. Current vs. canon-aligned
 
 These are expressed as parameters, so each is a small change to
 `build_humanoid` / `make_bodyparts.py` rather than per-shape hand-tuning.
+
+---
+
+## 7. Extra arm pairs (polymelia / four-armed builds)
+
+Adding a second pair of arms is **not** "duplicate the arms lower down." An
+arm hangs off a **shoulder girdle** — a clavicle (front strut to the sternum)
+and a scapula (floating plate on the back) — and a whole set of muscles
+anchors that girdle to the axial skeleton. A second pair needs a **second
+girdle**, and the muscles that serve it change accordingly.
+
+### Skeleton — two girdles, a longer thorax
+
+The two believable layouts:
+
+- **Tandem (recommended).** Stack the girdles vertically and **lengthen the
+  thorax** by ~1 head so there's room. Upper arms at the normal shoulder line
+  (~0.80 H); lower arms near the **bottom of the ribcage / upper lumbar**
+  (~0.62–0.66 H). This is the standard creature convention (marilith, Goro)
+  and reads cleanly. The sternum lengthens; add rib pairs to fill the taller
+  chest.
+- **Broadened (side-by-side).** Both girdles near the same height, shoulders
+  widened dramatically. Reads as "very broad," less clean; avoid unless the
+  creature is meant to be a wall of shoulders.
+
+Either way the **torso stretches or thickens** — a four-armed figure carries a
+longer/deeper thorax and a thicker core, because four arms' worth of leverage
+needs a stronger spine to stabilise.
+
+### Muscles that change (this is the "muscle accounting")
+
+| Muscle | Single pair | With a 2nd pair |
+|--------|-------------|-----------------|
+| **Deltoid** | one cap per shoulder | **four caps** — a second deltoid on each lower shoulder |
+| **Pectoralis** | one chest sheet anchoring the arms | a **second, lower pec band** for the lower arms — the chest becomes a two-tier stack of slabs |
+| **Trapezius** | suspends one girdle | **enlarged / two-tiered** — an upper trap for the top shoulders plus a second band suspending the lower girdle; the neck-to-shoulder mass grows |
+| **Latissimus / back** | one V into the waist | **broadened, taller** back sheet (or two V's) anchoring both arm sets — the back becomes very wide |
+| **Serratus / rhomboids** | hold one scapula pair | **duplicated** down a taller ribcage to hold the second scapulae |
+| **Rotator cuff** | per shoulder | duplicated per shoulder (internal, not silhouette) |
+| **Spinal erectors / core** | baseline | **thicker** — the mid/lower back and obliques bulk up to brace four arms |
+
+Net silhouette change: **broader, deeper, longer torso; a stacked chest;
+a much wider, more muscular back; a thicker neck.** The lower arms are often
+drawn slightly **smaller (~0.85–0.95)** than the uppers (primary vs secondary
+limbs), or equal for a pure brute.
+
+### Parametric rule for the generator / rig
+
+Model an extra arm pair as an **additive graft** (which is exactly how the
+part & rigging system will do it):
+
+1. **Joints.** Add `shoulder2_{l,r} → elbow2 → wrist2 → hand2`, parented to a
+   **lower chest bone** (or the spine) at z ≈ 0.62–0.66 H, x ≈ the upper
+   shoulder's x (optionally 5–10 % narrower). Scale the whole chain ~0.9.
+2. **Thorax.** Lengthen/deepen the chest ~0.6–1.0 head and widen the torso
+   ~12 % so the lower girdle has an anchor.
+3. **Muscle primitives to add:** a lower deltoid cap per lower shoulder; a
+   lower pec band on the front at the lower-shoulder height; a second
+   trapezius/rhomboid band on the back between the two shoulder rows; a
+   broadened lat/erector mass. These are the same primitive types as the
+   single-pair masses in §4, just instanced for the second girdle.
+
+Because it's additive, it composes: `arm_pairs = 2` (or a shipped
+"four-armed" creature) just runs the arm-and-girdle builder twice at two
+shoulder heights and adds the second set of anchoring muscles. The rule
+generalises to **N** pairs (centipede-of-arms) — each pair is another girdle
+down a proportionally longer thorax.
