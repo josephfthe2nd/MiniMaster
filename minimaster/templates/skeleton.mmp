@@ -25,7 +25,7 @@
         5.1000000000000005
       ],
       "bone": "spine",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "neck",
@@ -50,7 +50,7 @@
         3.0
       ],
       "bone": "head_top",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "head",
@@ -74,7 +74,7 @@
         4.896000000000001
       ],
       "bone": "head_top",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "eye_l",
@@ -131,9 +131,9 @@
         "subdivisions": 1
       },
       "position": [
-        2.7144,
+        2.6544,
         0.0,
-        24.27
+        24.029999999999998
       ],
       "rotation": [
         0.0,
@@ -141,12 +141,12 @@
         0.0
       ],
       "scale": [
-        1.6929,
-        1.6929,
-        1.6929
+        1.3543200000000002,
+        1.3543200000000002,
+        1.3543200000000002
       ],
       "bone": "elbow_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "upper_arm_l",
@@ -171,7 +171,7 @@
         5.254819216681007
       ],
       "bone": "elbow_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "elbow_pad_l",
@@ -195,7 +195,7 @@
         1.1457600000000001
       ],
       "bone": "wrist_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "forearm_l",
@@ -220,7 +220,7 @@
         4.709050461611131
       ],
       "bone": "wrist_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "hand_l",
@@ -242,7 +242,7 @@
         2.04
       ],
       "bone": "hand_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "thumb_l",
@@ -264,7 +264,7 @@
         1.26
       ],
       "bone": "hand_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "thigh_l",
@@ -289,7 +289,7 @@
         8.830149688653572
       ],
       "bone": "knee_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "knee_pad_l",
@@ -313,7 +313,7 @@
         1.4929199999999998
       ],
       "bone": "ankle_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "shin_l",
@@ -338,7 +338,7 @@
         8.386785586416574
       ],
       "bone": "ankle_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "foot_l",
@@ -360,7 +360,7 @@
         1.44
       ],
       "bone": "toe_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "heel_l",
@@ -382,7 +382,7 @@
         1.5
       ],
       "bone": "toe_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "toe_l",
@@ -404,7 +404,7 @@
         1.14
       ],
       "bone": "toe_l",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "shoulder_r",
@@ -413,9 +413,9 @@
         "subdivisions": 1
       },
       "position": [
-        -2.7144,
+        -2.6544,
         0.0,
-        24.27
+        24.029999999999998
       ],
       "rotation": [
         0.0,
@@ -423,12 +423,12 @@
         0.0
       ],
       "scale": [
-        1.6929,
-        1.6929,
-        1.6929
+        1.3543200000000002,
+        1.3543200000000002,
+        1.3543200000000002
       ],
       "bone": "elbow_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "upper_arm_r",
@@ -453,7 +453,7 @@
         5.254819216681007
       ],
       "bone": "elbow_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "elbow_pad_r",
@@ -477,7 +477,7 @@
         1.1457600000000001
       ],
       "bone": "wrist_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "forearm_r",
@@ -502,7 +502,7 @@
         4.709050461611131
       ],
       "bone": "wrist_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "hand_r",
@@ -524,7 +524,7 @@
         2.04
       ],
       "bone": "hand_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "thumb_r",
@@ -546,7 +546,7 @@
         1.26
       ],
       "bone": "hand_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "thigh_r",
@@ -571,7 +571,7 @@
         8.830149688653572
       ],
       "bone": "knee_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "knee_pad_r",
@@ -595,7 +595,7 @@
         1.4929199999999998
       ],
       "bone": "ankle_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "shin_r",
@@ -620,7 +620,7 @@
         8.386785586416574
       ],
       "bone": "ankle_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "foot_r",
@@ -642,7 +642,7 @@
         1.44
       ],
       "bone": "toe_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "heel_r",
@@ -664,7 +664,7 @@
         1.5
       ],
       "bone": "toe_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "toe_r",
@@ -686,7 +686,7 @@
         1.14
       ],
       "bone": "toe_r",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "spine_column",
@@ -710,7 +710,7 @@
         6.449999999999999
       ],
       "bone": "chest",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "rib_0",
@@ -735,7 +735,7 @@
         1.26
       ],
       "bone": "chest",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "rib_1",
@@ -760,7 +760,7 @@
         1.26
       ],
       "bone": "chest",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "rib_2",
@@ -785,7 +785,7 @@
         1.26
       ],
       "bone": "chest",
-      "color": "#d8cfb6"
+      "color": "#cfc6ad"
     },
     {
       "name": "sword_blade_r",

@@ -25,7 +25,7 @@
         5.1000000000000005
       ],
       "bone": "spine",
-      "color": "#8d6f4a"
+      "color": "#5f4a33"
     },
     {
       "name": "glutes",
@@ -49,7 +49,7 @@
         3.15
       ],
       "bone": "spine",
-      "color": "#8d6f4a"
+      "color": "#5f4a33"
     },
     {
       "name": "belly",
@@ -73,7 +73,7 @@
         6.3
       ],
       "bone": "chest",
-      "color": "#8d6f4a"
+      "color": "#5f4a33"
     },
     {
       "name": "chest",
@@ -83,7 +83,7 @@
       },
       "position": [
         0.0,
-        -0.17700000000000002,
+        -0.1416,
         21.674999999999997
       ],
       "rotation": [
@@ -92,12 +92,12 @@
         0.0
       ],
       "scale": [
-        6.105,
-        4.3896,
+        6.216,
+        3.9648000000000003,
         7.800000000000001
       ],
       "bone": "chest",
-      "color": "#8d6f4a"
+      "color": "#5f4a33"
     },
     {
       "name": "belt",
@@ -146,7 +146,7 @@
         3.0
       ],
       "bone": "head_top",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "head",
@@ -170,7 +170,7 @@
         5.1408
       ],
       "bone": "head_top",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "jaw",
@@ -180,21 +180,21 @@
       },
       "position": [
         0.0,
-        -0.9253439999999999,
-        25.925327999999997
+        -0.6168959999999999,
+        25.822511999999996
       ],
       "rotation": [
-        78.0,
+        80.0,
         0.0,
         0.0
       ],
       "scale": [
-        2.673216,
-        2.1591359999999997,
-        3.187296
+        2.3647679999999998,
+        1.747872,
+        2.5704
       ],
       "bone": "head_top",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "nose",
@@ -216,7 +216,7 @@
         1.65
       ],
       "bone": "head_top",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "eye_l",
@@ -288,7 +288,7 @@
         4.009824
       ],
       "bone": "head_top",
-      "color": "#5d4630"
+      "color": "#4f3b28"
     },
     {
       "name": "mouth",
@@ -319,9 +319,9 @@
         "subdivisions": 1
       },
       "position": [
-        2.94,
+        2.88,
         0.0,
-        24.27
+        24.029999999999998
       ],
       "rotation": [
         0.0,
@@ -329,12 +329,12 @@
         0.0
       ],
       "scale": [
-        3.078,
-        3.078,
-        3.078
+        2.4624,
+        2.4624,
+        2.4624
       ],
       "bone": "elbow_l",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "upper_arm_l",
@@ -359,7 +359,7 @@
         5.254819216681007
       ],
       "bone": "elbow_l",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "elbow_pad_l",
@@ -383,7 +383,7 @@
         2.0832
       ],
       "bone": "wrist_l",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "forearm_l",
@@ -408,7 +408,7 @@
         4.709050461611131
       ],
       "bone": "wrist_l",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "hand_l",
@@ -430,7 +430,7 @@
         2.04
       ],
       "bone": "hand_l",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "thumb_l",
@@ -452,7 +452,7 @@
         1.26
       ],
       "bone": "hand_l",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "thigh_l",
@@ -477,7 +477,7 @@
         8.83020670623378
       ],
       "bone": "knee_l",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "knee_pad_l",
@@ -501,7 +501,7 @@
         2.7143999999999995
       ],
       "bone": "ankle_l",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "calf_l",
@@ -525,7 +525,7 @@
         3.6036
       ],
       "bone": "ankle_l",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "shin_l",
@@ -550,7 +550,7 @@
         8.386970152607912
       ],
       "bone": "ankle_l",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "foot_l",
@@ -572,7 +572,7 @@
         1.44
       ],
       "bone": "toe_l",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "heel_l",
@@ -594,7 +594,7 @@
         1.5
       ],
       "bone": "toe_l",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "toe_l",
@@ -616,7 +616,7 @@
         1.14
       ],
       "bone": "toe_l",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "shoulder_r",
@@ -625,9 +625,9 @@
         "subdivisions": 1
       },
       "position": [
-        -2.94,
+        -2.88,
         0.0,
-        24.27
+        24.029999999999998
       ],
       "rotation": [
         0.0,
@@ -635,12 +635,12 @@
         0.0
       ],
       "scale": [
-        3.078,
-        3.078,
-        3.078
+        2.4624,
+        2.4624,
+        2.4624
       ],
       "bone": "elbow_r",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "upper_arm_r",
@@ -665,7 +665,7 @@
         5.254819216681007
       ],
       "bone": "elbow_r",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "elbow_pad_r",
@@ -689,7 +689,7 @@
         2.0832
       ],
       "bone": "wrist_r",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "forearm_r",
@@ -714,7 +714,7 @@
         4.709050461611131
       ],
       "bone": "wrist_r",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "hand_r",
@@ -736,7 +736,7 @@
         2.04
       ],
       "bone": "hand_r",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "thumb_r",
@@ -758,7 +758,7 @@
         1.26
       ],
       "bone": "hand_r",
-      "color": "#c9a172"
+      "color": "#b78a5c"
     },
     {
       "name": "thigh_r",
@@ -783,7 +783,7 @@
         8.83020670623378
       ],
       "bone": "knee_r",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "knee_pad_r",
@@ -807,7 +807,7 @@
         2.7143999999999995
       ],
       "bone": "ankle_r",
-      "color": "#a5824f"
+      "color": "#6f5640"
     },
     {
       "name": "calf_r",
@@ -831,7 +831,7 @@
         3.6036
       ],
       "bone": "ankle_r",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "shin_r",
@@ -856,7 +856,7 @@
         8.386970152607912
       ],
       "bone": "ankle_r",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "foot_r",
@@ -878,7 +878,7 @@
         1.44
       ],
       "bone": "toe_r",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "heel_r",
@@ -900,7 +900,7 @@
         1.5
       ],
       "bone": "toe_r",
-      "color": "#6b543a"
+      "color": "#4a3826"
     },
     {
       "name": "toe_r",
@@ -922,7 +922,51 @@
         1.14
       ],
       "bone": "toe_r",
-      "color": "#6b543a"
+      "color": "#4a3826"
+    },
+    {
+      "name": "cape",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        4.071,
+        16.5
+      ],
+      "rotation": [
+        7.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        9.434999999999999,
+        0.8999999999999999,
+        15.600000000000001
+      ],
+      "bone": "chest",
+      "color": "#8f2f2c"
+    },
+    {
+      "name": "cape_collar",
+      "kind": "box",
+      "params": {},
+      "position": [
+        0.0,
+        3.50106,
+        25.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        8.325,
+        1.5,
+        1.5
+      ],
+      "bone": "chest",
+      "color": "#c9a24a"
     },
     {
       "name": "sword_blade_r",

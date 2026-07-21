@@ -196,8 +196,8 @@ def build_humanoid(
         "capsule",
         name="chest",
         params={"segments": 8},
-        position=[0, -torso_d * 0.05, (chest_z + spine_z) / 2 + 0.03 * H],
-        scale=[torso_w * 1.1, torso_d * 1.24, 0.26 * H],
+        position=[0, -torso_d * 0.04, (chest_z + spine_z) / 2 + 0.03 * H],
+        scale=[torso_w * 1.12, torso_d * 1.12, 0.26 * H],  # broader, less deep
         bone="chest",
         color=torso_color,
     )
@@ -238,9 +238,9 @@ def build_humanoid(
         "capsule",
         name="jaw",
         params={"segments": 6},
-        position=[0, -head_d * 0.18, head_c - head_d * 0.34],
-        rotation=[78.0, 0.0, 0.0],  # chin-to-jaw mass angling back and up
-        scale=[head_d * 0.52, head_d * 0.42, head_d * 0.62],
+        position=[0, -head_d * 0.12, head_c - head_d * 0.36],
+        rotation=[80.0, 0.0, 0.0],  # subtle chin, OSRS heads are simple ovoids
+        scale=[head_d * 0.46, head_d * 0.34, head_d * 0.5],
         bone="head_top",
         color=skin,
     )
@@ -306,8 +306,9 @@ def build_humanoid(
         sh, el, wr, hd = (J[f"{k}_{side}"] for k in ("shoulder", "elbow", "wrist", "hand"))
         hp, kn, an, to = (J[f"{k}_{side}"] for k in ("hip", "knee", "ankle", "toe"))
         sxs = +1.0 if side == "l" else -1.0
-        ball(scene, f"shoulder_{side}", sh + [sxs * 0.004 * H, 0, 0.004 * H],
-             uarm_t * 1.35, f"elbow_{side}", limb_color, subdiv=1)
+        # OSRS shoulders read as a simple cap, not a bulky ball
+        ball(scene, f"shoulder_{side}", sh + [sxs * 0.002 * H, 0, -0.004 * H],
+             uarm_t * 1.08, f"elbow_{side}", limb_color, subdiv=1)
         limb(scene, f"upper_arm_{side}", sh, el, uarm_t, f"elbow_{side}",
              limb_color, taper=0.8, segments=8)
         ball(scene, f"elbow_pad_{side}", el, farm_t * 1.12, f"wrist_{side}",
@@ -434,6 +435,34 @@ def add_tusks(scene: Scene, color: str = "#e8ddc4"):
             bone="head_top",
             color=color,
         )
+
+
+def add_cape(scene: Scene, color: str = "#8a2f2f", trim: str | None = None):
+    """Iconic OSRS cape: a wide slab hanging off the upper back, bound to the
+    chest so it sways with the torso. Slight backward tilt + a collar."""
+    L = scene._layout
+    H, J = L["H"], L["J"]
+    chest_z = J["chest"][2]
+    hip_z = J["hip_l"][2]
+    top, bottom = chest_z + 0.06 * H, hip_z - 0.2 * H
+    back_y = L["torso_d"] * 1.15
+    scene.add_shape(
+        "box",
+        name="cape",
+        position=[0, back_y, (top + bottom) / 2],
+        rotation=[7.0, 0.0, 0.0],
+        scale=[L["torso_w"] * 1.7, 0.03 * H, top - bottom],
+        bone="chest",
+        color=color,
+    )
+    scene.add_shape(
+        "box",
+        name="cape_collar",
+        position=[0, back_y * 0.86, chest_z + 0.09 * H],
+        scale=[L["torso_w"] * 1.5, 0.05 * H, 0.05 * H],
+        bone="chest",
+        color=trim or color,
+    )
 
 
 def add_ribs(scene: Scene, color: str):
@@ -723,9 +752,10 @@ def humanoid_poses(hunch: float = 0.0) -> dict[str, dict]:
 def make_human_fighter() -> Scene:
     scene = build_humanoid(
         "Human Fighter", height=30.0, head=1.05,
-        skin="#c9a172", torso_color="#8d6f4a", limb_color="#a5824f",
-        hair="#5d4630",
+        skin="#b78a5c", torso_color="#5f4a33", limb_color="#6f5640",
+        boot_color="#4a3826", hair="#4f3b28",
     )
+    add_cape(scene, color="#8f2f2c", trim="#c9a24a")  # classic OSRS cape
     add_sword(scene, "r")
     add_shield(scene, "l")
     scene.poses = humanoid_poses()
@@ -737,8 +767,8 @@ def make_dwarf() -> Scene:
     scene = build_humanoid(
         "Dwarf Warrior", height=24.0,
         head=1.2, legs=0.72, arms=0.9, bulk=1.3, shoulders=1.25,
-        skin="#c99b6f", torso_color="#7a5c3d", limb_color="#8e6d45",
-        hair="#9a6432",
+        skin="#b58a5f", torso_color="#5a4531", limb_color="#6b5238",
+        boot_color="#3f3020", hair="#8a5a28",
     )
     add_beard(scene, "#9a6432")
     scene.base["style"] = "cobble"
@@ -754,9 +784,9 @@ def make_goblin() -> Scene:
     scene = build_humanoid(
         "Goblin", height=20.0,
         head=1.35, legs=0.9, arms=1.1, bulk=0.78, shoulders=0.9,
-        skin="#8aa050", torso_color="#5f6b3c", limb_color="#76894a",
-        slim_torso=True, nose=1.8,
-        eye_scale=1.55, eye_color="#c9a13b",  # big amber goblin eyes
+        skin="#6f8a3e", torso_color="#4a5230", limb_color="#5d6b38",
+        boot_color="#3a3322", slim_torso=True, nose=1.8,
+        eye_scale=1.55, eye_color="#d8b23a",  # big amber goblin eyes
     )
     add_ears(scene, length=1.5, tilt=35.0)
     add_dagger(scene, "r")
@@ -769,8 +799,8 @@ def make_orc() -> Scene:
     scene = build_humanoid(
         "Orc Brute", height=34.0,
         head=0.95, legs=0.95, arms=1.1, bulk=1.35, shoulders=1.3,
-        skin="#7e9150", torso_color="#5c6b3f", limb_color="#6f8446",
-        eye_scale=0.85, eye_color="#b8352c", brow=True,  # small angry red eyes
+        skin="#5f7d3c", torso_color="#454f2e", limb_color="#546b38",
+        boot_color="#332d1f", eye_scale=0.85, eye_color="#c23a2a", brow=True,
     )
     add_tusks(scene)
     add_ears(scene, length=0.9, tilt=15.0)
@@ -783,7 +813,7 @@ def make_orc() -> Scene:
 
 
 def make_skeleton() -> Scene:
-    bone_col = "#d8cfb6"
+    bone_col = "#cfc6ad"
     scene = build_humanoid(
         "Skeleton", height=30.0,
         head=1.0, bulk=0.55, shoulders=0.92,
