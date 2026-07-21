@@ -89,6 +89,41 @@ add-ons (beard, ears, tusks, ribcage, gear), built by
 `tools/make_templates.py` — add your own factory there and re-run it to grow
 the roster.
 
+## Blender backend (optional)
+
+MiniMaster's own engine is pure Python — but if a `blender` binary is on your
+`PATH`, two extra commands unlock Blender's geometry and rendering power. This
+is an **optional refine/output backend**: `.mmp` scenes, the studio, and the
+tests stay the source of truth and never depend on Blender. Blender's bundled
+Python imports the MiniMaster kernel directly, so it builds from the exact
+posed meshes and colors your scene defines — no lossy STL round-trip.
+
+```bash
+# Fuse the overlapping shells into ONE watertight solid (great for printing):
+minimaster fuse hero.mmp -o hero_solid.stl --method voxel --size medium
+minimaster fuse hero.mmp -o hero_hard.stl  --method boolean   # hard edges kept
+
+# High-quality Cycles render — real lighting, shadows, materials:
+minimaster hq-render hero.mmp -o hero.png --smooth --samples 64
+minimaster hq-render beast.mmp -o beast.png --union voxel --subdiv 1  # smooth organic
+```
+
+![Blender render](docs/gallery/blender_render.png)
+
+- **`fuse`** unions the shells into a single manifold mesh. `--method voxel`
+  (default) is always watertight and auto-smooths into an organic solid;
+  `--method boolean` keeps the low-poly hard edges. The result is verified
+  watertight by MiniMaster's own STL reader in the test suite.
+- **`hq-render`** renders with Cycles (CPU). `--union voxel --subdiv N` melts
+  the primitive stack into a smooth sculpted body; `--smooth` just smooth-shades
+  the facets; `--transparent` gives an alpha background.
+
+Point `MINIMASTER_BLENDER` at a specific binary if `blender` isn't on `PATH`.
+Both commands share MiniMaster's conventions (mm, size categories, poses,
+bases) and print a clean error (exit 2) if Blender isn't installed — `export`
+and `preview` always work without it. The in-Blender script is
+`tools/blender_build.py`; the bpy-free launcher is `minimaster/blender.py`.
+
 ## Headless CLI
 
 Everything the Export tab does works without a display:

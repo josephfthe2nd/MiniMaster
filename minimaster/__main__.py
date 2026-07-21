@@ -82,6 +82,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_val = sub.add_parser("validate", help="check a project file and its geometry")
     p_val.add_argument("scene", help="input .mmp project")
 
+    # -- Blender backend (optional) --------------------------------------
+    def _add_size(p):
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--size", choices=sorted(SIZE_PRESETS))
+        g.add_argument("--height", type=float)
+
+    p_fuse = sub.add_parser(
+        "fuse", help="[Blender] union the shells into one watertight solid STL")
+    p_fuse.add_argument("scene")
+    p_fuse.add_argument("-o", "--output", required=True, help="output .stl path")
+    _add_pose_arg(p_fuse)
+    _add_size(p_fuse)
+    p_fuse.add_argument("--method", choices=["voxel", "boolean"], default="voxel",
+                        help="voxel = watertight organic solid; boolean = hard edges")
+    p_fuse.add_argument("--voxel", type=float, default=0.6,
+                        help="voxel size in mm for --method voxel")
+    p_fuse.add_argument("--subdiv", type=int, default=0)
+    p_fuse.add_argument("--no-base", action="store_true")
+
+    p_hq = sub.add_parser(
+        "hq-render", help="[Blender] Cycles render (lit, shadowed, materials)")
+    p_hq.add_argument("scene")
+    p_hq.add_argument("-o", "--output", required=True, help="output .png path")
+    _add_pose_arg(p_hq)
+    _add_size(p_hq)
+    p_hq.add_argument("--union", choices=["none", "voxel", "boolean"], default="none")
+    p_hq.add_argument("--voxel", type=float, default=0.6)
+    p_hq.add_argument("--subdiv", type=int, default=0)
+    p_hq.add_argument("--smooth", action="store_true", help="smooth shading")
+    p_hq.add_argument("--samples", type=int, default=48)
+    p_hq.add_argument("--res", type=int, nargs=2, default=[600, 600])
+    p_hq.add_argument("--azimuth", type=float, default=335.0)
+    p_hq.add_argument("--elevation", type=float, default=16.0)
+    p_hq.add_argument("--transparent", action="store_true")
+    p_hq.add_argument("--no-base", action="store_true")
+
     return parser
 
 
@@ -196,6 +232,35 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.scene}: ok ({len(scene.shapes)} shapes, "
             f"{len(scene.armature)} joints, {len(scene.poses)} poses)"
         )
+        return 0
+
+    if command in ("fuse", "hq-render"):
+        from .blender import BlenderError, BuildOptions, run_build
+
+        common = dict(
+            pose=_resolve_pose(args.pose) or "rest",
+            size=args.size,
+            height=args.height,
+            with_base=not args.no_base,
+        )
+        if command == "fuse":
+            opts = BuildOptions(
+                union=args.method, voxel=args.voxel, subdiv=args.subdiv,
+                stl=args.output, **common,
+            )
+        else:
+            opts = BuildOptions(
+                union=args.union, voxel=args.voxel, subdiv=args.subdiv,
+                smooth=args.smooth, render=args.output, samples=args.samples,
+                resolution=tuple(args.res), azimuth=args.azimuth,
+                elevation=args.elevation, transparent=args.transparent, **common,
+            )
+        try:
+            run_build(args.scene, opts)
+        except BlenderError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"wrote {args.output}")
         return 0
 
     raise AssertionError(f"unhandled command {command!r}")
