@@ -246,11 +246,17 @@ part & rigging system will do it):
    shoulder's x (optionally 5–10 % narrower). Scale the whole chain ~0.9.
 2. **Thorax.** Lengthen/deepen the chest ~0.6–1.0 head and widen the torso
    ~12 % so the lower girdle has an anchor.
-3. **Muscle primitives to add:** a lower deltoid cap per lower shoulder; a
-   lower pec band on the front at the lower-shoulder height; a second
-   trapezius/rhomboid band on the back between the two shoulder rows; a
-   broadened lat/erector mass. These are the same primitive types as the
-   single-pair masses in §4, just instanced for the second girdle.
+3. **Muscle primitives to add:** at *sculpt* fidelity the second girdle wants
+   a lower deltoid cap, a lower pec band, a second trapezius/rhomboid yoke and
+   a broadened lat/erector mass — the same primitive types as §4, instanced
+   for the second girdle. **At low-poly / tabletop fidelity, don't.** Stacking
+   a full second muscle set directly under the first turns the chest into a
+   pile of overlapping rounded lumps with no readable torso between the two
+   shoulder rows (it fails badly at close/AR scale). Keep it to the *minimum
+   that reads*: one clean deltoid cap where each lower arm meets the ribcage,
+   plus a single slim lat sweep tying that shoulder up into the torso side.
+   Silhouette clarity beats anatomical completeness here — the chunky OSRS
+   look implies muscle through proportion and taper, not a bag of bulges.
 
 Because it's additive, it composes: `arm_pairs = 2` (or a shipped
 "four-armed" creature) just runs the arm-and-girdle builder twice at two
@@ -259,7 +265,9 @@ generalises to **N** pairs (centipede-of-arms) — each pair is another girdle
 down a proportionally longer thorax.
 
 > **Implemented.** `tools/make_templates.py:add_arm_pair()` is exactly this
-> additive builder (grafts `shoulder2→elbow2→wrist2→hand2` per side plus the
-> four-deltoid / lower-pec / trap-yoke / lat muscles), and the shipped
-> `four_arms` template (`make_four_arms`) uses it. Call it after
+> additive builder — it grafts `shoulder2→elbow2→wrist2→hand2` per side, drops
+> the lower girdle well below the primary shoulders so the four arms fan out
+> distinctly, and adds only the minimum anchoring geometry (one deltoid cap +
+> one slim lat sweep per lower shoulder, per the low-poly rule above). The
+> shipped `four_arms` template (`make_four_arms`) uses it. Call it after
 > `build_humanoid` on any base to make that creature four-armed.

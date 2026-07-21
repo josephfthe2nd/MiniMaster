@@ -478,10 +478,13 @@ def add_tusks(scene: Scene, color: str = "#e8ddc4"):
 
 
 def add_arm_pair(scene: Scene, *, limb_color: str, torso_color: str, skin: str,
-                 bulk: float = 1.0, scale: float = 0.9, drop: float = 0.16):
-    """Graft a second (lower) pair of arms onto a built humanoid, with the
-    second shoulder girdle's anchoring muscles (four deltoids total, a lower
-    pec band, a second trapezius yoke, broadened lats). Additive — see
+                 bulk: float = 1.0, scale: float = 0.82, drop: float = 0.22):
+    """Graft a second, slightly smaller pair of arms lower on the torso.
+
+    The lower shoulders emerge from the sides of the ribcage well below the
+    primary pair, so the four arms fan out cleanly instead of piling into a
+    cluster. One slim lat sweep per side ties each lower shoulder into the
+    torso so the arm reads as grown-from-body, not stuck on. Additive — see
     docs/anatomy.md §7. Requires the base shoulder/elbow/wrist/hand joints.
     """
     L = scene._layout
@@ -493,12 +496,13 @@ def add_arm_pair(scene: Scene, *, limb_color: str, torso_color: str, skin: str,
         return arm.joints[n].position.copy()
 
     sh_z = jp("shoulder_l")[2]
-    z2 = sh_z - drop * H  # lower girdle near the bottom of the ribcage
+    z2 = sh_z - drop * H  # distinctly lower girdle, low on the ribcage
     uarm_t = 0.076 * H * bulk * scale
     farm_t = 0.062 * H * bulk * scale
     for side, sx in (("l", +1.0), ("r", -1.0)):
         sh, el, wr, hd = (jp(f"{k}_{side}") for k in ("shoulder", "elbow", "wrist", "hand"))
-        sh2 = np.array([sh[0] * 1.06, sh[1], z2])
+        # lower shoulder tucks in slightly and sits at mid-depth of the ribcage
+        sh2 = np.array([sh[0] * 0.9, 0.0, z2])
         el2 = sh2 + (el - sh) * scale
         wr2 = sh2 + (wr - sh) * scale
         hd2 = sh2 + (hd - sh) * scale
@@ -506,10 +510,11 @@ def add_arm_pair(scene: Scene, *, limb_color: str, torso_color: str, skin: str,
         arm.add_joint(f"elbow2_{side}", el2, parent=f"shoulder2_{side}")
         arm.add_joint(f"wrist2_{side}", wr2, parent=f"elbow2_{side}")
         arm.add_joint(f"hand2_{side}", hd2, parent=f"wrist2_{side}")
-        ball(scene, f"deltoid2_{side}", sh2 + [sx * 0.002 * H, 0, 0.004 * H],
-             uarm_t * 1.12, f"elbow2_{side}", limb_color, subdiv=1)
+        # a single clean deltoid cap where the lower arm meets the ribcage
+        ball(scene, f"deltoid2_{side}", sh2, uarm_t * 1.05, f"elbow2_{side}",
+             limb_color, subdiv=1)
         limb(scene, f"upper_arm2_{side}", sh2, el2, uarm_t, f"elbow2_{side}",
-             limb_color, taper=0.74, segments=8)
+             limb_color, taper=0.72, segments=8)
         ball(scene, f"elbow2pad_{side}", el2, farm_t * 1.08, f"wrist2_{side}",
              limb_color)
         limb(scene, f"forearm2_{side}", el2, wr2, farm_t * 0.92, f"wrist2_{side}",
@@ -518,24 +523,11 @@ def add_arm_pair(scene: Scene, *, limb_color: str, torso_color: str, skin: str,
                         rotation=[0, 0, sx * 8.0],
                         scale=[0.046 * H, 0.06 * H, 0.068 * H],
                         bone=f"hand2_{side}", color=skin)
-    # second-girdle anchoring muscles
-    for sx in (+1.0, -1.0):
-        s = "l" if sx > 0 else "r"
-        scene.add_shape("capsule", name=f"lowpec_{s}", params={"segments": 6},
-                        position=[sx * torso_w * 0.4, -torso_d * 0.6, z2 + 0.02 * H],
-                        scale=[torso_w * 0.62, torso_d * 0.66, 0.1 * H],
-                        bone="chest", color=torso_color)
-        scene.add_shape("capsule", name=f"trap2_{s}", params={"segments": 6},
-                        position=[sx * torso_w * 0.5, torso_d * 0.5,
-                                  (sh_z + z2) / 2 + 0.02 * H],
-                        rotation=[0, 60 * sx, 0],
-                        scale=[0.1 * H, torso_d * 0.7, torso_w * 0.95],
-                        bone="chest", color=torso_color)
-        scene.add_shape("capsule", name=f"lat_{s}", params={"segments": 6},
-                        position=[sx * torso_w * 0.6, torso_d * 0.25,
-                                  (sh_z + z2) / 2 - 0.02 * H],
-                        scale=[0.07 * H, torso_d * 1.0, 0.26 * H],
-                        bone="chest", color=torso_color)
+        # one slim lat sweep tying the lower shoulder up into the ribcage side
+        top = np.array([sx * torso_w * 0.42, torso_d * 0.12, sh_z - 0.03 * H])
+        limb(scene, f"lat_{'l' if sx > 0 else 'r'}", top, sh2 * [1, 0, 1] + [0, torso_d * 0.12, 0],
+             torso_d * 0.55, "chest", torso_color, depth=torso_d * 0.95,
+             overlap=1.05, taper=0.85, kind="cylinder", segments=6)
 
 
 def add_cape(scene: Scene, color: str = "#8a2f2f", trim: str | None = None):
@@ -946,26 +938,35 @@ def make_skeleton() -> Scene:
 def make_four_arms() -> Scene:
     skin, torso, limb, boot = "#8a6a54", "#4a3a44", "#5c4a54", "#33272f"
     scene = build_humanoid(
-        "Four-Armed Horror", height=36.0,
-        head=0.92, legs=0.9, arms=1.15, bulk=1.4, shoulders=1.4,
+        "Four-Armed Horror", height=34.0,
+        head=1.0, legs=0.98, arms=1.12, bulk=1.2, shoulders=1.28,
         skin=skin, torso_color=torso, limb_color=limb, boot_color=boot,
         eye_scale=0.8, eye_color="#d8c23a", brow=True,
     )
     add_arm_pair(scene, limb_color=limb, torso_color=torso, skin=skin,
-                 bulk=1.4, scale=0.9)
-    # a combat pose spreading all four arms
-    base = humanoid_poses()
-    combat = dict(base["attack"])
-    combat.update({
-        "shoulder_l": (6, -20, 0), "elbow_l": (-30, 0, 0),
-        "shoulder_r": (6, 20, 0), "elbow_r": (-30, 0, 0),
-        "shoulder2_l": (-24, -40, 0), "elbow2_l": (-52, 0, 0),
-        "shoulder2_r": (-24, 40, 0), "elbow2_r": (-52, 0, 0),
-        "spine": (4, 0, 0),
-    })
-    scene.poses = {"idle": base["idle"], "combat": combat}
+                 bulk=1.2, scale=0.82)
+    # idle: the two arm pairs fan apart so all four read distinctly — upper
+    # pair relaxed at the sides, lower pair angled out and slightly forward
+    idle = {
+        "shoulder_l": (6, -10, 0), "elbow_l": (-20, 0, 0),
+        "shoulder_r": (6, 10, 0), "elbow_r": (-20, 0, 0),
+        "shoulder2_l": (-8, -34, 0), "elbow2_l": (-34, 0, 0),
+        "shoulder2_r": (-8, 34, 0), "elbow2_r": (-34, 0, 0),
+        "spine": (2, 0, 0), "neck": (-2, 0, 0),
+    }
+    # combat: upper arms raised to strike, lower arms braced wide and forward
+    combat = {
+        "shoulder_l": (-120, -18, 0), "elbow_l": (-34, 0, 0), "wrist_l": (-16, 0, 0),
+        "shoulder_r": (-120, 18, 0), "elbow_r": (-34, 0, 0), "wrist_r": (-16, 0, 0),
+        "shoulder2_l": (-40, -46, 0), "elbow2_l": (-58, 0, 0),
+        "shoulder2_r": (-40, 46, 0), "elbow2_r": (-58, 0, 0),
+        "hip_l": (-16, 0, 0), "knee_l": (10, 0, 0),
+        "hip_r": (14, 0, 0), "knee_r": (18, 0, 0),
+        "spine": (4, 0, 0), "neck": (-6, 0, 0),
+    }
+    scene.poses = {"idle": idle, "combat": combat}
     scene.active_pose = "combat"
-    scene.base = {"style": "cobble", "diameter": 40.0, "height": 3.0}
+    scene.base = {"style": "cobble", "diameter": 38.0, "height": 3.0}
     return scene
 
 

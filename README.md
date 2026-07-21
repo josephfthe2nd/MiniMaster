@@ -11,9 +11,9 @@ articulation, pose the skeleton, and export a watertight binary STL scaled to
 tabletop size — chunky, faceted minis that look like little carvings and
 print cleanly without fussy detail.
 
-| Human Fighter | Dwarf | Goblin | Orc | Skeleton |
-| --- | --- | --- | --- | --- |
-| ![human fighter](docs/gallery/human_fighter.png) | ![dwarf](docs/gallery/dwarf.png) | ![goblin](docs/gallery/goblin.png) | ![orc](docs/gallery/orc.png) | ![skeleton](docs/gallery/skeleton.png) |
+| Human Fighter | Dwarf | Goblin | Orc | Skeleton | Four-Armed |
+| --- | --- | --- | --- | --- | --- |
+| ![human fighter](docs/gallery/human_fighter.png) | ![dwarf](docs/gallery/dwarf.png) | ![goblin](docs/gallery/goblin.png) | ![orc](docs/gallery/orc.png) | ![skeleton](docs/gallery/skeleton.png) | ![four-armed](docs/gallery/four_arms.png) |
 
 One model, four of its shipped poses (idle / walk / attack / guard) — every
 figure is articulated by its bones, so posing never breaks the mesh:
@@ -87,10 +87,10 @@ fully rigged, fully posed figure to reshape instead of a blank scene:
 `four_arms` horror. They come from one parameterized humanoid (21 joints) with
 proportion multipliers, anatomy-informed muscle masses (see `docs/anatomy.md`),
 a `feminine` build variant, and feature add-ons (beard, ears, tusks, ribcage,
-cape, gear). `four_arms` uses `add_arm_pair()` to graft a second shoulder
-girdle — extra limbs plus their anchoring muscles — onto the base body. Built
-by `tools/make_templates.py`; add your own factory there and re-run it to grow
-the roster.
+cape, gear). `four_arms` uses `add_arm_pair()` to graft a lower second pair of
+arms — dropped well below the primary shoulders so all four fan out cleanly —
+onto the base body. Built by `tools/make_templates.py`; add your own factory
+there and re-run it to grow the roster.
 
 ## Blender backend (optional)
 
