@@ -63,6 +63,18 @@ def test_template_bakes_to_watertight_solid(name):
     assert hi[2] - lo[2] == pytest.approx(32.0)  # scaled to the size preset
 
 
+def test_crowded_pose_is_manifold_without_widening_blend():
+    # four arms crossing near the head put two surface sheets in one voxel;
+    # naive Surface Nets pinched here, manifold dual contouring must not
+    scene = load_template("four_arms")
+    for pose in ("combat", None):
+        mesh = bm.body_from_scene(scene, resolution=0.5, blend=0.6, pose_name=pose)
+        rep = mesh.integrity_report()
+        assert rep["watertight"], f"four_arms/{pose}: {rep}"
+        assert rep["nonmanifold_edges"] == 0
+        assert rep["outward"] or rep["volume"] > 0
+
+
 def test_bake_is_deterministic():
     scene = load_template("orc")
     a = bm.body_from_scene(scene, resolution=0.7, blend=0.6, pose_name="rest")

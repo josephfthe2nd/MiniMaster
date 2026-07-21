@@ -133,9 +133,9 @@ By default a figure exports as a **pile of independent shells** — one closed
 mesh per primitive — that the slicer unions at print time. `bake` offers a
 different representation: it treats every body shape as a **signed-distance
 field**, fuses them with a smooth minimum, and extracts **one continuous
-watertight skin** with a native (pure-numpy) Surface Nets isosurface. Muscles
-melt into the torso instead of stacking as separate lumps, and the result is a
-single solid — no reliance on slicer union.
+watertight skin** with a native (pure-numpy) manifold dual-contouring
+isosurface. Muscles melt into the torso instead of stacking as separate lumps,
+and the result is a single solid — no reliance on slicer union.
 
 ```bash
 minimaster bake orc.mmp -o orc_body.png                       # render the fused body
@@ -152,11 +152,10 @@ couple of seconds, so it's a bake step, not the live authoring view.
 The same kernel (`minimaster/core/bodymesh.py`) also **smooth-skins** the baked
 mesh to the armature (distance-weighted linear blend), so the body deforms
 continuously across a joint rather than transforming as rigid shells — the
-foundation for posing the mesh directly. Isolated/crossing geometry (four arms
-in a tight pose) can exceed the isosurface's one-vertex-per-cell manifold
-guarantee; the exporter widens the blend automatically to recover a watertight
-solid, and the classic shell export (`minimaster export`) is always available
-as the robust fallback.
+foundation for posing the mesh directly. The manifold dual-contouring extractor
+emits one vertex per surface sheet in a cell, so even crossing geometry (four
+arms in a tight pose) stays watertight and 2-manifold; the classic shell export
+(`minimaster export`) remains available as a fallback.
 
 ## Headless CLI
 

@@ -133,10 +133,11 @@ def assemble_body(
     """Bake the scene into ONE fused body solid, scaled and based for print.
 
     Unlike :func:`assemble` (a pile of shells the slicer unions), this returns a
-    single continuous skin from the signed-distance field. Crowded poses can
-    defeat the isosurface's manifold guarantee; ``auto_watertight`` retries with
-    progressively wider blends to recover a printable solid. Returns
-    ``(mesh, report)`` where report carries the final blend and watertightness.
+    single continuous skin from the signed-distance field. The manifold dual-
+    contouring extractor keeps the surface watertight even where limbs cross;
+    ``auto_watertight`` is a belt-and-suspenders net that widens the blend to
+    recover from any residual degenerate config. Returns ``(mesh, report)``
+    where report carries the final blend and watertightness.
     """
     from .core import bodymesh
 

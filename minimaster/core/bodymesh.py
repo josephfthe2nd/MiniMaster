@@ -4,14 +4,15 @@ Instead of exporting a figure as a pile of independent watertight shells (one
 per primitive, unioned by the slicer), this module treats each shape as a
 *field source* — a signed-distance function — and fuses them with a smooth
 minimum into a single continuous surface. That surface is extracted as one
-watertight mesh with a vectorized Surface Nets pass, then bound to the armature
-with **smooth skin weights** so posing deforms the body continuously across a
+watertight mesh with a manifold dual-contouring pass (a Surface Nets variant
+that stays a 2-manifold even where two sheets cross one voxel), then bound to
+the armature with **smooth skin weights** so posing deforms the body across a
 joint (an elbow creases) instead of rigidly transforming separate shells.
 
 The pipeline is pure numpy:
 
     scene shapes ──▶ signed-distance field on a voxel grid (smooth-union blend)
-                 ──▶ Surface Nets  ──▶ one watertight Mesh
+                 ──▶ manifold dual contouring  ──▶ one watertight Mesh
                  ──▶ per-vertex bone weights  ──▶ linear-blend skinning
 
 Resolution is a knob: a coarse grid keeps the chunky/carved low-poly look; a
@@ -150,97 +151,141 @@ def _eval_field(sources, pts, blend):
 
 
 # --------------------------------------------------------------------------
-# Surface Nets (vectorized): field grid -> watertight quad-derived triangle mesh
+# Manifold Dual Contouring: like Surface Nets, but a cell whose surface has two
+# disconnected sheets (two arms crossing one voxel) emits one vertex PER sheet,
+# so the result stays a 2-manifold even where naive Surface Nets pinches.
+
+# cube corners (unit-cell offsets), the 12 edges as corner pairs, and each of
+# the 6 faces as its 4 boundary edges
+_CORNER = np.array(
+    [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0),
+     (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1)], dtype=np.float64)
+_EDGES = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3),
+          (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)]
+_FACE_EDGES = [[0, 5, 1, 4], [2, 7, 3, 6], [0, 9, 2, 8],
+               [1, 11, 3, 10], [4, 10, 6, 8], [5, 11, 7, 9]]
+# per axis: the 4 surrounding cells (offset from the low lattice point) in CCW
+# order for a +axis normal, and which cube-edge the grid edge is in each cell
+_AXIS_QUAD = {
+    0: ([(0, -1, -1), (0, 0, -1), (0, 0, 0), (0, -1, 0)], [3, 2, 0, 1]),
+    1: ([(-1, 0, -1), (-1, 0, 0), (0, 0, 0), (0, 0, -1)], [7, 5, 4, 6]),
+    2: ([(-1, -1, 0), (0, -1, 0), (0, 0, 0), (-1, 0, 0)], [11, 10, 8, 9]),
+}
 
 
-def surface_nets(field: np.ndarray, spacing, origin) -> Mesh:
-    """Extract the ``field == 0`` isosurface (inside < 0) as a watertight Mesh.
+def _uf_find(parent, x):
+    root = x
+    while parent[root] != root:
+        root = parent[root]
+    while parent[x] != root:
+        parent[x], x = root, parent[x]
+    return root
 
-    Naive Surface Nets: one vertex per grid cell that straddles the surface,
-    placed at the average of its edge crossings; a quad joins the four cells
-    around every sign-changing grid edge. The result is a closed 2-manifold,
-    consistently outward-oriented.
+
+def _uf_union(parent, a, b):
+    parent[_uf_find(parent, a)] = _uf_find(parent, b)
+
+
+def dual_contour(field: np.ndarray, spacing, origin) -> Mesh:
+    """Manifold dual contouring of ``field == 0`` (inside < 0).
+
+    Each cell's active edges are grouped into surface components (marching-
+    squares connectivity per face, diagonals split), one vertex per component;
+    a quad joins the four cells around every sign-changing grid edge, routed to
+    each cell's component containing that edge. Guarantees a watertight,
+    outward 2-manifold even where two sheets pass through one cell.
     """
     F = np.asarray(field, dtype=np.float64)
-    F = np.where(F == 0.0, 1e-9, F)  # avoid ambiguous exact-zero corners
+    F = np.where(F == 0.0, 1e-9, F)
     spacing = np.broadcast_to(np.asarray(spacing, dtype=np.float64), (3,))
     origin = np.asarray(origin, dtype=np.float64)
     NX, NY, NZ = F.shape
 
     offs = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0),
             (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1)]
-    C = np.stack([F[dx:dx + NX - 1, dy:dy + NY - 1, dz:dz + NZ - 1]
-                  for dx, dy, dz in offs])  # (8, cx, cy, cz)
-    inside = C < 0.0
-    s = inside.sum(0)
+    C = [F[dx:dx + NX - 1, dy:dy + NY - 1, dz:dz + NZ - 1] for dx, dy, dz in offs]
+    inside = [c < 0.0 for c in C]
+    s = np.sum(inside, axis=0)
     active = (s > 0) & (s < 8)
-
-    edges = [(0, 1), (2, 3), (4, 5), (6, 7),
-             (0, 2), (1, 3), (4, 6), (5, 7),
-             (0, 4), (1, 5), (2, 6), (3, 7)]
-    off_arr = np.array(offs, dtype=np.float64)
-    accum = np.zeros((3,) + active.shape)
-    count = np.zeros(active.shape)
-    for a, b in edges:
-        Fa, Fb = C[a], C[b]
-        sc = (Fa < 0.0) != (Fb < 0.0)
-        denom = Fa - Fb
-        t = np.where(sc, Fa / np.where(denom == 0.0, 1.0, denom), 0.0)
-        oa, ob = off_arr[a], off_arr[b]
-        for ax in range(3):
-            accum[ax] += np.where(sc, oa[ax] + t * (ob[ax] - oa[ax]), 0.0)
-        count += sc
-    cnt = np.where(count > 0.0, count, 1.0)
-    # clamp strictly inside the cell so each cell's vertex lives in its own
-    # disjoint box: no two vertices can coincide, which kills zero-area slivers
-    vlocal = np.clip(accum / cnt, 0.08, 0.92)  # (3, cx, cy, cz)
-
-    ci, cj, ck = np.nonzero(active)
-    voff = np.stack([vlocal[0][active], vlocal[1][active], vlocal[2][active]], axis=1)
-    verts = origin + (np.stack([ci, cj, ck], axis=1) + voff) * spacing
-    vid = np.full(active.shape, -1, dtype=np.int64)
-    vid[active] = np.arange(int(active.sum()))
-
-    quads: list[np.ndarray] = []
-
-    def emit(ijk_low, cells, F_low):
-        """cells: list of 4 (i,j,k) index-arrays in CCW order for +axis normal."""
-        v = [vid[c] for c in cells]  # each (n,)
-        quad = np.stack(v, axis=1)  # (n, 4) as A,B,C,D
-        flip = F_low < 0.0  # inside at low endpoint -> normal already +axis
-        # keep A,B,C,D when low endpoint is inside, else reverse the loop
-        ordered = np.where(flip[:, None], quad, quad[:, ::-1])
-        quads.append(ordered)
-
-    # x-edges: low lattice (i,j,k) -> (i+1,j,k); cells vary in (j,k)
-    Fa = F[0:NX - 1, 1:NY - 1, 1:NZ - 1]
-    Fb = F[1:NX, 1:NY - 1, 1:NZ - 1]
-    ii, jj, kk = np.nonzero((Fa < 0.0) != (Fb < 0.0))
-    i, j, k = ii, jj + 1, kk + 1
-    emit((i, j, k), [(i, j - 1, k - 1), (i, j, k - 1), (i, j, k), (i, j - 1, k)],
-         F[i, j, k])
-
-    # y-edges: low (i,j,k) -> (i,j+1,k); cells vary in (k,i)  [(e1,e2)=(z,x)]
-    Fa = F[1:NX - 1, 0:NY - 1, 1:NZ - 1]
-    Fb = F[1:NX - 1, 1:NY, 1:NZ - 1]
-    ii, jj, kk = np.nonzero((Fa < 0.0) != (Fb < 0.0))
-    i, j, k = ii + 1, jj, kk + 1
-    emit((i, j, k), [(i - 1, j, k - 1), (i - 1, j, k), (i, j, k), (i, j, k - 1)],
-         F[i, j, k])
-
-    # z-edges: low (i,j,k) -> (i,j,k+1); cells vary in (i,j)  [(e1,e2)=(x,y)]
-    Fa = F[1:NX - 1, 1:NY - 1, 0:NZ - 1]
-    Fb = F[1:NX - 1, 1:NY - 1, 1:NZ]
-    ii, jj, kk = np.nonzero((Fa < 0.0) != (Fb < 0.0))
-    i, j, k = ii + 1, jj + 1, kk
-    emit((i, j, k), [(i - 1, j - 1, k), (i, j - 1, k), (i, j, k), (i - 1, j, k)],
-         F[i, j, k])
-
-    if not quads or not len(verts):
+    if not active.any():
         return Mesh(np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64))
-    Q = np.vstack(quads)  # (m, 4)
-    tris = np.vstack([Q[:, [0, 1, 2]], Q[:, [0, 2, 3]]])
-    return Mesh(verts, tris)
+
+    ci, cj, ck = (a.astype(np.int64) for a in np.nonzero(active))
+    Csign = np.stack([inside[c][active] for c in range(8)], axis=1)  # (n, 8)
+    Cval = np.stack([C[c][active] for c in range(8)], axis=1)        # (n, 8)
+    cell_pos = np.full(active.shape, -1, dtype=np.int64)
+    cell_pos[active] = np.arange(len(ci))
+
+    verts: list[np.ndarray] = []
+    e2v: dict[tuple[int, int], int] = {}  # (active-cell index, cube-edge) -> vertex
+    for p in range(len(ci)):
+        sgn, val = Csign[p], Cval[p]
+        act = [e for e in range(12) if sgn[_EDGES[e][0]] != sgn[_EDGES[e][1]]]
+        act_set = set(act)
+        parent = {e: e for e in act}
+        for fe in _FACE_EDGES:
+            fa = [e for e in fe if e in act_set]
+            if len(fa) == 2:
+                _uf_union(parent, fa[0], fa[1])
+            elif len(fa) == 4:  # face saddle: keep the two diagonals apart
+                by_inside: dict[int, list[int]] = {}
+                for e in fa:
+                    a, b = _EDGES[e]
+                    ins = a if sgn[a] else b
+                    by_inside.setdefault(ins, []).append(e)
+                for grp in by_inside.values():
+                    for e in grp[1:]:
+                        _uf_union(parent, grp[0], e)
+        comps: dict[int, list[int]] = {}
+        for e in act:
+            comps.setdefault(_uf_find(parent, e), []).append(e)
+        base = np.array([ci[p], cj[p], ck[p]], dtype=np.float64)
+        for es in comps.values():
+            pts = []
+            for e in es:
+                a, b = _EDGES[e]
+                va, vb = val[a], val[b]
+                d = va - vb
+                t = min(max(va / d if d != 0.0 else 0.5, 0.0), 1.0)
+                pts.append(_CORNER[a] + t * (_CORNER[b] - _CORNER[a]))
+            loc = np.clip(np.mean(pts, axis=0), 0.1, 0.9)
+            vidx = len(verts)
+            verts.append(origin + (base + loc) * spacing)
+            for e in es:
+                e2v[(p, e)] = vidx
+
+    faces: list[tuple[int, int, int]] = []
+    for axis, (cell_offs, cube_edges) in _AXIS_QUAD.items():
+        lo_slices = [slice(0, NX - 1), slice(1, NY - 1), slice(1, NZ - 1)]
+        lo_slices[axis] = slice(0, [NX, NY, NZ][axis] - 1)
+        # inner cells only on the two non-axis dims (so all 4 neighbours exist)
+        for d in range(3):
+            if d != axis:
+                lo_slices[d] = slice(1, [NX, NY, NZ][d] - 1)
+        hi = [slice(sl.start, sl.stop) for sl in lo_slices]
+        hi[axis] = slice(lo_slices[axis].start + 1, lo_slices[axis].stop + 1)
+        Fa = F[lo_slices[0], lo_slices[1], lo_slices[2]]
+        Fb = F[hi[0], hi[1], hi[2]]
+        idx = np.nonzero((Fa < 0.0) != (Fb < 0.0))
+        low = [idx[0], idx[1], idx[2]]
+        # map local nonzero indices back to grid lattice coords
+        low = [low[d] + lo_slices[d].start for d in range(3)]
+        for a in range(len(low[0])):
+            i, j, k = int(low[0][a]), int(low[1][a]), int(low[2][a])
+            vs = []
+            for (dx, dy, dz), e in zip(cell_offs, cube_edges):
+                vs.append(e2v[(int(cell_pos[i + dx, j + dy, k + dz]), e)])
+            if F[i, j, k] >= 0.0:  # low endpoint outside -> reverse for outward
+                vs = vs[::-1]
+            faces.append((vs[0], vs[1], vs[2]))
+            faces.append((vs[0], vs[2], vs[3]))
+
+    if not verts or not faces:
+        return Mesh(np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64))
+    mesh = Mesh(np.array(verts), np.array(faces, dtype=np.int64))
+    if mesh.volume() < 0.0:
+        mesh = Mesh(mesh.vertices, mesh.faces[:, [0, 2, 1]])
+    return mesh
 
 
 # --------------------------------------------------------------------------
@@ -283,10 +328,7 @@ def _mesh_from_sources(sources, resolution: float, blend: float,
     field[:, 0, :] = field[:, -1, :] = 1e3
     field[:, :, 0] = field[:, :, -1] = 1e3
 
-    mesh = surface_nets(field, resolution, lo)
-    if mesh.volume() < 0.0:  # normalize to outward orientation
-        mesh = Mesh(mesh.vertices, mesh.faces[:, [0, 2, 1]])
-    return mesh
+    return dual_contour(field, resolution, lo)
 
 
 def build_field_mesh(shapes, resolution: float = 0.7, blend: float = 0.0,
