@@ -96,10 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="output path; .stl bakes a solid, .png renders the body")
     _add_pose_arg(p_bake)
     _add_size(p_bake)
+    p_bake.add_argument("--method", choices=["tube", "fuse"], default="tube",
+                        help="tube = skinned quad tubes along the bones (default); "
+                             "fuse = SDF blend of the shapes")
     p_bake.add_argument("--resolution", type=float, default=0.5,
-                        help="voxel size in scene units (smaller = smoother, slower)")
+                        help="[fuse] voxel size in scene units (smaller = smoother, slower)")
     p_bake.add_argument("--blend", type=float, default=0.8,
-                        help="smooth-union width within each part (higher = smoother muscle)")
+                        help="[fuse] smooth-union width within each part")
     p_bake.add_argument("--all-shapes", action="store_true",
                         help="fuse gear/detail too (default keeps them out of the body)")
     p_bake.add_argument("--no-base", action="store_true")
@@ -265,15 +268,18 @@ def main(argv: list[str] | None = None) -> int:
         exclude = () if args.all_shapes else None
         out = Path(args.output)
         if out.suffix.lower() == ".png":
-            from .core import bodymesh
+            from .core import bodymesh, tubemesh
             from .core.mesh import Mesh
             from .bases import build_base
             from .render import render_meshes, write_png
 
-            kw = {} if exclude is None else {"exclude": exclude}
             # per-region parts keep each limb its own color
-            parts = bodymesh.body_regions(
-                scene, args.resolution, args.blend, pose, **kw)
+            if args.method == "tube":
+                parts = tubemesh.tube_body_regions(scene, pose_name=pose)
+            else:
+                kw = {} if exclude is None else {"exclude": exclude}
+                parts = bodymesh.body_regions(
+                    scene, args.resolution, args.blend, pose, **kw)
             if not parts:
                 print("error: scene baked to an empty body", file=sys.stderr)
                 return 2
@@ -306,8 +312,9 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             mesh, rep = assemble_body(
-                scene, pose_name=pose, resolution=args.resolution,
-                blend=args.blend, size=args.size, height=args.height,
+                scene, pose_name=pose, method=args.method,
+                resolution=args.resolution, blend=args.blend,
+                size=args.size, height=args.height,
                 with_base=not args.no_base, exclude=exclude)
         except (ExportError, KeyError) as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -315,10 +322,11 @@ def main(argv: list[str] | None = None) -> int:
         write_stl(mesh, out, name=scene.name)
         lo, hi = mesh.bounds
         sx, sy, sz = (hi - lo)
-        note = "" if rep["watertight"] else "  (NOT watertight — try --blend higher or --resolution finer)"
-        print(f"wrote {out}: {rep['triangles']} triangles, "
-              f"{sx:.1f} x {sy:.1f} x {sz:.1f} mm, "
-              f"blend={rep['blend']:.2f}, watertight={rep['watertight']}{note}")
+        extra = f", blend={rep['blend']:.2f}" if "blend" in rep else ""
+        note = "" if rep["watertight"] else "  (NOT watertight)"
+        print(f"wrote {out}: {rep['method']} method, {rep['triangles']} triangles, "
+              f"{sx:.1f} x {sy:.1f} x {sz:.1f} mm{extra}, "
+              f"watertight={rep['watertight']}{note}")
         return 0
 
     if command in ("fuse", "hq-render"):

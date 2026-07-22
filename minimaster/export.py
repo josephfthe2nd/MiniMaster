@@ -122,6 +122,7 @@ def _place_on_base(figure: Mesh, scene: Scene, height, size, with_base,
 def assemble_body(
     scene: Scene,
     pose_name: str | None = "__active__",
+    method: str = "tube",
     resolution: float = 0.5,
     blend: float = 0.8,
     height: float | None = None,
@@ -130,39 +131,44 @@ def assemble_body(
     exclude=None,
     auto_watertight: bool = True,
 ) -> tuple[Mesh, dict]:
-    """Bake the scene into ONE fused body solid, scaled and based for print.
+    """Bake the scene into ONE body solid, scaled and based for print.
 
-    Unlike :func:`assemble` (a pile of shells the slicer unions), this returns a
-    single continuous skin from the signed-distance field. The manifold dual-
-    contouring extractor keeps the surface watertight even where limbs cross;
-    ``auto_watertight`` is a belt-and-suspenders net that widens the blend to
-    recover from any residual degenerate config. Returns ``(mesh, report)``
-    where report carries the final blend and watertightness.
+    ``method="tube"`` (default) sweeps a skinned quad tube along each bone chain
+    (connected limbs, clean topology, watertight by construction);
+    ``method="fuse"`` blends the shapes into a signed-distance surface via
+    manifold dual contouring, with ``auto_watertight`` widening the blend to
+    recover any residual degenerate config. Returns ``(mesh, report)``.
     """
-    from .core import bodymesh
-
     if height is not None and size is not None:
         raise ExportError("give either height or size, not both")
-    kw = {} if exclude is None else {"exclude": exclude}
-    used_blend = blend
-    figure = bodymesh.body_from_scene(scene, resolution, blend, pose_name, **kw)
-    if auto_watertight and not figure.integrity_report()["watertight"]:
-        for factor in (1.6, 2.4, 3.4):
-            trial = bodymesh.body_from_scene(
-                scene, resolution, blend * factor, pose_name, **kw)
-            if trial.integrity_report()["watertight"]:
-                figure, used_blend = trial, blend * factor
-                break
+    report = {"method": method}
+
+    if method == "tube":
+        from .core import tubemesh
+        figure = tubemesh.tube_body_from_scene(scene, pose_name=pose_name)
+    elif method == "fuse":
+        from .core import bodymesh
+        kw = {} if exclude is None else {"exclude": exclude}
+        blend_used = blend
+        figure = bodymesh.body_from_scene(scene, resolution, blend, pose_name, **kw)
+        if auto_watertight and not figure.integrity_report()["watertight"]:
+            for factor in (1.6, 2.4, 3.4):
+                trial = bodymesh.body_from_scene(
+                    scene, resolution, blend * factor, pose_name, **kw)
+                if trial.integrity_report()["watertight"]:
+                    figure, blend_used = trial, blend * factor
+                    break
+        report.update(blend=blend_used, resolution=resolution)
+    else:
+        raise ExportError(f"unknown body method {method!r}; use 'tube' or 'fuse'")
+
     if not len(figure.faces):
         raise ExportError("scene baked to an empty body (no body shapes?)")
     merged = _place_on_base(figure, scene, height, size, with_base)
     rep = merged.integrity_report()
-    return merged, {
-        "triangles": int(len(merged.faces)),
-        "watertight": bool(rep["watertight"]),
-        "blend": used_blend,
-        "resolution": resolution,
-    }
+    report["triangles"] = int(len(merged.faces))
+    report["watertight"] = bool(rep["watertight"])
+    return merged, report
 
 
 def export_stl(scene: Scene, path, **kwargs) -> dict:

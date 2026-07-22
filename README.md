@@ -130,40 +130,39 @@ and `preview` always work without it. The in-Blender script is
 ## Dynamic body mesh (experimental)
 
 By default a figure exports as a **pile of independent shells** — one closed
-mesh per primitive — that the slicer unions at print time. `bake` offers a
-different representation: it treats every body shape as a **signed-distance
-field** and fuses them into continuous **skinned solids**, so muscles blend
-into a limb instead of stacking as separate lumps.
-
-The fuse is **per anatomical part**, not one whole-body blob: the head, the
-torso/pelvis ('core'), and each arm and leg are each fused into their own clean
-solid (sharp edges preserved by gradient/QEF vertex placement). Limbs stay
-distinct — they don't melt into the torso — while a part's own muscles fuse
-smoothly *within* it; the parts overlap at the joints so the union prints as one
-connected figure, and each part keeps its own color.
+mesh per primitive — that the slicer unions at print time. `bake` instead
+builds a **continuous body from the bones**, the way Blender's Skin Modifier
+does: it sweeps a ring of vertices along each bone chain and stitches them into
+one clean, quad-dominant **tube per anatomical region** — head+torso (`core`),
+each arm, each leg.
 
 ```bash
-minimaster bake orc.mmp -o orc_body.png                       # render the fused body
+minimaster bake orc.mmp -o orc_body.png                     # render the body
 minimaster bake orc.mmp -o orc_body.stl --size large --pose attack
-minimaster bake orc.mmp -o smooth.stl --resolution 0.35 --blend 1.2  # smoother
-minimaster bake orc.mmp -o chunky.stl --resolution 0.8              # chunkier/faster
+minimaster bake orc.mmp -o beast.stl --method fuse          # SDF blend instead
 ```
 
-`--resolution` is the voxel size (smaller = smoother, slower); `--blend` is the
-smooth-union width *within* a part (higher = smoother muscle, without re-melting
-limbs into the torso). Gear and face detail are kept out of the body by default
-(`--all-shapes` fuses everything). PNG previews flat-shade for the chunky look
-(`--smooth` for gouraud). Extraction takes a couple of seconds — a bake step,
-not the live authoring view.
+The rings are framed with a **rotation-minimizing (double-reflection) frame** so
+the edge loops never twist, and every joint gets a mitered ring so bends pose
+without creasing. This fixes the two things a naive body blob gets wrong:
+**limbs stay distinct** (each is its own tube, keyed off the armature — so
+`four_arms` is six limb tubes) and **nothing floats** (a hand is topologically
+part of its arm). Each limb plugs into the torso by burying its root ring inside
+the core tube — the same overlap contract the shell export uses — so the union
+prints as one connected figure, and each region keeps its own color. The whole
+thing is **watertight and 2-manifold by construction**, hence in every pose
+(posing only moves vertices), and poses through the armature's skin matrices.
 
-The extractor is a native (pure-numpy) **manifold dual-contouring** isosurface:
-it emits one vertex per surface sheet in a cell, so even crossing geometry (four
-arms in a tight pose) stays watertight and 2-manifold. The same kernel
-(`minimaster/core/bodymesh.py`) also **smooth-skins** a baked part to the
-armature (distance-weighted linear blend), so the body deforms continuously
-across a joint rather than transforming as rigid shells — the foundation for
-posing the mesh directly. The classic shell export (`minimaster export`) remains
-available as a fallback.
+`--method fuse` is the alternative body path: it treats the shapes as a
+**signed-distance field** and blends them per region into a smooth solid with a
+native (pure-numpy) **manifold dual-contouring** isosurface (sharp edges kept by
+gradient/QEF vertex placement) — smoother/organic where the tube is chunky, at
+the cost of heavier, blobbier geometry (`--resolution`, `--blend` tune it). PNG
+previews flat-shade for the chunky look (`--smooth` for gouraud). The classic
+shell export (`minimaster export`) is always available too.
+
+Both live in `minimaster/core/` (`tubemesh.py`, `bodymesh.py`) and are pure
+numpy — no Blender, no third-party mesh libraries.
 
 ## Headless CLI
 
@@ -205,7 +204,7 @@ generate from scripts — the starter templates are built exactly that way.
 minimaster/
   core/        geometry kernel: math3d, Mesh (+integrity checks),
                watertight primitive builders, armature FK, binary STL I/O,
-               bodymesh (SDF blend -> Surface Nets isosurface + skinning)
+               tubemesh (skeletal quad-tube body) + bodymesh (SDF-blend body)
   scene.py     the document: shapes + armature + poses + undo snapshots
   export.py    pose → scale → base → merged STL (shared by GUI, CLI, tests)
   render.py    headless z-buffer flat-shade renderer → PNG (no imaging deps)
