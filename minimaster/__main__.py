@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bake.add_argument("--blend", type=float, default=0.8,
                         help="[fuse] smooth-union width within each part")
     p_bake.add_argument("--all-shapes", action="store_true",
-                        help="fuse gear/detail too (default keeps them out of the body)")
+                        help="[fuse] fuse gear/detail too (default keeps them out)")
     p_bake.add_argument("--no-base", action="store_true")
     p_bake.add_argument("--smooth", action="store_true",
                         help="PNG only: smooth shading (default flat, for the chunky look)")
@@ -285,13 +285,14 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             colored = [(mesh, color) for _, mesh, color in parts]
             skins = scene.armature.skin_matrices(scene.resolve_pose(pose))
-            for s in scene.shapes:  # overlay eyes so the face still reads
-                if not any(k in s.name for k in ("eye", "brow")):
-                    continue
-                m = s.build_mesh()
-                if s.bone in skins:
-                    m = m.transform(skins[s.bone])
-                colored.append((m, s.color))
+            if args.method == "fuse":  # tube already retains eyes/brows on the head
+                for s in scene.shapes:  # overlay eyes so the face still reads
+                    if not any(k in s.name for k in ("eye", "brow")):
+                        continue
+                    m = s.build_mesh()
+                    if s.bone in skins:
+                        m = m.transform(skins[s.bone])
+                    colored.append((m, s.color))
             fig = Mesh.merge([m for m, _ in colored])
             lo, hi = fig.bounds
             c = (lo + hi) / 2.0

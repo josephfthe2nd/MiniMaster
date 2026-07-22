@@ -25,16 +25,28 @@ The math (per the design spec):
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 from .mesh import Mesh
 
 FORWARD = (0.0, -1.0, 0.0)  # characters face -Y
+_R_MIN = 1e-3  # ring-radius floor: a zero-radius ring collapses to degenerate faces
 
 
 def _norm(v):
     n = float(np.linalg.norm(v))
     return np.asarray(v, dtype=np.float64) / n if n > 1e-12 else np.asarray(v, dtype=np.float64)
+
+
+def _is_accessory(name: str) -> bool:
+    """Gear/detail test on word boundaries, so 'ear' does not swallow
+    'forearm' (a substring test would strip the forearm from body mining)."""
+    from .bodymesh import ACCESSORY_KEYWORDS
+    toks = set(re.split(r"[^a-z0-9]+", name.lower()))
+    return any((k in toks) or ("_" in k and k in name.lower())
+               for k in ACCESSORY_KEYWORDS)
 
 
 # --------------------------------------------------------------------------
@@ -89,12 +101,10 @@ def radius_profile_from_scene(scene) -> dict[str, dict]:
     """Mine a per-joint ``{joint: {"rx","ry","roll"}}`` profile from the shapes
     bound near each joint. ``core`` joints are elliptical (width vs depth); limb
     joints are circular. Missing joints inherit from their chain neighbours."""
-    from .bodymesh import ACCESSORY_KEYWORDS
     arm = scene.armature
     # gear/detail must not size the body — a shield bound to wrist_l would
     # balloon that whole arm — so mine radii from body shapes only
-    body = [s for s in scene.shapes
-            if not any(k in s.name for k in ACCESSORY_KEYWORDS)]
+    body = [s for s in scene.shapes if not _is_accessory(s.name)]
     by_bone: dict[str | None, list] = {}
     for s in body:
         by_bone.setdefault(s.bone, []).append(s)
@@ -191,8 +201,10 @@ def _build_tube(centers, rx, ry, roll, ring_weights, N, forward=FORWARD):
     is one ``{bone: weight}`` dict per ring. Returns ``(mesh, bone_names, W)``."""
     P = np.asarray(centers, dtype=np.float64)
     R = len(P)
-    rx = np.asarray(rx, dtype=np.float64)
-    ry = np.asarray(ry, dtype=np.float64)
+    # floor the radii: a zero-radius ring collapses its N verts to a point and
+    # emits zero-area (degenerate) faces, breaking watertightness
+    rx = np.maximum(np.asarray(rx, dtype=np.float64), _R_MIN)
+    ry = np.maximum(np.asarray(ry, dtype=np.float64), _R_MIN)
     roll = np.asarray(roll, dtype=np.float64)
     T, U, V, s = chain_frames(P, forward)
     th = 2.0 * np.pi * np.arange(N) / N
@@ -247,28 +259,40 @@ def _build_tube(centers, rx, ry, roll, ring_weights, N, forward=FORWARD):
 
 
 # --------------------------------------------------------------------------
-# assemble a region's ring list, including the head crown for the core
+# assemble a region's ring list
 
 
-def _append_head(scene, chain, centers, rx, ry, roll, weights, latitudes=5):
+def build_head(scene, profile, N=8, latitudes=5):
+    """The head as its own ovoid tube — a neck ring that buries into the core,
+    then latitude rings up to a crown pole. Its own region so it keeps the
+    head/skin color instead of the torso's. Returns ``(mesh, bones, W)`` or
+    None. All rings bind one-hot to ``head_top``."""
     arm = scene.armature
-    if "head_top" not in arm.joints:
-        return
-    up = _norm(arm.joints["head_top"].position - arm.joints[chain[-1]].position)
+    if "head_top" not in arm.joints or "neck" not in arm.joints:
+        return None
+    neck = np.asarray(arm.joints["neck"].position, dtype=np.float64)
+    up = _norm(arm.joints["head_top"].position - neck)
     head = next((s for s in scene.shapes if s.name == "head"), None)
-    if head is not None:
-        hc = np.asarray(head.position, dtype=np.float64)
-        sc = np.abs(np.asarray(head.scale, dtype=np.float64))
-        ru, rv, a = 0.5 * sc[0], 0.5 * sc[1], 0.5 * sc[2]
-    else:
-        hc, ru, rv, a = arm.joints["head_top"].position, 1.0, 1.0, 1.0
+    if head is None:
+        return None
+    hc = np.asarray(head.position, dtype=np.float64)
+    sc = np.abs(np.asarray(head.scale, dtype=np.float64))
+    ru, rv, a = 0.5 * sc[0], 0.5 * sc[1], 0.5 * sc[2]
+    nk = profile.get("neck", {"rx": 0.4 * ru, "ry": 0.4 * rv})
+
+    centers = [neck.copy()]  # buried root ring, overlaps the core's neck
+    rx = [float(nk["rx"])]
+    ry = [float(nk["ry"])]
+    roll = [0.0]
+    weights = [{"head_top": 1.0}]
     for l in range(latitudes):
         phi = np.pi * (l + 1) / (latitudes + 1)  # thin -> fat -> thin ovoid
         centers.append(hc - a * np.cos(phi) * up)
-        rx.append(max(ru * np.sin(phi), 1e-3))
-        ry.append(max(rv * np.sin(phi), 1e-3))
+        rx.append(ru * np.sin(phi))
+        ry.append(rv * np.sin(phi))
         roll.append(0.0)
         weights.append({"head_top": 1.0})
+    return _build_tube(centers, rx, ry, roll, weights, N)
 
 
 def tube_region(region, chain, scene, profile, N=8, sub=1, overlap=0.7,
@@ -317,9 +341,6 @@ def tube_region(region, chain, scene, profile, N=8, sub=1, overlap=0.7,
                 roll.append(0.0)
                 weights.append({child: 1.0})
 
-    if region == "core":
-        _append_head(scene, chain, centers, rx, ry, roll, weights)
-
     return _build_tube(centers, rx, ry, roll, weights, N, forward)
 
 
@@ -332,19 +353,17 @@ _FOOT_KEEP = ("foot", "heel", "toe")
 
 
 def _retained_shells(scene, region, skins):
+    """Detail shapes the tube doesn't replace but that still layer on the
+    region: face features on the head, boot boxes on a leg."""
     from .bodymesh import _region_of
     out = []
     for s in scene.shapes:
-        if s.bone is None:
+        if s.bone is None or _region_of(s.bone, scene.armature) != region:
             continue
-        r = _region_of(s.bone, scene.armature)
-        in_region = (r == region) or (region == "core" and r == "head")
-        if not in_region:
-            continue
-        if region.startswith("hip"):
-            keep = any(k in s.name for k in _FOOT_KEEP)
-        elif region == "core":
+        if region == "head":
             keep = any(k in s.name for k in _FACE_KEEP)
+        elif region.startswith("hip"):
+            keep = any(k in s.name for k in _FOOT_KEEP)
         else:
             keep = False
         if not keep:
@@ -357,14 +376,13 @@ def _retained_shells(scene, region, skins):
 
 
 def _region_color(scene, region):
+    """The region's own color: the most common color among its *body* shapes
+    (gear/detail excluded, so face features can't outvote the torso and a
+    shield can't recolor an arm)."""
     from .bodymesh import _region_of
     counts: dict[str, int] = {}
     for s in scene.shapes:
-        r = _region_of(s.bone, scene.armature)
-        if region == "core":
-            if r not in ("core", "head"):
-                continue
-        elif r != region:
+        if _is_accessory(s.name) or _region_of(s.bone, scene.armature) != region:
             continue
         counts[s.color] = counts.get(s.color, 0) + 1
     return max(counts, key=counts.get) if counts else "#b08d57"
@@ -373,18 +391,30 @@ def _region_color(scene, region):
 def tube_body_regions(scene, profile=None, pose_name=None, N=8,
                       subdivisions_per_segment=1, overlap=0.7, forward=FORWARD):
     """Per-region skeletal tube bodies: ``[(region, mesh, color)]``, mirroring
-    :func:`bodymesh.body_regions`. Posed if ``pose_name`` is given."""
+    :func:`bodymesh.body_regions`. Posed if ``pose_name`` is given. Falls back
+    to the SDF ``body_regions`` for a scene with no recognized humanoid rig."""
     from . import bodymesh
     arm = scene.armature
+    chains = region_chains(arm)
+    if not chains:  # non-humanoid / renamed rig: no bone chains to sweep
+        return bodymesh.body_regions(scene, pose_name=pose_name)
     if profile is None:
         profile = radius_profile_from_scene(scene)
     pose = None if pose_name in (None, "rest") else scene.resolve_pose(pose_name)
     skins = arm.skin_matrices(pose) if pose else {}
 
+    builds = list(chains.items())
+    head = build_head(scene, profile, N)
+    if head is not None:
+        builds.append(("head", head))
+
     out = []
-    for region, chain in region_chains(arm).items():
-        mesh, bones, W = tube_region(region, chain, scene, profile, N,
-                                     subdivisions_per_segment, overlap, forward)
+    for region, item in builds:
+        if region == "head":
+            mesh, bones, W = item
+        else:
+            mesh, bones, W = tube_region(region, item, scene, profile, N,
+                                         subdivisions_per_segment, overlap, forward)
         if pose:
             mesh = bodymesh.pose_body_mesh(mesh, bones, W, arm, pose)
         extra = _retained_shells(scene, region, skins)

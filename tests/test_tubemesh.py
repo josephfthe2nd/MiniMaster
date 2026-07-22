@@ -94,13 +94,63 @@ def test_frame_is_stable_at_a_sharp_bend():
     assert np.allclose(np.einsum("ij,ij->i", U, T), 0.0, atol=1e-9)  # U _|_ T
 
 
-def test_radius_floor_keeps_a_zero_radius_joint_watertight():
+def test_radius_floor_keeps_a_zero_radius_ring_watertight():
+    # a genuine r=0 ring would collapse to a point (degenerate faces); the
+    # floor in _build_tube must keep it watertight
     mesh, _, _ = tm._build_tube(
         centers=[[0, 0, 0], [0, 0, 3], [0, 0, 6]],
-        rx=[1.0, 1.0, 1e-4], ry=[1.0, 1.0, 1e-4], roll=[0, 0, 0],
+        rx=[1.0, 1.0, 0.0], ry=[1.0, 1.0, 0.0], roll=[0, 0, 0],
         ring_weights=[{"a": 1.0}] * 3, N=8)
     r = _clean(mesh)
     assert r["watertight"] and r["degenerate_faces"] == 0
+    # and through the public profile= override (r=0 at a joint)
+    scene = load_template("human_fighter")
+    prof = tm.radius_profile_from_scene(scene)
+    prof["elbow_l"] = {"rx": 0.0, "ry": 0.0, "roll": 0.0}
+    for region, mesh, _ in tm.tube_body_regions(scene, profile=prof, pose_name="rest"):
+        assert mesh.integrity_report()["watertight"], region
+
+
+def test_non_humanoid_rig_falls_back_to_fuse():
+    # a renamed/creature rig has no recognized bone chains; tube must not
+    # silently produce an empty body — it falls back to the SDF path
+    from minimaster.core.armature import Armature
+    scene = load_template("human_fighter")  # 54 real body shapes
+    a = Armature()
+    a.add_joint("root", [0, 0, 0])
+    a.add_joint("mid", [0, 0, 3], "root")
+    a.add_joint("tip", [0, 0, 6], "mid")
+    scene.armature = a
+    assert tm.region_chains(a) == {}
+    parts = tm.tube_body_regions(scene, pose_name="rest")
+    assert parts, "tube should fall back to a non-empty body"
+    assert len(tm.tube_body_from_scene(scene, pose_name="rest").faces) > 0
+
+
+def test_region_colors_are_not_polluted_by_gear_or_head():
+    # regression: a shield on wrist_l recolored the arm; the head folded into
+    # the torso vote turned the orc's torso head-skin green
+    scene = load_template("orc")
+    cols = {r: c for r, _, c in tm.tube_body_regions(scene, pose_name="rest")}
+    torso = next(s.color for s in scene.shapes if s.name == "chest")
+    skin = next(s.color for s in scene.shapes if s.name == "head")
+    assert cols["core"] == torso
+    assert cols["head"] == skin
+    assert cols["core"] != cols["head"]
+
+
+def test_head_is_its_own_region():
+    for name in ("human_fighter", "orc", "four_arms"):
+        scene = load_template(name)
+        regions = {r for r, _, _ in tm.tube_body_regions(scene, pose_name="rest")}
+        assert "head" in regions
+
+
+def test_forearm_is_not_stripped_from_radius_mining():
+    assert tm._is_accessory("forearm_l") is False
+    assert tm._is_accessory("forearm_flex_r") is False
+    assert tm._is_accessory("ear_l") is True
+    assert tm._is_accessory("shield_l") is True
 
 
 def test_bind_bones_are_real_and_weights_normalized():
