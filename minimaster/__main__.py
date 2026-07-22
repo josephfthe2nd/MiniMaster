@@ -96,10 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="output path; .stl bakes a solid, .png renders the body")
     _add_pose_arg(p_bake)
     _add_size(p_bake)
-    p_bake.add_argument("--resolution", type=float, default=0.6,
+    p_bake.add_argument("--resolution", type=float, default=0.5,
                         help="voxel size in scene units (smaller = smoother, slower)")
-    p_bake.add_argument("--blend", type=float, default=0.6,
-                        help="smooth-union width; higher fuses limbs more")
+    p_bake.add_argument("--blend", type=float, default=0.8,
+                        help="smooth-union width within each part (higher = smoother muscle)")
     p_bake.add_argument("--all-shapes", action="store_true",
                         help="fuse gear/detail too (default keeps them out of the body)")
     p_bake.add_argument("--no-base", action="store_true")
@@ -271,12 +271,13 @@ def main(argv: list[str] | None = None) -> int:
             from .render import render_meshes, write_png
 
             kw = {} if exclude is None else {"exclude": exclude}
-            body = bodymesh.body_from_scene(
+            # per-region parts keep each limb its own color
+            parts = bodymesh.body_regions(
                 scene, args.resolution, args.blend, pose, **kw)
-            if not len(body.faces):
+            if not parts:
                 print("error: scene baked to an empty body", file=sys.stderr)
                 return 2
-            colored = [(body, "#6c5560")]
+            colored = [(mesh, color) for _, mesh, color in parts]
             skins = scene.armature.skin_matrices(scene.resolve_pose(pose))
             for s in scene.shapes:  # overlay eyes so the face still reads
                 if not any(k in s.name for k in ("eye", "brow")):

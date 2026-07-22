@@ -366,29 +366,60 @@ def build_field_mesh(shapes, resolution: float = 0.7, blend: float = 0.0,
                               resolution, blend, pad)
 
 
-def _scene_sources(scene, pose, exclude):
-    """FieldSources for a scene's body shapes, folding in each shape's posed
-    bone transform when ``pose`` is given (bakes the figure as posed)."""
+def _region_of(bone, armature) -> str:
+    """Which anatomical part a bone belongs to: the head, one limb, or the
+    axial 'core' (torso+pelvis). Limbs are keyed by their root joint so each
+    arm/leg is its own region."""
+    if not bone or bone not in armature.joints:
+        return "core"
+    for name in [bone, *armature.ancestors(bone)]:
+        if name == "head_top":
+            return "head"
+        if name.startswith(("shoulder2_", "shoulder_", "hip_")):
+            return name
+    return "core"
+
+
+def body_regions(scene, resolution: float = 0.5, blend: float = 0.8,
+                 pose_name: str | None = None, exclude=ACCESSORY_KEYWORDS):
+    """Fuse the body into ONE clean solid per anatomical region — head,
+    torso/pelvis ('core'), and each arm and leg — rather than one whole-body
+    blob. Limbs stay distinct (they don't melt into the torso) while their own
+    muscles fuse smoothly *within* the part; regions overlap at the joints, so
+    the union prints as one connected figure. Each part also carries its own
+    (modal) color. Returns a list of ``(region, mesh, color)``.
+
+    Falls back to a single 'core' fuse when the scene has no humanoid armature.
+    """
+    pose = None if pose_name in (None, "rest") else scene.resolve_pose(pose_name)
     skins = scene.armature.skin_matrices(pose) if pose else {}
-    out = []
+    groups: dict[str, list] = {}
     for s in scene.shapes:
         if exclude and any(k in s.name for k in exclude):
             continue
-        out.append(_shape_source(s, skins.get(s.bone)))
+        groups.setdefault(_region_of(s.bone, scene.armature), []).append(s)
+    out = []
+    for region, shapes in groups.items():
+        mesh = _mesh_from_sources(
+            [_shape_source(s, skins.get(s.bone)) for s in shapes], resolution, blend)
+        if not len(mesh.faces):
+            continue
+        counts: dict[str, int] = {}
+        for s in shapes:  # the region wears its most common shape color
+            counts[s.color] = counts.get(s.color, 0) + 1
+        out.append((region, mesh, max(counts, key=counts.get)))
     return out
 
 
-def body_from_scene(scene, resolution: float = 0.6, blend: float = 0.6,
+def body_from_scene(scene, resolution: float = 0.5, blend: float = 0.8,
                     pose_name: str | None = None, exclude=ACCESSORY_KEYWORDS) -> Mesh:
-    """Bake a scene's body shapes into one watertight solid, posed if asked.
-
-    This is the export path: it fuses the *posed* primitive stack directly, so
-    there's no skinning to distort — limbs that a pose spreads apart fuse
-    cleanly. ``exclude`` drops gear/detail shapes by name substring; pass an
-    empty tuple to fuse absolutely everything.
+    """One watertight body mesh: the union of the per-region solids (see
+    :func:`body_regions`). Regions overlap at the joints, so the merged shells
+    print as a single connected figure — the same overlapping-shells contract
+    the shape export already relies on, but each shell is a cleanly fused part.
     """
-    pose = None if pose_name in (None, "rest") else scene.resolve_pose(pose_name)
-    return _mesh_from_sources(_scene_sources(scene, pose, exclude), resolution, blend)
+    parts = body_regions(scene, resolution, blend, pose_name, exclude)
+    return Mesh.merge([m for _, m, _ in parts])
 
 
 # --------------------------------------------------------------------------

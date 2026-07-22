@@ -132,30 +132,38 @@ and `preview` always work without it. The in-Blender script is
 By default a figure exports as a **pile of independent shells** — one closed
 mesh per primitive — that the slicer unions at print time. `bake` offers a
 different representation: it treats every body shape as a **signed-distance
-field**, fuses them with a smooth minimum, and extracts **one continuous
-watertight skin** with a native (pure-numpy) manifold dual-contouring
-isosurface. Muscles melt into the torso instead of stacking as separate lumps,
-and the result is a single solid — no reliance on slicer union.
+field** and fuses them into continuous **skinned solids**, so muscles blend
+into a limb instead of stacking as separate lumps.
+
+The fuse is **per anatomical part**, not one whole-body blob: the head, the
+torso/pelvis ('core'), and each arm and leg are each fused into their own clean
+solid (sharp edges preserved by gradient/QEF vertex placement). Limbs stay
+distinct — they don't melt into the torso — while a part's own muscles fuse
+smoothly *within* it; the parts overlap at the joints so the union prints as one
+connected figure, and each part keeps its own color.
 
 ```bash
 minimaster bake orc.mmp -o orc_body.png                       # render the fused body
 minimaster bake orc.mmp -o orc_body.stl --size large --pose attack
-minimaster bake orc.mmp -o smooth.stl --resolution 0.4 --blend 1.0   # smoother
-minimaster bake orc.mmp -o chunky.stl --resolution 0.9              # chunkier/faster
+minimaster bake orc.mmp -o smooth.stl --resolution 0.35 --blend 1.2  # smoother
+minimaster bake orc.mmp -o chunky.stl --resolution 0.8              # chunkier/faster
 ```
 
 `--resolution` is the voxel size (smaller = smoother, slower); `--blend` is the
-smooth-union width (higher fuses limbs more). Gear and face detail are kept out
-of the body by default (`--all-shapes` fuses everything). Extraction takes a
-couple of seconds, so it's a bake step, not the live authoring view.
+smooth-union width *within* a part (higher = smoother muscle, without re-melting
+limbs into the torso). Gear and face detail are kept out of the body by default
+(`--all-shapes` fuses everything). PNG previews flat-shade for the chunky look
+(`--smooth` for gouraud). Extraction takes a couple of seconds — a bake step,
+not the live authoring view.
 
-The same kernel (`minimaster/core/bodymesh.py`) also **smooth-skins** the baked
-mesh to the armature (distance-weighted linear blend), so the body deforms
-continuously across a joint rather than transforming as rigid shells — the
-foundation for posing the mesh directly. The manifold dual-contouring extractor
-emits one vertex per surface sheet in a cell, so even crossing geometry (four
-arms in a tight pose) stays watertight and 2-manifold; the classic shell export
-(`minimaster export`) remains available as a fallback.
+The extractor is a native (pure-numpy) **manifold dual-contouring** isosurface:
+it emits one vertex per surface sheet in a cell, so even crossing geometry (four
+arms in a tight pose) stays watertight and 2-manifold. The same kernel
+(`minimaster/core/bodymesh.py`) also **smooth-skins** a baked part to the
+armature (distance-weighted linear blend), so the body deforms continuously
+across a joint rather than transforming as rigid shells — the foundation for
+posing the mesh directly. The classic shell export (`minimaster export`) remains
+available as a fallback.
 
 ## Headless CLI
 

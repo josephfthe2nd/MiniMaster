@@ -75,6 +75,28 @@ def test_crowded_pose_is_manifold_without_widening_blend():
         assert rep["outward"] or rep["volume"] > 0
 
 
+def test_body_splits_into_watertight_regions():
+    # per-part fusion: torso+head+each limb is its own clean solid so limbs
+    # stay distinct instead of melting into the torso
+    scene = load_template("orc")
+    parts = bm.body_regions(scene, resolution=0.5, blend=0.8, pose_name="rest")
+    regions = {r for r, _, _ in parts}
+    assert "core" in regions and "head" in regions
+    assert "shoulder_l" in regions and "shoulder_r" in regions  # two arms
+    assert "hip_l" in regions and "hip_r" in regions            # two legs
+    for region, mesh, color in parts:
+        rep = mesh.integrity_report()
+        assert rep["watertight"] and rep["outward"], f"{region}: {rep}"
+        assert color.startswith("#")
+
+
+def test_four_arms_splits_into_six_limbs():
+    scene = load_template("four_arms")
+    parts = bm.body_regions(scene, resolution=0.5, blend=0.8, pose_name="rest")
+    limbs = {r for r, _, _ in parts if r.startswith(("shoulder", "hip"))}
+    assert len(limbs) == 6  # four arms + two legs, each its own part
+
+
 def test_bake_is_deterministic():
     scene = load_template("orc")
     a = bm.body_from_scene(scene, resolution=0.7, blend=0.6, pose_name="rest")
