@@ -103,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_bake.add_argument("--all-shapes", action="store_true",
                         help="fuse gear/detail too (default keeps them out of the body)")
     p_bake.add_argument("--no-base", action="store_true")
+    p_bake.add_argument("--smooth", action="store_true",
+                        help="PNG only: smooth shading (default flat, for the chunky look)")
     p_bake.add_argument("--azimuth", type=float, default=35.0, help="PNG only")
     p_bake.add_argument("--elevation", type=float, default=14.0, help="PNG only")
     p_bake.add_argument("--res", type=int, nargs=2, default=[700, 900], help="PNG size")
@@ -294,7 +296,8 @@ def main(argv: list[str] | None = None) -> int:
                     colored.append((base, "#6e6a63"))
             write_png(out, render_meshes(
                 colored, size=tuple(args.res),
-                azimuth=args.azimuth, elevation=args.elevation))
+                azimuth=args.azimuth, elevation=args.elevation,
+                shading="smooth" if args.smooth else "flat"))
             print(f"wrote {out}")
             return 0
 

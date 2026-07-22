@@ -213,6 +213,10 @@ def dual_contour(field: np.ndarray, spacing, origin) -> Mesh:
     ci, cj, ck = (a.astype(np.int64) for a in np.nonzero(active))
     Csign = np.stack([inside[c][active] for c in range(8)], axis=1)  # (n, 8)
     Cval = np.stack([C[c][active] for c in range(8)], axis=1)        # (n, 8)
+    # field gradient = surface normal, for sharp-feature (QEF) vertex placement
+    grad = np.stack(np.gradient(F, spacing[0], spacing[1], spacing[2]), axis=-1)
+    Gval = np.stack([grad[dx:dx + NX - 1, dy:dy + NY - 1, dz:dz + NZ - 1][active]
+                     for dx, dy, dz in offs], axis=1)  # (n, 8, 3)
     cell_pos = np.full(active.shape, -1, dtype=np.int64)
     cell_pos[active] = np.arange(len(ci))
 
@@ -240,17 +244,39 @@ def dual_contour(field: np.ndarray, spacing, origin) -> Mesh:
         for e in act:
             comps.setdefault(_uf_find(parent, e), []).append(e)
         base = np.array([ci[p], cj[p], ck[p]], dtype=np.float64)
+        cell_lo = origin + base * spacing
+        gval = Gval[p]
         for es in comps.values():
-            pts = []
+            pts, qpts, normals = [], [], []
             for e in es:
                 a, b = _EDGES[e]
                 va, vb = val[a], val[b]
                 d = va - vb
                 t = min(max(va / d if d != 0.0 else 0.5, 0.0), 1.0)
-                pts.append(_CORNER[a] + t * (_CORNER[b] - _CORNER[a]))
-            loc = np.clip(np.mean(pts, axis=0), 0.1, 0.9)
+                loc = _CORNER[a] + t * (_CORNER[b] - _CORNER[a])
+                world = origin + (base + loc) * spacing
+                pts.append(world)
+                g = gval[a] + t * (gval[b] - gval[a])
+                gl = np.linalg.norm(g)
+                if gl > 1e-9:
+                    qpts.append(world)
+                    normals.append(g / gl)
+            centroid = np.mean(pts, axis=0)
+            # QEF: place the vertex where the crossings' tangent planes meet
+            # (sharp edges/corners survive), biased to the centroid where the
+            # planes are parallel (flat regions stay put)
+            if normals:
+                A = np.array(normals)
+                rhs = np.einsum("ij,ij->i", A, np.array(qpts)) - A @ centroid
+                delta, *_ = np.linalg.lstsq(A, rhs, rcond=0.08)
+                X = centroid + delta
+            else:
+                X = centroid
+            # keep the vertex inside its own cell: disjoint boxes can't coincide,
+            # which preserves the watertight 2-manifold
+            X = np.clip(X, cell_lo + 0.05 * spacing, cell_lo + 0.95 * spacing)
             vidx = len(verts)
-            verts.append(origin + (base + loc) * spacing)
+            verts.append(X)
             for e in es:
                 e2v[(p, e)] = vidx
 
