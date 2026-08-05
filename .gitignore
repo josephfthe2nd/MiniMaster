@@ -8,3 +8,6 @@ dist/
 *.stl
 !examples/*.stl
 out/
+
+# fetched CC0 assets (see tools/fetch_makehuman_assets.py)
+assets/makehuman/
