@@ -25,6 +25,15 @@ def _hex_to_rgb(color: str) -> np.ndarray:
     return np.array([int(c[i : i + 2], 16) for i in (0, 2, 4)], dtype=np.float64) / 255.0
 
 
+def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def _linear_to_srgb(c: np.ndarray) -> np.ndarray:
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+
+
 def write_png(path, rgba: np.ndarray) -> None:
     """Write an (h, w, 4) uint8 array as a PNG."""
     rgba = np.ascontiguousarray(rgba, dtype=np.uint8)
@@ -133,7 +142,10 @@ def render_meshes(
 
     diffuse = 1.0 - ambient
     for mesh, color_hex in meshes:
-        base_color = _hex_to_rgb(color_hex)
+        # Shade in LINEAR light, not in gamma-encoded sRGB. Multiplying an
+        # sRGB value by a shade factor is wrong by up to ~2x in the midtones
+        # (half illumination emitted sRGB 0.25 where physics wants 0.361).
+        base_color = _srgb_to_linear(_hex_to_rgb(color_hex))
         cam = m3.transform_points(view, mesh.vertices)
         tris = cam[mesh.faces]  # (m, 3, 3)
 
@@ -188,7 +200,7 @@ def render_meshes(
             cs = corner_shade[i]
             shade_px = l0 * cs[0] + l1 * cs[1] + l2 * cs[2]  # gouraud interp
             col = np.clip(base_color[None, None, :] * shade_px[:, :, None], 0.0, 1.0)
-            rgb = (col * 255).astype(np.uint8)
+            rgb = (_linear_to_srgb(col) * 255).astype(np.uint8)
             region = img[y0:y1, x0:x1]
             region[..., :3][update] = rgb[update]
             region[..., 3][update] = 255

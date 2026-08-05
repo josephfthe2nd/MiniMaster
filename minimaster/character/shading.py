@@ -274,24 +274,32 @@ def shade_vertices(normals_cam: np.ndarray, view_dirs: np.ndarray,
     norm_spec = (shininess + 8.0) / (8.0 * np.pi)
     f0 = material.f0 * material.specular * 2.0
 
+    # AO occludes AMBIENT fully and direct diffuse only partially (a crease
+    # still sees the key light). It must NOT touch the specular lobe, and it
+    # must not be applied twice — both were bugs in the first version.
+    direct_occ = (0.55 + 0.45 * occ)[:, None]
+
     out = np.zeros_like(N)
     for light in rig.lights():
         L = light.vec()
         radiance = light.linear()
         ndl = N @ L
 
-        # wrapped diffuse: light leaks past the terminator (subsurface)
+        # Wrapped diffuse: light leaks past the terminator (subsurface).
+        # The (1+w)**2 divisor is what keeps it ENERGY CONSERVING — dividing
+        # by (1+w) integrates to ~1.42x Lambert at w=0.42, silently
+        # brightening every skin surface.
         w = float(np.clip(material.wrap, 0.0, 1.0))
-        diff = np.clip((ndl + w) / (1.0 + w), 0.0, 1.0)
+        diff = np.clip((ndl + w) / ((1.0 + w) ** 2), 0.0, 1.0)
         if w > 0.0:
             # redden as we approach and pass the terminator
             t = np.clip(ndl, 0.0, 1.0)[:, None]
             tint = scatter + (1.0 - scatter) * t
         else:
             tint = 1.0
-        out += diff[:, None] * base * tint * radiance[None, :]
+        out += diff[:, None] * base * tint * radiance[None, :] * direct_occ
 
-        # Fresnel-weighted Blinn-Phong specular
+        # Fresnel-weighted Blinn-Phong specular (no AO term here)
         H = L[None, :] + V
         H /= np.maximum(np.linalg.norm(H, axis=1, keepdims=True), 1e-9)
         ndh = np.clip(np.einsum("ij,ij->i", N, H), 0.0, 1.0)
@@ -300,14 +308,17 @@ def shade_vertices(normals_cam: np.ndarray, view_dirs: np.ndarray,
         spec = norm_spec * ndh ** shininess * fres * np.clip(ndl, 0.0, 1.0)
         out += spec[:, None] * radiance[None, :]
 
-    # ambient (occluded) + rim
+    # ambient, occluded once
     out += rig.ambient_linear()[None, :] * base * occ[:, None]
+
+    # Rim/backlight: must depend on the rim LIGHT, otherwise the silhouette
+    # glows just as brightly on the unlit side, which reads as fake.
     if material.rim > 0.0:
+        Lr = rig.rim.vec()
+        facing_rim = np.clip(N @ Lr, 0.0, 1.0)
         ndv = np.clip(np.einsum("ij,ij->i", N, V), 0.0, 1.0)
-        rim = (1.0 - ndv) ** 3 * material.rim * occ
-        out += rim[:, None] * base
-    # creases also lose direct light a little
-    out *= (0.35 + 0.65 * occ)[:, None]
+        rim = (1.0 - ndv) ** 3 * material.rim * occ * facing_rim
+        out += rim[:, None] * base * rig.rim.linear()[None, :]
     if material.emissive:
         out += base * material.emissive
     return out

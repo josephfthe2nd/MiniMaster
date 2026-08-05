@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .character.printprep import SIZE_PRESETS as SIZE_PRESETS_CHAR
 from .export import SIZE_PRESETS, ExportError, assemble_body, export_stl
 from .scene import Scene
 from .templates import list_templates, load_template
@@ -111,6 +112,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_bake.add_argument("--azimuth", type=float, default=35.0, help="PNG only")
     p_bake.add_argument("--elevation", type=float, default=14.0, help="PNG only")
     p_bake.add_argument("--res", type=int, nargs=2, default=[700, 900], help="PNG size")
+
+    # -- realistic Character Lab ------------------------------------------
+    p_char = sub.add_parser(
+        "character",
+        help="build a realistic morphable human (needs the CC0 assets)")
+    p_char.add_argument("-o", "--output", required=True,
+                        help="output path: .stl to print, .png to render")
+    p_char.add_argument("--gender", type=float, default=0.5,
+                        help="0 = female, 1 = male")
+    p_char.add_argument("--age", type=float, default=0.5,
+                        help="0 baby, 0.1875 child, 0.5 young, 1 old")
+    p_char.add_argument("--muscle", type=float, default=0.5)
+    p_char.add_argument("--weight", type=float, default=0.5)
+    p_char.add_argument("--body-height", type=float, default=0.5,
+                        dest="body_height", help="body build height 0..1")
+    p_char.add_argument("--african", type=float, default=0.0)
+    p_char.add_argument("--asian", type=float, default=0.0)
+    p_char.add_argument("--caucasian", type=float, default=1.0)
+    p_char.add_argument("--morph", action="append", default=[],
+                        metavar="NAME=VALUE",
+                        help="extra morph target, repeatable "
+                             "(e.g. --morph nose/nose-curve-convex=0.8)")
+    p_char.add_argument("--size", choices=sorted(SIZE_PRESETS_CHAR),
+                        help="print size category")
+    p_char.add_argument("--height", type=float, help="print height in mm")
+    p_char.add_argument("--subdivide", type=int, default=0,
+                        help="Catmull-Clark levels before export")
+    p_char.add_argument("--no-base", action="store_true")
+    p_char.add_argument("--azimuth", type=float, default=18.0)
+    p_char.add_argument("--elevation", type=float, default=5.0)
+    p_char.add_argument("--res", type=int, nargs=2, default=[500, 780])
+    p_char.add_argument("--face", action="store_true",
+                        help="PNG only: frame the head")
+    p_char.add_argument("--eye-color", default="#5b7c8d")
 
     # -- Blender backend (optional) --------------------------------------
 
@@ -328,6 +363,71 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {out}: {rep['method']} method, {rep['triangles']} triangles, "
               f"{sx:.1f} x {sy:.1f} x {sz:.1f} mm{extra}, "
               f"watertight={rep['watertight']}{note}")
+        return 0
+
+    if command == "character":
+        from .character import mhbase, portrait, printprep
+
+        if not mhbase.available():
+            print("error: the CC0 MakeHuman assets are not installed.\n"
+                  "       run: python tools/fetch_makehuman_assets.py",
+                  file=sys.stderr)
+            return 2
+        base, lib = mhbase.load()
+        weights = mhbase.macro_weights(
+            gender=args.gender, age=args.age, muscle=args.muscle,
+            weight=args.weight, height=args.body_height,
+            african=args.african, asian=args.asian, caucasian=args.caucasian)
+        for spec in args.morph:
+            if "=" not in spec:
+                print(f"error: --morph wants NAME=VALUE, got {spec!r}",
+                      file=sys.stderr)
+                return 2
+            name, _, val = spec.partition("=")
+            name = name.strip()
+            if name not in lib:
+                near = lib.find(name.split("/")[-1][:12])[:4]
+                print(f"error: unknown morph {name!r}"
+                      + (f"; did you mean {near}?" if near else ""),
+                      file=sys.stderr)
+                return 2
+            try:
+                weights[name] = weights.get(name, 0.0) + float(val)
+            except ValueError:
+                print(f"error: {val!r} is not a number", file=sys.stderr)
+                return 2
+        verts = lib.apply(base.verts, weights)
+
+        out = Path(args.output)
+        if out.suffix.lower() == ".png":
+            shells = portrait.character_shells(
+                base, verts, eye_color=args.eye_color, levels=args.subdivide)
+            fit = None
+            if args.face:
+                import numpy as _np
+                top = shells[0].mesh.bounds[1][2]
+                fit = (_np.array([0.0, 0.0, top - 1.15]), 1.30)
+            img = portrait.render_portrait(
+                shells, size=tuple(args.res), azimuth=args.azimuth,
+                elevation=args.elevation, fit=fit)
+            portrait.write_png(out, img)
+            print(f"wrote {out}")
+            return 0
+
+        from .core.stl import write_stl
+
+        try:
+            shells = printprep.character_print_shells(
+                base, verts, levels=args.subdivide)
+            mesh, rep = printprep.assemble_character(
+                shells, size=args.size, height=args.height,
+                with_base=not args.no_base)
+        except printprep.PrintError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        write_stl(mesh, out, name="character")
+        print(f"wrote {out}")
+        print(rep.as_text())
         return 0
 
     if command in ("fuse", "hq-render"):
