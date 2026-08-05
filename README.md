@@ -200,6 +200,28 @@ cavity ambient occlusion, and eyeballs with sclera/iris/pupil.
 `.stl` output runs the same per-shell watertight gate as everything else, with
 size presets from `tiny` (15 mm) through `bust` (90 mm) and `display` (150 mm).
 
+### Appendages that reshape their host
+
+Wings, tails, horns and extra arm pairs attach as their own closed shells that
+overlap the body, so the base mesh's vertex numbering — which all 1,280 morph
+targets depend on — is never disturbed. Each is bound to a body triangle by
+barycentric coordinates, so it follows every morph.
+
+They also **change the body that carries them**. A wing is powered by the
+pectoralis and latissimus anchored on the trunk, so attaching one broadens the
+chest and back, widens the shoulders, and trims the waist and thighs the way it
+would in an animal that flies — via the ordinary sliders, so the result stays
+printable and still responds to every other control.
+
+![plain vs. adapted](docs/images/anatomy_before_after.png)
+
+`flight_report()` gives the honest verdict alongside it, using the character's
+own mesh volume for mass: powered flight tops out near 2.2 kg in bats and even
+soaring scales out around 41 kg, so a human-scale flyer is off the chart by
+~1.7×. It reports that; it does not stop you. See
+[docs/creature_anatomy.md](docs/creature_anatomy.md) for the sources behind
+every coefficient.
+
 ## Licensing
 
 MiniMaster's source is original work. The only runtime dependency is numpy

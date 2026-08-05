@@ -431,6 +431,12 @@ class Appendage:
     params: dict = field(default_factory=dict)
     chain: tuple = ()                           # for kind="harvest"
     mirror: bool = False                        # also place a mirrored copy
+    # Which way the appendage's local +X aims once it is on the body. The
+    # anchor's tangent is this hint projected into the surface, so it decides
+    # the roll: a wing spans along its local X, and without a lateral hint a
+    # back-mounted wing sweeps off in whatever direction the triangle happens
+    # to face. Default is world up, which suits horns and tails.
+    up_hint: tuple = (0.0, 1.0, 0.0)
 
     def build(self, base, verts=None):
         """Return ``[(name, Mesh)]`` placed on the current morphed body."""
@@ -455,7 +461,10 @@ class Appendage:
                     raise KeyError(f"unknown appendage kind {self.kind!r}; "
                                    f"have {sorted(BUILDERS) + ['harvest']}")
                 proto = builder(**self.params)
-                anchor = SurfaceAnchor.from_point(body_v, body_q, pt)
+                hint = np.asarray(self.up_hint, dtype=np.float64)
+                if idx == 1:            # mirrored side needs a mirrored hint
+                    hint = hint * np.array([-1.0, 1.0, 1.0])
+                anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
                 flip = None
                 if idx == 1:  # mirror the prototype about its own X
                     flip = np.diag([-1.0, 1.0, 1.0])
