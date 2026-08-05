@@ -164,6 +164,20 @@ shell export (`minimaster export`) is always available too.
 Both live in `minimaster/core/` (`tubemesh.py`, `bodymesh.py`) and are pure
 numpy — no Blender, no third-party mesh libraries.
 
+## Licensing
+
+MiniMaster's source is original work. The only runtime dependency is numpy
+(BSD). Blender is optional and invoked as a separate process, never linked.
+
+Character Lab's realistic path can load the MakeHuman Community base mesh and
+morph targets, which that project releases under **CC0 1.0** (its AGPL licence
+covers only its *program code*, none of which is used here). Those files are
+**not committed** — fetch them with `python tools/fetch_makehuman_assets.py`.
+MakeHuman makes no claim over generated output, so exported meshes and renders
+are yours, commercial use included.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full record.
+
 ## Headless CLI
 
 Everything the Export tab does works without a display:
