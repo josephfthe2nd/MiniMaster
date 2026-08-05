@@ -164,6 +164,42 @@ shell export (`minimaster export`) is always available too.
 Both live in `minimaster/core/` (`tubemesh.py`, `bodymesh.py`) and are pure
 numpy — no Blender, no third-party mesh libraries.
 
+## Character Lab — realistic humans
+
+A second, higher-fidelity path built on the **CC0** MakeHuman base mesh and its
+1,280 morph targets (fetch them once with
+`python tools/fetch_makehuman_assets.py`). The mesh is a closed all-quad
+2-manifold with professional edge flow, so it drops straight into MiniMaster's
+subdivider and watertight export gate.
+
+```bash
+# macro sliders: gender / age / muscle / weight / height / ethnicity
+minimaster character -o hero.png --gender 1 --muscle 0.8 --face
+
+# 343 named shape sliders reach every one of the shipped morph targets
+minimaster character --list-sliders nose -o /dev/null
+minimaster character -o hero.png --face \
+    --slider nose.nose_curve=0.9 --slider cheek.cheek_bones=1.0
+
+# plausible random faces, and save/load a character
+minimaster character -o r.png --face --randomize-face 7
+minimaster character -o hero.png --save-character hero.mmchar
+minimaster character -o hero.stl --character hero.mmchar --size medium
+```
+
+Sliders are **derived from the target names**, not hand-listed: antonym pairs
+(`decr`/`incr`, `concave`/`convex`, …) fold into one -1..+1 control, `l-`/`r-`
+variants fold into one symmetric control with an optional asymmetry offset,
+and exclusive sets (ear shape, body shape) become choices. That covers
+**100% of the shipped shape targets** — 830 of them — behind 343 controls.
+
+Rendering uses a skin-aware shader: linear light transport, wrapped diffuse
+with a scatter tint approximating subsurface scattering, Fresnel specular,
+cavity ambient occlusion, and eyeballs with sclera/iris/pupil.
+
+`.stl` output runs the same per-shell watertight gate as everything else, with
+size presets from `tiny` (15 mm) through `bust` (90 mm) and `display` (150 mm).
+
 ## Licensing
 
 MiniMaster's source is original work. The only runtime dependency is numpy

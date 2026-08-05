@@ -146,6 +146,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument("--face", action="store_true",
                         help="PNG only: frame the head")
     p_char.add_argument("--eye-color", default="#5b7c8d")
+    p_char.add_argument("--slider", action="append", default=[],
+                        metavar="KEY=VALUE",
+                        help="named slider, repeatable "
+                             "(e.g. --slider nose.nose_curve=0.8)")
+    p_char.add_argument("--list-sliders", nargs="?", const="", metavar="FILTER",
+                        help="list the slider catalog and exit")
+    p_char.add_argument("--character", help="load a .mmchar file")
+    p_char.add_argument("--save-character", help="write the .mmchar file")
+    p_char.add_argument("--randomize-face", type=int, metavar="SEED",
+                        help="plausible random facial variation")
 
     # -- Blender backend (optional) --------------------------------------
 
@@ -373,11 +383,59 @@ def main(argv: list[str] | None = None) -> int:
                   "       run: python tools/fetch_makehuman_assets.py",
                   file=sys.stderr)
             return 2
+        from .character.sliders import Character, SliderCatalog, randomize
+
         base, lib = mhbase.load()
-        weights = mhbase.macro_weights(
-            gender=args.gender, age=args.age, muscle=args.muscle,
-            weight=args.weight, height=args.body_height,
-            african=args.african, asian=args.asian, caucasian=args.caucasian)
+        catalog = SliderCatalog(lib.names)
+
+        if args.list_sliders is not None:
+            flt = args.list_sliders
+            shown = catalog.find(flt) if flt else catalog.sliders
+            group = None
+            for sl in shown:
+                head = f"{sl.group} / {sl.region}"
+                if head != group:
+                    group = head
+                    print(f"\n[{head}]")
+                rng = f"{sl.lo:+.0f}..{sl.hi:+.0f}" if sl.kind != "choice" \
+                    else f"0..{len(sl.options) - 1}"
+                mark = " (sided)" if sl.sided else ""
+                print(f"  {sl.key:38s} {rng:>8s}  {sl.label}{mark}")
+            print(f"\n{len(shown)} of {len(catalog)} sliders")
+            return 0
+
+        doc = Character.load(args.character) if args.character else Character()
+        if not args.character:
+            doc.macro.update(
+                gender=args.gender, age=args.age, muscle=args.muscle,
+                weight=args.weight, height=args.body_height,
+                african=args.african, asian=args.asian,
+                caucasian=args.caucasian)
+        if args.randomize_face is not None:
+            doc.sliders.update(randomize(catalog, seed=args.randomize_face))
+        for spec in args.slider:
+            if "=" not in spec:
+                print(f"error: --slider wants KEY=VALUE, got {spec!r}",
+                      file=sys.stderr)
+                return 2
+            key, _, val = spec.partition("=")
+            key = key.strip()
+            if key not in catalog:
+                near = [x.key for x in catalog.find(key.split(".")[-1][:10])][:4]
+                print(f"error: unknown slider {key!r}"
+                      + (f"; did you mean {near}?" if near else
+                         "; try --list-sliders"), file=sys.stderr)
+                return 2
+            try:
+                doc.sliders[key] = float(val)
+            except ValueError:
+                print(f"error: {val!r} is not a number", file=sys.stderr)
+                return 2
+        if args.save_character:
+            doc.save(args.save_character)
+            print(f"wrote {args.save_character}")
+
+        weights = doc.target_weights(catalog)
         for spec in args.morph:
             if "=" not in spec:
                 print(f"error: --morph wants NAME=VALUE, got {spec!r}",
@@ -405,8 +463,12 @@ def main(argv: list[str] | None = None) -> int:
             fit = None
             if args.face:
                 import numpy as _np
-                top = shells[0].mesh.bounds[1][2]
-                fit = (_np.array([0.0, 0.0, top - 1.15]), 1.30)
+                lo_b, hi_b = shells[0].mesh.bounds
+                # a head is ~1/7.5 of standing height; frame it from the mesh
+                # rather than a constant so it tracks every proportion slider
+                head_h = (hi_b[2] - lo_b[2]) / 7.5
+                fit = (_np.array([0.0, 0.0, hi_b[2] - 0.52 * head_h]),
+                       head_h * 0.80)
             img = portrait.render_portrait(
                 shells, size=tuple(args.res), azimuth=args.azimuth,
                 elevation=args.elevation, fit=fit)
