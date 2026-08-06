@@ -36,8 +36,11 @@ def test_a_second_tail_costs_more_than_one():
 
 
 def test_load_tracks_appendage_size():
-    small = A.Appendage("wing", mirror=True, params=dict(span=4.5))
-    big = A.Appendage("wing", mirror=True, params=dict(span=18.0))
+    """Load is measured against the builder's own default span, so the two
+    cannot drift apart when the wing is retuned."""
+    from minimaster.character.wings import DEFAULT_SPAN
+    small = A.Appendage("wing", mirror=True, params=dict(span=DEFAULT_SPAN / 2))
+    big = A.Appendage("wing", mirror=True, params=dict(span=DEFAULT_SPAN * 2))
     assert ca.appendage_load(small) == pytest.approx(0.5)
     assert ca.appendage_load(big) == pytest.approx(2.0)
 

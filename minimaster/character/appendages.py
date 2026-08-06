@@ -120,29 +120,40 @@ def cap_boundaries(verts, faces):
 class SurfaceAnchor:
     """A frame bound to a body triangle, so it follows every morph."""
 
-    tri: tuple[int, int, int]
-    bary: tuple[float, float, float]
+    corners: tuple            # every corner of the bound face, not just three
+    weights: tuple            # barycentric weights over those corners
     up_hint: tuple[float, float, float] = (0.0, 0.0, 1.0)
     offset: float = 0.0          # push out along the surface normal
 
     @classmethod
     def from_point(cls, verts, faces, point, up_hint=(0.0, 0.0, 1.0)):
-        """Bind to the face whose centroid is nearest ``point``."""
-        faces = np.asarray(faces)
-        tri = faces[:, :3]
-        cent = np.asarray(verts)[tri].mean(axis=1)
+        """Bind to the face whose centroid is nearest ``point``.
+
+        The WHOLE face is kept. Binding to its first three corners instead
+        makes a mirrored pair asymmetric: the body cage is quads, and a quad
+        and its mirror image are stored with different corner orders, so
+        ``face[:3]`` picks a different sub-triangle on each side and the two
+        frames end up a degree or two apart -- which a long wing turns into a
+        visible tilt.
+        """
+        f = np.asarray(faces)
+        cent = np.asarray(verts)[f].mean(axis=1)
         i = int(np.argmin(np.linalg.norm(cent - np.asarray(point), axis=1)))
-        return cls(tri=tuple(int(x) for x in tri[i]),
-                   bary=(1 / 3, 1 / 3, 1 / 3), up_hint=up_hint)
+        k = f.shape[1]
+        return cls(corners=tuple(int(x) for x in f[i]),
+                   weights=(1.0 / k,) * k, up_hint=up_hint)
 
     def resolve(self, verts):
         """(origin, basis) for the current mesh. Basis columns are
         (tangent, bitangent, normal); the normal points out of the body."""
         v = np.asarray(verts, dtype=np.float64)
-        a, b, c = (v[i] for i in self.tri)
-        w = np.asarray(self.bary, dtype=np.float64)
-        origin = w[0] * a + w[1] * b + w[2] * c
-        n = np.cross(b - a, c - a)
+        p = v[list(self.corners)]
+        w = np.asarray(self.weights, dtype=np.float64)
+        origin = (w[:, None] * p).sum(axis=0)
+        # Newell's normal: uses every corner and depends only on the cyclic
+        # order, so mirror-image faces give exactly mirror-image normals.
+        nxt = np.roll(p, -1, axis=0)
+        n = np.cross(p, nxt).sum(axis=0)
         ln = np.linalg.norm(n)
         n = n / ln if ln > 1e-12 else np.array([0.0, 0.0, 1.0])
         up = np.asarray(self.up_hint, dtype=np.float64)
@@ -362,34 +373,9 @@ def make_horn(length=2.2, base_radius=0.42, segments=8, ring_verts=8,
     return _loft(rings)
 
 
-def make_wing(span=9.0, chord=5.0, thickness=0.22, ribs=5,
-              sweep=0.55, droop=0.25) -> Mesh:
-    """A membrane wing: a swept, tapered slab with finger ribs.
-
-    Built as a closed solid (top and bottom surfaces plus a rim) so it passes
-    the print gate; at mini scale a membrane must be a real thickness anyway.
-    """
-    top, bot = [], []
-    for i in range(ribs + 1):
-        t = i / ribs
-        # leading edge sweeps back and droops as it goes outboard
-        x = span * t
-        y = -sweep * span * t * t
-        z = -droop * span * t * t
-        c = chord * (1.0 - 0.72 * t) + 0.25
-        th = thickness * (1.0 - 0.6 * t) + 0.02
-        # scallop the trailing edge between finger ribs
-        scallop = 0.12 * c * np.sin(np.pi * t * ribs) ** 2
-        for arr, s in ((top, +1.0), (bot, -1.0)):
-            arr.append(np.array([
-                [x, y, z + s * th],
-                [x, y - c * 0.45 + scallop, z + s * th * 0.7],
-                [x, y - c + scallop, z + s * th * 0.25],
-            ]))
-    verts = []
-    for i in range(ribs + 1):
-        verts.append(np.vstack([top[i], bot[i][::-1]]))
-    return _loft(verts)
+# Wings are their own module: a wing is a modified forelimb, not a shape, and
+# building one properly (skeleton, patagium or feathers) is a job in itself.
+from .wings import make_wing  # noqa: E402,F401  (re-exported for BUILDERS)
 
 
 def _euler(a):
@@ -466,8 +452,13 @@ class Appendage:
                     hint = hint * np.array([-1.0, 1.0, 1.0])
                 anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
                 flip = None
-                if idx == 1:  # mirror the prototype about its own X
-                    flip = np.diag([-1.0, 1.0, 1.0])
+                if idx == 1:
+                    # The mirrored anchor already carries a mirrored tangent,
+                    # and reflecting the tangent flips the handedness of the
+                    # frame's bitangent (n' x t' = -M(n x t)). Negating local X
+                    # on top of that cancels out into a 180-degree roll, not a
+                    # mirror; negating local Y is what leaves a true mirror.
+                    flip = np.diag([1.0, -1.0, 1.0])
                 mesh = place(proto, anchor, body_v, self.scale, flip)
             side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
             out.append((f"{self.kind}{side}", mesh))

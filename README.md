@@ -204,8 +204,20 @@ size presets from `tiny` (15 mm) through `bust` (90 mm) and `display` (150 mm).
 
 Wings, tails, horns and extra arm pairs attach as their own closed shells that
 overlap the body, so the base mesh's vertex numbering — which all 1,280 morph
-targets depend on — is never disturbed. Each is bound to a body triangle by
-barycentric coordinates, so it follows every morph.
+targets depend on — is never disturbed. Each is bound to a body face by
+barycentric coordinates, so it follows every morph, and a mirrored pair is an
+exact mirror image.
+
+A wing is built as a **modified forelimb**, not a shape: humerus, radius, wrist
+and an elongated hand, with the flight surface hung on that skeleton. Two
+styles share the arm — a bat/dragon **membrane** (propatagium, dactylopatagium
+and plagiopatagium over digits II–V, ~12% camber, a clawed free thumb) and a
+bird/angel **feathered** wing (10 primaries off the hand, 12 secondaries off the
+forearm, shingled coverts, an alula). `fold` stows either one against the back.
+
+![wings](docs/images/wings.png)
+
+See [docs/wings.md](docs/wings.md) for the anatomy behind the proportions.
 
 They also **change the body that carries them**. A wing is powered by the
 pectoralis and latissimus anchored on the trunk, so attaching one broadens the

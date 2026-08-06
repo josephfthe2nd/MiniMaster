@@ -131,10 +131,12 @@ def appendage_load(app) -> float:
     Scaled from the appendage's own size so a small decorative horn costs
     almost nothing and a nine-metre wing costs a lot.
     """
+    from .wings import DEFAULT_SPAN
     p = app.params or {}
     kind = app.kind
     if kind == "wing":
-        base = p.get("span", 9.0) / 9.0
+        # read the builder's own default so the two can never drift apart
+        base = p.get("span", DEFAULT_SPAN) / DEFAULT_SPAN
     elif kind == "tail":
         base = p.get("length", 6.0) / 6.0
     elif kind == "horn":

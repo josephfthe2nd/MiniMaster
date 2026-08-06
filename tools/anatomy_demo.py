@@ -16,8 +16,8 @@ base, lib = mh.load()
 cat = SliderCatalog(lib.names)
 
 WINGS = [A.Appendage("wing", anchor_point=(0.84, 4.39, -0.73), mirror=True,
-                     up_hint=(1.0, 0.85, 0.0), scale=0.62,
-                     params=dict(span=13.0, chord=5.5, sweep=0.30, droop=0.42))]
+                     up_hint=(1.0, 1.5, 0.0), scale=1.0,
+                     params=dict(style="membrane", span=13.0))]
 
 plain = Character(name="plain")
 plain.macro.update(gender=1.0, muscle=0.55)
