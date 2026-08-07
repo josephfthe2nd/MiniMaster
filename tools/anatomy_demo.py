@@ -15,9 +15,7 @@ from minimaster.core.mesh import Mesh
 base, lib = mh.load()
 cat = SliderCatalog(lib.names)
 
-WINGS = [A.Appendage("wing", anchor_point=(0.84, 4.39, -0.73), mirror=True,
-                     up_hint=(1.0, 1.5, 0.0), scale=1.0,
-                     params=dict(style="membrane", span=13.0))]
+WINGS = [A.back_wings("membrane", span=13.0)]
 
 plain = Character(name="plain")
 plain.macro.update(gender=1.0, muscle=0.55)

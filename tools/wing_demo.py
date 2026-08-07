@@ -23,14 +23,8 @@ PLUMAGE = sh.Material(base_color="#cdc4b6", roughness=0.55, specular=0.42,
                       f0=0.040, wrap=0.26, scatter="#9a8f80", rim=0.20)
 MATS = {"membrane": MEMBRANE, "feathered": PLUMAGE}
 
-# left scapula; the lateral up_hint aims the span across the back
-ANCHOR = (0.84, 4.39, -0.73)
-HINT = (1.0, 1.5, 0.0)
-
-
 def wing_appendage(style, **params):
-    return A.Appendage("wing", anchor_point=ANCHOR, mirror=True, up_hint=HINT,
-                       scale=1.0, params=dict(style=style, **params))
+    return A.back_wings(style, **params)
 
 
 def panel_planforms():
@@ -69,7 +63,30 @@ def panel_on_body(base, lib, cat, size=(560, 800)):
         # straight from behind and slightly above: an off-axis camera turns
         # one wing face-on and the other edge-on and reads as an asymmetry
         panels.append(po.render_portrait(shells, size=size, azimuth=180.0,
-                                         elevation=34.0, fit=fit))
+                                         elevation=22.0, fit=fit))
+    return np.concatenate(panels, axis=1)
+
+
+def panel_side(base, lib, cat, size=(560, 800)):
+    """Profile: the root has to lie ALONG the back, not stick out behind it."""
+    panels = []
+    fit = None
+    for style in (None, "membrane", "feathered"):
+        c = Character()
+        c.macro.update(gender=1.0, muscle=0.55)
+        apps = [wing_appendage(style)] if style else []
+        if apps:
+            ca.apply_to(c, apps, cat)
+        v = lib.apply(base.verts, c.target_weights(cat))
+        shells = po.character_shells(base, v, levels=1, with_eyes=True)
+        if fit is None:
+            lo, hi = shells[0].mesh.bounds
+            fit = ((lo + hi) / 2.0, float(np.linalg.norm(hi - lo)) / 2.0 * 1.2)
+        for app in apps:
+            for _, m in app.build(base, v):
+                shells.append(po.Shell(m.transform(po.MH_TO_Z_UP), MATS[style]))
+        panels.append(po.render_portrait(shells, size=size, azimuth=270.0,
+                                         elevation=6.0, fit=fit))
     return np.concatenate(panels, axis=1)
 
 
@@ -77,9 +94,10 @@ def main():
     base, lib = mh.load()
     cat = SliderCatalog(lib.names)
     body = panel_on_body(base, lib, cat)
+    side = panel_side(base, lib, cat)
     plans = panel_planforms()
     # pad the narrower strip so the two rows stack cleanly
-    w = max(body.shape[1], plans.shape[1])
+    w = max(body.shape[1], side.shape[1], plans.shape[1])
 
     def pad(img):
         if img.shape[1] == w:
@@ -91,7 +109,7 @@ def main():
         out[:, off:off + img.shape[1]] = img
         return out
 
-    sheet = np.concatenate([pad(body), pad(plans)], axis=0)
+    sheet = np.concatenate([pad(body), pad(side), pad(plans)], axis=0)
     po.write_png("docs/images/wings.png", sheet)
     print("wrote docs/images/wings.png", sheet.shape)
 

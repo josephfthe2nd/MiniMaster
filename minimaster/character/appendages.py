@@ -406,6 +406,33 @@ def _frame(direction):
 
 BUILDERS = {"tail": make_tail, "horn": make_horn, "wing": make_wing}
 
+# Placement of a wing on the shoulder blades of the MakeHuman base. These are
+# not arbitrary taste: the anchor is the rearmost point of the scapula, the
+# hint aims the span up and out, and the roll turns the wing's chord from
+# "straight out of the back" (which leaves the root chord hanging several
+# units behind the figure, touching only at a point) to "down the flank",
+# which is where a bat's plagiopatagium actually runs. See back_wings().
+WING_ANCHOR = (0.84, 4.39, -0.73)
+WING_UP_HINT = (1.0, 1.5, 0.2)
+WING_ROLL = -95.0
+# and sunk into the back, because a wing that only grazes the skin is joined
+# along a hairline: at offset 0 just 2% of the root lies inside the torso,
+# against ~40% here, which is a weld a 32 mm print can actually survive.
+WING_OFFSET = -0.9
+
+
+def back_wings(style: str = "membrane", scale: float = 1.0,
+               mirror: bool = True, **params) -> "Appendage":
+    """A mirrored pair of wings sitting on the shoulder blades.
+
+    Wraps the placement constants so callers do not have to rediscover the
+    orientation, which is the difference between wings that are attached and
+    wings that float behind the back.
+    """
+    return Appendage("wing", anchor_point=WING_ANCHOR, mirror=mirror,
+                     up_hint=WING_UP_HINT, roll=WING_ROLL, offset=WING_OFFSET,
+                     scale=scale, params=dict(style=style, **params))
+
 
 @dataclass
 class Appendage:
@@ -423,6 +450,19 @@ class Appendage:
     # back-mounted wing sweeps off in whatever direction the triangle happens
     # to face. Default is world up, which suits horns and tails.
     up_hint: tuple = (0.0, 1.0, 0.0)
+    # Degrees of roll about the appendage's own +X axis, applied before
+    # placement. ``up_hint`` aims +X but leaves the appendage free to spin
+    # around it, and for anything wider than a spike that spin is the whole
+    # difference between attached and floating: a wing's local +Z would
+    # otherwise follow the surface normal, so its chord would stick straight
+    # out from the back instead of running down the flank the way a real
+    # plagiopatagium does.
+    roll: float = 0.0
+    # How far to sink the appendage along the surface normal. Negative buries
+    # the root INSIDE the body. Overlapping shells are what the slicer unions,
+    # so an appendage that merely touches the skin is welded along a hairline
+    # and can print detached; a broad root needs real interpenetration.
+    offset: float = 0.0
 
     def build(self, base, verts=None):
         """Return ``[(name, Mesh)]`` placed on the current morphed body."""
@@ -451,15 +491,18 @@ class Appendage:
                 if idx == 1:            # mirrored side needs a mirrored hint
                     hint = hint * np.array([-1.0, 1.0, 1.0])
                 anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
-                flip = None
+                anchor.offset = self.offset
+                rot = _euler(np.radians([self.roll, 0.0, 0.0]))
                 if idx == 1:
                     # The mirrored anchor already carries a mirrored tangent,
                     # and reflecting the tangent flips the handedness of the
                     # frame's bitangent (n' x t' = -M(n x t)). Negating local X
                     # on top of that cancels out into a 180-degree roll, not a
                     # mirror; negating local Y is what leaves a true mirror.
-                    flip = np.diag([1.0, -1.0, 1.0])
-                mesh = place(proto, anchor, body_v, self.scale, flip)
+                    # The roll rides inside that reflection, so the pair stays
+                    # a mirror image at any roll angle.
+                    rot = np.diag([1.0, -1.0, 1.0]) @ rot
+                mesh = place(proto, anchor, body_v, self.scale, rot)
             side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
             out.append((f"{self.kind}{side}", mesh))
         return out

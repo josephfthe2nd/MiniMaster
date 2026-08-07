@@ -200,14 +200,81 @@ def test_coverts_are_optional_and_add_material():
 
 # -- on the real body -------------------------------------------------------
 
+def _inside_body(pts, tris):
+    """Even-odd ray test along +X against a triangle soup."""
+    a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+    v0, v1 = c[:, 1:] - a[:, 1:], b[:, 1:] - a[:, 1:]
+    d00 = (v0 * v0).sum(1)
+    d01 = (v0 * v1).sum(1)
+    d11 = (v1 * v1).sum(1)
+    den = d00 * d11 - d01 * d01
+    ok = np.abs(den) > 1e-14
+    safe = np.where(ok, den, 1.0)
+    out = np.zeros(len(pts), dtype=bool)
+    for i, p in enumerate(pts):
+        v2 = p[1:] - a[:, 1:]
+        d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
+        u = np.where(ok, (d11 * d20 - d01 * d21) / safe, -1.0)
+        w = np.where(ok, (d00 * d21 - d01 * d20) / safe, -1.0)
+        hit = ok & (u >= 0) & (w >= 0) & (u + w <= 1)
+        if not hit.any():
+            continue
+        bx = (a[hit, 0] + u[hit] * (c[hit, 0] - a[hit, 0])
+              + w[hit] * (b[hit, 0] - a[hit, 0]))
+        out[i] = int((bx > p[0]).sum()) % 2 == 1
+    return out
+
+
 @pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
 class TestOnRealBody:
-    ANCHOR = (0.84, 4.39, -0.73)          # left scapula
-    HINT = (1.0, 1.5, 0.0)                # aims the span across the back
+    ANCHOR = A.WING_ANCHOR                # left scapula
+    HINT = A.WING_UP_HINT                 # aims the span up and out
 
     def _app(self, style, **params):
         return A.Appendage("wing", anchor_point=self.ANCHOR, mirror=True,
-                           up_hint=self.HINT, params=dict(style=style, **params))
+                           up_hint=self.HINT, roll=A.WING_ROLL,
+                           offset=A.WING_OFFSET,
+                           params=dict(style=style, **params))
+
+    @staticmethod
+    def _root_verts(mesh, proto):
+        lx = proto.vertices[:, 0]
+        return mesh.vertices[lx < 0.12 * lx.max()]
+
+    def test_roll_lays_the_root_along_the_back_instead_of_out_behind_it(self):
+        """Regression: place() maps the appendage's local +Z to the surface
+        normal, so without a roll a wing's chord points straight out of the
+        back. The root chord is longer than the body is deep, so it hangs in
+        the air behind the figure and only the anchor point touches."""
+        base, lib = mh.load()
+        v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+        cv, _ = base.body_cage(v)
+        proto = W.membrane_wing()
+
+        def root_gap(roll):
+            app = A.Appendage("wing", anchor_point=self.ANCHOR, mirror=False,
+                              up_hint=self.HINT, roll=roll,
+                              params=dict(style="membrane"))
+            root = self._root_verts(app.build(base, v)[0][1], proto)
+            d = np.linalg.norm(root[:, None, :] - cv[None, :, :], axis=2)
+            return float(d.min(axis=1).max())
+
+        assert root_gap(A.WING_ROLL) < 0.4 * root_gap(0.0)
+
+    def test_the_root_is_welded_into_the_body_not_grazing_it(self):
+        """Overlapping shells are what the slicer unions. A wing that only
+        touches the skin is joined along a hairline and prints detached, so
+        the root has to be genuinely buried in the torso."""
+        base, lib = mh.load()
+        v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+        cv, cq = base.body_cage(v)
+        tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
+        proto = W.membrane_wing()
+        root = self._root_verts(A.back_wings("membrane").build(base, v)[0][1],
+                                proto)
+        buried = _inside_body(root[::4], tris)
+        assert buried.mean() > 0.2, (
+            f"only {100 * buried.mean():.0f}% of the wing root is inside the body")
 
     @pytest.mark.parametrize("style", STYLES)
     def test_placed_wings_are_printable(self, style):

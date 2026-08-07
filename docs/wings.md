@@ -10,14 +10,13 @@ builds the skeleton first and hangs the surface on it.
 ![wings](images/wings.png)
 
 *Top: a plain body, then membrane wings, feathered wings, and the same membrane
-wings folded. Bottom: each planform seen from above.*
+wings folded. Middle: the profile, where the root has to lie along the back
+rather than stick out behind it. Bottom: each planform seen from above.*
 
 ```python
 from minimaster.character import appendages as A
 
-wings = A.Appendage("wing", anchor_point=(0.84, 4.39, -0.73), mirror=True,
-                    up_hint=(1.0, 1.5, 0.0),
-                    params=dict(style="membrane", span=13.0, fold=0.0))
+wings = A.back_wings("membrane", span=13.0, fold=0.0)
 shells = wings.build(base, verts)     # [("wing_l", Mesh), ("wing_r", Mesh)]
 ```
 
@@ -103,11 +102,32 @@ Appendages are authored at the origin, and the wing's local frame is:
 +Z  chordwise, leading edge -> trailing edge
 ```
 
-`Appendage.up_hint` aims the anchor's tangent, which is where local +X ends up.
-A lateral hint puts the span across the character's back, the chord trailing
-behind, and the thickness vertical — which is what a wing does. Without it a
-back-mounted wing sweeps off in whatever direction the nearest body triangle
-happens to face.
+Three controls place it, and `back_wings()` wraps all three so callers do not
+have to rediscover them:
+
+```python
+from minimaster.character import appendages as A
+
+wings = A.back_wings("membrane")            # anchor + hint + roll + offset
+shells = wings.build(base, verts)
+```
+
+**`up_hint`** aims the anchor's tangent, which is where local +X ends up. Without
+it a back-mounted wing sweeps off in whatever direction the nearest body
+triangle happens to face.
+
+**`roll`** spins the wing about that span axis, and for anything wider than a
+spike it is the difference between attached and floating. `place()` maps local
++Z to the *surface normal*, so a wing's chord points straight out of the back —
+and the root chord is 6 units long on a body 4.7 units deep, so it hung up to
+**5.7 units out in the air behind the figure**, touching at a single point. A
+real bat's plagiopatagium runs *down the flank* from shoulder to ankle, and
+rolling −95° puts it there, cutting the worst root gap to ~1.1.
+
+**`offset`** sinks the appendage along the normal. Overlapping shells are what
+the slicer unions, so a wing that merely touches the skin is welded along a
+hairline and can print detached. At offset 0 only **2%** of the root lies inside
+the torso; at −0.9 it is ~40%, which is a joint a 32 mm print survives.
 
 A mirrored pair is an exact mirror image, which took two fixes:
 

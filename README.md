@@ -217,7 +217,11 @@ forearm, shingled coverts, an alula). `fold` stows either one against the back.
 
 ![wings](docs/images/wings.png)
 
-See [docs/wings.md](docs/wings.md) for the anatomy behind the proportions.
+`back_wings()` carries the placement — the shoulder-blade anchor, the span
+direction, the roll that lays the root down the flank instead of leaving it
+projecting into the air behind the figure, and the sink that welds it into the
+torso so it prints attached rather than hairline-joined. See
+[docs/wings.md](docs/wings.md) for the anatomy behind the proportions.
 
 They also **change the body that carries them**. A wing is powered by the
 pectoralis and latissimus anchored on the trunk, so attaching one broadens the
