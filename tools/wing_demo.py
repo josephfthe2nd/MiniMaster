@@ -2,8 +2,8 @@
 
     PYTHONPATH=. python tools/wing_demo.py            # writes docs/images/wings.png + wing_rig.png
 
-``wings.png``     back and profile views of a plain body, membrane wings and
-                  feathered wings, each spread and folded (a pose of the rig).
+``wings.png``     back and profile views of a plain body, bat wings, dragon wings
+                  and feathered wings, spread; bat and feathered folded (a pose of the rig).
 ``wing_rig.png``  one wing, no body: the rig through rest / half fold / folded /
                   raised / lowered / curled, in three views.
 ``wing_flap.png`` a flap cycle seen from the front, eight phases per style.
@@ -73,12 +73,12 @@ def panel_row(sc, columns, azimuth, elevation, size, scale):
 
 def main():
     sc = Scene()
-    columns = [(None, {}), ("membrane", {}), ("feathered", {}),
+    columns = [(None, {}), ("membrane", {}), ("dragon", {}), ("feathered", {}),
                ("membrane", {"fold": 1.0}), ("feathered", {"fold": 1.0})]
     # straight from behind and slightly above: an off-axis camera turns one wing
     # face-on and the other edge-on and reads as an asymmetry
-    back = panel_row(sc, columns, 180.0, 18.0, (440, 640), 1.55)
-    side = panel_row(sc, columns, 270.0, 6.0, (440, 640), 1.30)
+    back = panel_row(sc, columns, 180.0, 18.0, (440, 640), 1.9)
+    side = panel_row(sc, columns, 270.0, 6.0, (440, 640), 1.6)
     sheet = np.concatenate([back, side], axis=0)
     po.write_png("docs/images/wings.png", sheet)
     print("wrote docs/images/wings.png", sheet.shape)

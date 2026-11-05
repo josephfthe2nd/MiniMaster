@@ -419,7 +419,7 @@ BUILDERS = {"tail": make_tail, "horn": make_horn, "wing": make_wing}
 # units behind the figure, touching only at a point) to "down the flank",
 # which is where a bat's plagiopatagium actually runs. See back_wings().
 WING_ANCHOR = (0.84, 4.39, -0.73)
-WING_UP_HINT = (1.0, 1.5, 0.2)
+WING_UP_HINT = (1.0, 1.4, -0.45)
 WING_ROLL = -95.0
 # and sunk into the back, because a wing that only grazes the skin is joined
 # along a hairline: at offset 0 just 2% of the root lies inside the torso,
@@ -494,9 +494,9 @@ class Appendage:
             hint = hint * np.array([-1.0, 1.0, 1.0])
         anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
         anchor.offset = self.offset
-        roll = self.roll
         if self.root_point is not None:
-            roll = self._roll_toward_root(anchor, body_v, idx)
+            return self._rooted_frame(anchor, body_v, idx)
+        roll = self.roll
         rot = _euler(np.radians([roll, 0.0, 0.0]))
         if idx == 1:
             # The mirrored anchor already carries a mirrored tangent, and
@@ -507,6 +507,43 @@ class Appendage:
             # reflection, so the pair stays a mirror image at any roll angle.
             rot = np.diag([1.0, -1.0, 1.0]) @ rot
         return anchor_matrix(anchor, body_v, self.scale, rot)
+
+    def _rooted_frame(self, anchor, body_v, idx) -> np.ndarray:
+        """Placement of an appendage that has a ROOT POINT, built from body-space
+        vectors rather than from the anchor quad's frame.
+
+        The anchor's tangent frame comes from ONE quad of the morphed body, so a
+        shoulder or pectoral slider re-aims it: the same constants gave a span
+        axis 19.5 degrees different on the plain body and on the anatomy-adjusted
+        one, and the wing's rake was an accident of the sliders. Here the span
+        axis is the hint itself, the chord points at the root (so the root is
+        in-plane on the back), and only the ORIGIN follows the body, sunk a fixed
+        distance into the back. The right wing is the exact mirror of the left.
+        """
+        resolved, basis = anchor.resolve(body_v)
+        pt = resolved - basis[:, 2] * anchor.offset  # the surface point, before any sink
+        back = np.array([0.0, 0.0, -1.0])            # MakeHuman: the back faces -Z
+        # sink a fixed distance straight into the back, not along one quad's normal
+        origin = pt + back * self.offset
+        x = np.asarray(self.up_hint, dtype=np.float64)
+        rp = np.asarray(self.root_point, dtype=np.float64)
+        mirrored = idx == 1
+        if mirrored:
+            x = x * np.array([-1.0, 1.0, 1.0])
+            rp = rp * np.array([-1.0, 1.0, 1.0])
+        x = x / np.linalg.norm(x)
+        z = rp - origin
+        z = z - float(z @ x) * x                    # the part perpendicular to the span axis
+        z = z / max(float(np.linalg.norm(z)), 1e-12)
+        y = np.cross(z, x)                          # right-handed (x, y, z) for the left wing
+        if mirrored:
+            # the exact mirror of the left frame: (x', y', z') = D (x, y, z) with
+            # D = diag(-1,1,1), which flips handedness -- so y' = -(z' x x')
+            y = -y
+        m = np.eye(4)
+        m[:3, :3] = np.stack([x, y, z], axis=1) * float(self.scale)
+        m[:3, 3] = origin
+        return m
 
     def _roll_toward_root(self, anchor, body_v, idx) -> float:
         """Roll (degrees about the span axis) that puts the attachment line in

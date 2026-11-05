@@ -34,7 +34,7 @@ posed mesh on the body.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -129,9 +129,17 @@ class PoseControls:
         so the hand trails the wrist -- hanging below it when the wing is raised --
         instead of the whole wing swinging like a plank."""
         ph = np.radians(phase_deg)
+        up = max(0.0, float(np.sin(ph)))                        # 0 on the downstroke
         c = cls(raise_=amp * float(np.sin(ph)),
                 wrist_flex=-0.6 * amp * float(np.sin(ph - np.radians(40.0))),
-                curl=0.35 * amp * float(np.sin(ph - np.radians(70.0))) + 0.3 * amp * 0.35)
+                curl=0.35 * amp * float(np.sin(ph - np.radians(70.0))) + 0.3 * amp * 0.35,
+                # the upstroke is not the downstroke played backwards: the arm
+                # half-folds and the fingers close to shed the air, then the arm
+                # extends and the hand pronates for the power stroke
+                fold=0.30 * max(0.0, float(np.sin(ph + np.radians(20.0)))),
+                fan=1.0 - 0.30 * up,
+                twist=-15.0 * float(np.sin(ph + np.radians(90.0))),
+                swing=8.0 * float(np.cos(ph)))
         for k, v in kw.items():
             setattr(c, k, v)
         return c
@@ -164,11 +172,16 @@ PRESETS = {
 }
 
 
-def clamp_controls(c: "PoseControls") -> "PoseControls":
-    """The controls limited to what the joints can do."""
+def clamp_controls(c: "PoseControls", fan_range=None) -> "PoseControls":
+    """A copy of the controls limited to what the joints can do (the caller's
+    object is left alone). ``fan_range`` narrows ``fan`` for a skeleton whose
+    skin cannot take the full range (a membrane tears long before a feather)."""
+    out = replace(c)
     for name, (lo, hi) in LIMITS.items():
-        setattr(c, name, float(np.clip(getattr(c, name), lo, hi)))
-    return c
+        if name == "fan" and fan_range is not None:
+            lo, hi = fan_range
+        setattr(out, name, float(np.clip(getattr(c, name), lo, hi)))
+    return out
 
 
 # How far a membrane panel can close before it has to buckle into a pleat.
@@ -410,8 +423,11 @@ class WingRig:
             dv = np.gradient(new_mid, axis=1)
             nrm = np.cross(du, dv)
             nrm /= np.maximum(np.linalg.norm(nrm, axis=2, keepdims=True), 1e-12)
-            flip = np.einsum("ijk,ijk->ij", nrm, up) < 0.0
-            nrm[flip] *= -1.0
+            # Keep the grid's own orientation. Flipping cells toward the skinned
+            # "up" vector looked safe but turned the slab inside out wherever a
+            # panel folded over itself (signed volume fell from +0.75 to -0.03 as
+            # the wing stowed): a surface that doubles back is still wound
+            # consistently, and the solid stays valid.
             pos[:nv] = (new_mid + nrm * r_half[..., None]).reshape(-1, 3)
             pos[nv:2 * nv] = (new_mid - nrm * r_half[..., None]).reshape(-1, 3)
         return posed
@@ -459,10 +475,11 @@ class WingRig:
         """Joint rotations (wing frame) for the animator-level controls."""
         if isinstance(controls, str):                       # a named preset
             controls = PoseControls(**PRESETS[controls])
-        c = controls or PoseControls()
+        c = replace(controls) if controls is not None else PoseControls()
         for k, v in kw.items():
             setattr(c, k, v)
-        return self.skeleton.controls_to_pose(clamp_controls(c))
+        return self.skeleton.controls_to_pose(
+            clamp_controls(c, getattr(self.skeleton, "fan_range", None)))
 
     def pose(self, controls: PoseControls | None = None, **kw) -> Mesh:
         """Convenience: ``rig.pose(fold=1.0)`` or ``rig.pose(raise_=40)``."""

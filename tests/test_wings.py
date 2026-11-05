@@ -227,7 +227,7 @@ def test_emargination_notches_the_leading_vane_near_the_tip():
     cut = W._blade(5.0, 1.0, 0.15, curl=0.0, sweep=0.0, emarg=0.7)
     def lead_width(mesh):
         v = mesh.vertices
-        sel = v[(v[:, 0] > 3.0) & (v[:, 0] < 3.4)]
+        sel = v[(v[:, 0] > 3.0) & (v[:, 0] < 3.8)]      # the notched stretch, to near the tip
         return -sel[:, 2].min()
     assert lead_width(cut) < 0.6 * lead_width(plain)
     assert cut.integrity_report()["watertight"]

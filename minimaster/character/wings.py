@@ -184,6 +184,20 @@ def _resample(polyline, count: int) -> np.ndarray:
     return out
 
 
+def _surface_height(flat_xz, flat_y, query_xz, k: int = 4):
+    """Height of a sampled surface under plan points: inverse-square weighting of
+    the ``k`` nearest grid vertices. Exact where a point sits on a vertex (the
+    bone columns of the membrane do), and local, so a bone follows the skin
+    instead of floating on a smoothed copy of it (a 0.6-unit Gaussian let digit IV
+    break through the underside as a slit)."""
+    q = np.atleast_2d(query_xz)
+    d2 = ((q[:, None, :] - flat_xz[None, :, :]) ** 2).sum(axis=2)
+    idx = np.argpartition(d2, k - 1, axis=1)[:, :k]
+    dk = np.take_along_axis(d2, idx, axis=1)
+    w = 1.0 / (dk + 1e-9)
+    return (w * flat_y[idx]).sum(axis=1) / w.sum(axis=1)
+
+
 def _lift(flat_xz, flat_y, query_xz, sigma):
     """Gaussian-weighted height lookup, to sit bones on the membrane surface.
 
@@ -277,15 +291,15 @@ def _rotation_about(axis, deg) -> np.ndarray:
 BAT_SPEC = {
     "humerus": (0.72, 25.0),          # (length, absolute angle)
     "forearm": (1.00, -30.0),
-    "thumb": (0.28, -50.0),           # bone length, angle off the forearm axis
-    "claw": 0.12,                     # claw length beyond the thumb bone
+    "thumb": (0.22, -50.0),           # bone length, angle off the forearm axis
+    "claw": 0.08,                     # claw length beyond the thumb bone: a small hook
     # name: metacarpal, phalanges, fan angle of the metacarpal off the forearm
     # axis, and the bend (degrees, + = aft) added at each knuckle
     "digits": {
-        "II": {"mc": 0.60, "p": (0.13,), "fan": 36.0, "bends": (6.0,)},
-        "III": {"mc": 0.71, "p": (0.57, 0.70), "fan": 47.0, "bends": (3.0, 46.0)},
-        "IV": {"mc": 0.70, "p": (0.43, 0.33), "fan": 76.0, "bends": (8.0, 30.0)},
-        "V": {"mc": 0.73, "p": (0.36, 0.30), "fan": 106.0, "bends": (6.0, 24.0)},
+        "II": {"mc": 0.50, "p": (0.13,), "fan": 40.0, "bends": (6.0,)},
+        "III": {"mc": 0.71, "p": (0.57, 0.70), "fan": 50.0, "bends": (4.0, 46.0)},
+        "IV": {"mc": 0.70, "p": (0.43, 0.40), "fan": 76.0, "bends": (8.0, 26.0)},
+        "V": {"mc": 0.73, "p": (0.36, 0.30), "fan": 104.0, "bends": (6.0, 24.0)},
     },
 }
 # Folding closes the Z of the arm: the humerus tucks back along the BODY (the
@@ -300,8 +314,9 @@ BAT_SPEC["fold"] = (-10.0, -100.0, 172.0)   # shoulder offset, elbow, wrist swin
 # back along the one before (180 deg less the rest bend), so metacarpal, P1 and P2
 # end up three parallel bars -- which is what cuts a folded wing to ~0.15 of its
 # spread. (The photographs show MCP +100..150 and IP +120..160.)
-BAT_SPEC["knuckle_fold"] = 0.60             # fraction of a full concertina at each knuckle
+BAT_SPEC["knuckle_fold"] = 0.90             # fraction of a full concertina at each knuckle
 BAT_SPEC["fold_lift"] = 12.0                # degrees a stowed wing is lifted off its (buried) plane
+BAT_SPEC["fan_range"] = (0.55, 1.2)         # the sheet cannot take a fan closed much past this
 
 # A bird's hand is short (carpometacarpus + one finger) and its ulna long; the
 # flight surface is feathers rooted along ulna and hand, not skin between fingers.
@@ -312,7 +327,7 @@ BIRD_SPEC = {
     # carpometacarpus + one phalanx, 0.58 FA in all; the primaries root along it
     "digits": {"III": {"mc": 0.36, "p": (0.22,), "fan": 15.0, "bends": (3.0,)}},
     "fold": (-10.0, -140.0, 172.0),
-    "fold_lift": 16.0,
+    "fold_lift": 12.0,
     "curl_gain": 0.35,         # the hand flexes as a unit: a curl must not split the fan
 }
 _NUM = {"II": 2, "III": 3, "IV": 4, "V": 5}
@@ -339,6 +354,8 @@ class WingSkeleton:
         self.bends = {n: list(d["bends"]) for n, d in spec["digits"].items()}
         self.curl_gain = spec.get("curl_gain", 1.0)
         self.fold_lift = float(spec.get("fold_lift", 0.0))
+        # skin tears long before a feather does, so a membrane's fan is clamped
+        self.fan_range = tuple(spec.get("fan_range", (0.0, 1.5)))
         self.feathers: list[dict] = []
         J: dict[str, np.ndarray] = {}
         P: dict[str, str | None] = {}
@@ -492,6 +509,9 @@ class WingSkeleton:
         lift = c.raise_ + self.fold_lift * f
         pose["shoulder"] = _euler_from_matrix(
             m3.rot_y(-swing_total) @ m3.rot_z(-lift) @ m3.rot_x(c.twist))
+        planar: dict[str, tuple[float, float, float]] = {
+            "shoulder": swing_back(swing_total), "elbow": swing_back(e_fold * f),
+            "wrist": swing_back(w_fold * f)}
         pose["elbow"] = swing_back(e_fold * f)
         # The wrist hinges in the wing plane (the fold) and cocks out of it
         # (wrist_flex, hand_twist) about the HAND's own axes.
@@ -503,12 +523,14 @@ class WingSkeleton:
             @ _rotation_about(hand_axis, c.hand_twist))
         # the thumb tucks along the forearm instead of standing out sideways
         pose["thumb_cmc"] = swing_back(70.0 * f)
+        planar["thumb_cmc"] = pose["thumb_cmc"]
         # the fan closes toward the forearm axis as the wing folds
         fan = float(np.clip(c.fan, 0.0, 1.5))
         s = fan * (1.0 - 0.92 * f)
         for name, phi in self.fan.items():
             n = _NUM[name]
             pose[f"d{n}_cmc"] = swing_back(phi * (s - 1.0))
+            planar[f"d{n}_cmc"] = pose[f"d{n}_cmc"]
         if c.curl:
             for name, chain in self.chains.items():
                 for jn in chain[1:-1]:                    # mcp and ip knuckles
@@ -525,6 +547,7 @@ class WingSkeleton:
                 for jn, bend in zip(chain[1:-1], self.bends[name]):
                     amount = (180.0 - bend) * self.knuckle_fold
                     pose[jn] = compose(pose.get(jn, (0.0, 0.0, 0.0)), swing_back(amount * k))
+                    planar[jn] = compose(planar.get(jn, (0.0, 0.0, 0.0)), swing_back(amount * k))
         # Feathers fold like a closing fan: each turns about its own root toward
         # the folded direction, allowing for whatever its parent bone has done.
         # ``fan`` spreads the plumage about its own axis, independently of fold:
@@ -538,7 +561,11 @@ class WingSkeleton:
                 y_eff = 90.0 + (y0 - 90.0) * float(np.sqrt(fan))
             else:
                 y_eff = y0
-            now = self._heading_after(pose, fe["parent"], y0)
+            # headings come from the IN-PLANE rotations only: lifting, twisting or
+            # cocking the wing tilts its plane but must not read as a change of
+            # where the feathers point within it (raise 90 once made P1-P10 span
+            # 123 deg instead of 62)
+            now = self._heading_after(planar, fe["parent"], y0)
             want = y_eff + (self.body_angle + fe["target"] - y_eff) * f
             # the shortest way round, so a feather never spins the long way
             delta = (want - now + 180.0) % 360.0 - 180.0
@@ -572,14 +599,14 @@ def _scallop_arc(a, b, toward, depth_frac, k):
 # gap by gap on a real wing (measured on flying-fox photographs): the outer
 # panel is taut, the IV-V gap is the deep one, and the edge from V back to the
 # body is one long shallow arc. Dragon art exaggerates every gap.
-SCALLOP_BAT = {"III-IV": 0.03, "IV-V": 0.26, "V-root": 0.09}
+SCALLOP_BAT = {"III-IV": 0.03, "IV-V": 0.26, "V-root": 0.05}
 SCALLOP_DRAGON = {"III-IV": 0.40, "IV-V": 0.50, "V-root": 0.30}
 
 
 def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
                     camber=CAMBER, scallop=None, root_chord=1.4,
                     billow=0.04, propatagium=True, bones=True, rows=22,
-                    spike=0.10, root=None, spec=None):
+                    spike=0.10, bone_scale=1.0, root=None, spec=None):
     """A patagium stretched over a knuckled forelimb, as a skeleton + pieces.
 
     The sheet is a *fan*: every grid line runs from the arm out to the free
@@ -707,12 +734,13 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
     # -- lift the skeleton onto the surface, then lay the bones on it ----
     flat_xz = grid[:, :, [0, 2]].reshape(-1, 2)
     flat_y = grid[:, :, 1].reshape(-1)
-    sigma_l = 0.045 * span
-    sk.lift_joints(lambda q: _lift(flat_xz, flat_y, q, sigma_l))
+    height_at = lambda q: _surface_height(flat_xz, flat_y, q)        # noqa: E731
+    sk.lift_joints(height_at)
     # the thumb hangs ventrally: tilted about 30 degrees off the wing plane
     sk.joints["thumb_tip"][1] += 0.5 * float(np.linalg.norm(sk.thumb - sk.wrist))
     if bones:
-        parts += _membrane_bones(sk, thickness, spike, (spec or BAT_SPEC).get("claw", 0.12))
+        parts += _membrane_bones(sk, thickness, spike, (spec or BAT_SPEC).get("claw", 0.12),
+                                 height_at, bone_scale)
     return sk, parts
 
 
@@ -722,7 +750,7 @@ SPIKE_SCALE = {"II": 0.0, "III": 1.0, "IV": 0.45, "V": 0.45}
 
 
 def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
-                    CLAW: float = 0.12) -> list[Piece]:
+                    CLAW: float = 0.12, height_at=None, bone_scale: float = 1.0) -> list[Piece]:
     """Arm and finger bones: tubes through the (lifted) joints, so they read as
     ridges under the skin, plus joint knobs, needle fingertips and the clawed
     thumb.
@@ -736,21 +764,29 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
     out: list[Piece] = []
     J = sk.joints
     fa = sk.scale                                  # forearm length in wing units
-    floor = 0.60 * thickness
+    floor = 0.72 * thickness * bone_scale
 
     def R(frac):
-        return max(frac * fa, floor)
+        return max(frac * fa * bone_scale, floor)
 
-    up = np.array([0.0, -0.06 * thickness, 0.0])   # ridges stand proud on both faces
+    up = np.zeros(3)                               # centred on the sheet: proud on both faces
 
-    def tube(points, r0, r1, per, sides=8):
-        pts = _polyline([p + up for p in points], per)
+    def on_skin(points):
+        """Densify a polyline and drop each sample onto the sheet: the bone
+        follows the skin's own height (camber, billow) along its whole length."""
+        pp = _polyline(points, 6)
+        if height_at is not None:
+            pp[:, 1] = height_at(pp[:, [0, 2]])
+        return pp
+
+    def tube(points, r0, r1, per, sides=8, skin=False):
+        pts = on_skin(points) if skin else _polyline([p + up for p in points], per)
         t = np.linspace(0.0, 1.0, len(pts))
         return _tube(pts, r0 + (r1 - r0) * t, sides)
 
     # arm: shoulder -> elbow -> wrist as one smooth tube over the two arm bones
     out.append(Piece("arm", tube([J["shoulder"], J["elbow"], J["wrist"]],
-                                 R(0.050), R(0.034), 6, 9), chain=("elbow", "wrist")))
+                                 R(0.050), R(0.034), 6, 9, skin=True), chain=("elbow", "wrist")))
     out.append(Piece("wrist_knob", _ball(J["wrist"] + up, 1.25 * R(0.034)), bone="wrist"))
     out.append(Piece("elbow_knob", _ball(J["elbow"] + up, 1.15 * R(0.042)), bone="elbow"))
 
@@ -763,7 +799,7 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
         if SPIKE_SCALE[name] > 0.0 and spike > 0.0:
             pts = pts + [pts[-1] + d * spike * SPIKE_SCALE[name] * fa]
         base = R(0.030) if name != "II" else R(0.024)
-        pp = _polyline([p + up for p in pts], 6)
+        pp = on_skin(pts)
         t = np.linspace(0.0, 1.0, len(pp))
         # taper to about half by the last joint, then to a needle over the spike
         has_spike = SPIKE_SCALE[name] > 0.0 and spike > 0.0
@@ -779,8 +815,9 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
     out.append(Piece("thumb", tube([w, th], R(0.028), R(0.020), 4, 7), bone="thumb_tip"))
     fwd = (th - w) / max(float(np.linalg.norm(th - w)), 1e-9)
     claw_len = CLAW * fa
-    mid = th + fwd * 0.55 * claw_len + np.array([0.0, 0.25 * claw_len, 0.0])
-    tip = th + fwd * 0.85 * claw_len + np.array([0.0, 0.90 * claw_len, 0.0])
+    # the hook curls forward and up (into the wing plane), so it reads from above
+    mid = th + fwd * 0.65 * claw_len + np.array([0.0, -0.05 * claw_len, 0.0])
+    tip = th + fwd * 0.90 * claw_len + np.array([0.0, -0.45 * claw_len, 0.0])
     out.append(Piece("claw", _tube(np.array([th + up, mid + up, tip]),
                                    np.array([R(0.022), 0.6 * R(0.022), 0.15 * R(0.022)]), 7),
                      bone="thumb_tip"))
@@ -788,14 +825,29 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
 
 
 def membrane_rig(**kw) -> WingRig:
-    """A bat/dragon wing with its skeleton, skin weights and poses."""
+    """A bat wing with its skeleton, skin weights and poses."""
     sk, pieces = membrane_pieces(**kw)
     return WingRig(sk, pieces)
+
+
+# Dragon art exaggerates what a bat wing already is: pinched, deep scallops in
+# every gap, spiny hooked tips, a flatter sheet over heavier ribs.
+DRAGON = dict(scallop=SCALLOP_DRAGON, spike=0.22, camber=0.04, bone_scale=1.35)
+
+
+def dragon_rig(**kw) -> WingRig:
+    """The same skeleton and rig as the bat, in the exaggerated dragon style."""
+    return membrane_rig(**{**DRAGON, **kw})
 
 
 def membrane_wing(fold=0.0, **kw) -> Mesh:
     """The membrane wing as one mesh (spread, or folded by posing the rig)."""
     rig = membrane_rig(**kw)
+    return rig.pose(fold=fold) if fold else rig.rest_mesh
+
+
+def dragon_wing(fold=0.0, **kw) -> Mesh:
+    rig = dragon_rig(**kw)
     return rig.pose(fold=fold) if fold else rig.rest_mesh
 
 
@@ -825,7 +877,7 @@ def _bump(t, centre, sigma):
 
 def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
            lead_frac=0.30, tip=0.74, tip_pow=1.8, emarg=0.0, emarg_in=0.0,
-           calamus=0.10, tip_floor=0.07, n=11, m=8) -> Mesh:
+           calamus=0.10, tip_floor=0.07, root_floor=0.07, n=11, m=8) -> Mesh:
     """One feather: a thin curved blade with a raised shaft down its middle.
 
     A bare quill (the calamus) runs the first tenth of the length, then the
@@ -833,24 +885,37 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
     tip, where it closes in an ogive. ``lead_frac`` is the share of the vane in
     front of the shaft: the narrow leading vane against the broad trailing one
     is what makes a flight feather aerodynamic, and it shows in silhouette.
-    ``tip_floor`` is the width (fraction of ``width``) the tip closes down to.
-    ``emarg`` notches the leading vane near the tip (and ``emarg_in`` the
-    trailing one a little earlier): the slotted look of soaring primaries that
-    lets the outer feathers separate into fingers. Because the vane stays broad
+    ``tip_floor`` is the width (fraction of ``width``) the tip closes down to and
+    ``root_floor`` the width of the quill end (a covert's quill must not shrink to
+    a spearhead that pokes out of the feather in front of it). ``emarg`` narrows
+    the leading vane from ~60% of the length and keeps it narrower to the tip (and
+    ``emarg_in`` the trailing one a little earlier): the slotted look of soaring
+    primaries that lets the outer feathers separate into fingers. Because the vane stays broad
     to the tip, neighbours overlap along their length instead of touching at a
     point.
     """
-    t = np.linspace(0.0, 1.0, n + 1)
+    # Sample the length unevenly: uniform along the body, but dense toward the
+    # very tip, where the outline curves hardest. A tip closed in 2-3 straight
+    # segments reads as a chamfer, and a row of them as a saw.
+    n_tip = max(6, n // 2)
+    t = np.concatenate([np.linspace(0.0, tip, max(n - n_tip, 4), endpoint=False),
+                        tip + (1.0 - tip) * np.sin(np.linspace(0.0, np.pi / 2.0, n_tip + 1))])
+    n = len(t) - 1
     rise = np.clip((t - calamus) / (0.42 - calamus), 0.0, 1.0) ** 0.8
     ogive = np.clip(1.0 - (np.clip(t - tip, 0.0, None) / (1.0 - tip)) ** tip_pow,
                     0.0, 1.0) ** 0.5
     # the quill end stays thin, but the tip closes onto a rounded cap of width
     # ``tip_floor`` rather than a point: a real feather ends in a curve, and a
     # point read as a saw along the trailing edge
-    floor = np.where(t > 0.5, tip_floor, 0.07)
+    floor = np.where(t > 0.5, tip_floor, root_floor)
     W = width * np.maximum(rise * ogive, floor)
-    wl = lead_frac * W * (1.0 - emarg * _bump(t, 0.62, 0.08))
-    wt = (1.0 - lead_frac) * W * (1.0 - emarg_in * _bump(t, 0.56, 0.06))
+
+    def step(x, a, b):
+        u = np.clip((x - a) / (b - a), 0.0, 1.0)
+        return u * u * (3.0 - 2.0 * u)
+
+    wl = lead_frac * W * (1.0 - emarg * step(t, 0.56, 0.70))     # narrows and STAYS narrow
+    wt = (1.0 - lead_frac) * W * (1.0 - emarg_in * step(t, 0.52, 0.66))
     v = np.linspace(-1.0, 1.0, m + 1)
     z = np.where(v[None, :] < 0, v[None, :] * wl[:, None], v[None, :] * wt[:, None])
     grid = np.zeros((n + 1, m + 1, 3))
@@ -973,24 +1038,26 @@ def _feather_layout(sk: WingSkeleton, n_pri: int, n_sec: int, n_ter: int, n_sca:
     roots = _along(hand, fr) + np.array([0.0, 0.0, 0.03 * s])     # calamus on the trailing side
     for i in range(n_pri - 1, -1, -1):                            # outermost first = lowest
         k = int(round(i * 9 / max(n_pri - 1, 1)))
-        L = PRIMARY_RATIO[k] * FA_P * s
+        L = PRIMARY_RATIO[k] * FA_P * s * _jit(i, 0.035)
         outer = k >= 5
         parent = "wrist" if fr[i] <= 0.5 else "d3_mcp"
         out.append(common(row="primary", i=i + 1, root=roots[i], parent=parent,
-                          yaw=70.0 - 62.0 * i / max(n_pri - 1, 1),
+                          yaw=70.0 - 62.0 * i / max(n_pri - 1, 1)
+                          + (1.0 * float(np.sin(5.1 * i)) if k >= 4 else 0.0),
                           length=L, width=PRIMARY_WIDTH[k] * L,
                           lead=0.27 if outer else 0.37,
                           emarg=0.7 if k >= 4 else 0.0, emarg_in=0.3 if k >= 6 else 0.0,
-                          tip_at=0.78, tip_pow=2.0, tip_floor=0.12, fold_to=2.0,
+                          tip_at=0.78, tip_pow=2.0, tip_floor=0.22, fold_to=2.0,
                           roll=-6.0 - 8.0 * (1.0 - i / max(n_pri - 1, 1)), layer=layer))
         layer += 1
     fr = np.linspace(0.0, 1.0, n_sec)
     roots = _along([J["wrist"], J["elbow"]], fr) + np.array([0.0, 0.0, 0.06 * s])
     for i in range(n_sec):
         k = int(round(i * (len(SECONDARY_RATIO) - 1) / max(n_sec - 1, 1)))
-        L = SECONDARY_RATIO[k] * FA_P * s
+        L = SECONDARY_RATIO[k] * FA_P * s * _jit(i + 20, 0.035)
         out.append(common(row="secondary", i=i + 1, root=roots[i], parent="elbow",
-                          yaw=78.0 + 22.0 * fr[i], length=L, width=0.23 * L,
+                          yaw=78.0 + 22.0 * fr[i] + 1.5 * float(np.sin(3.7 * i)),
+                          length=L, width=0.23 * L,
                           lead=0.40, tip_at=0.82, tip_pow=3.2, tip_floor=0.30, fold_to=4.0,
                           roll=-9.0 - 3.0 * fr[i], layer=layer))
         layer += 1
@@ -1009,14 +1076,16 @@ def _feather_layout(sk: WingSkeleton, n_pri: int, n_sec: int, n_ter: int, n_sca:
     # scapulars: soft feathers over the humerus root that fair the wing into the back
     for i, f in enumerate(np.linspace(0.05, 0.60, n_sca)):
         root = J["shoulder"] + (J["elbow"] - J["shoulder"]) * f + np.array([0.0, 0.0, 0.12 * s])
-        L = 0.74 * s
+        # a near-parallel, overlapping rank that trails along the back (as on the
+        # flamingo and galah); fanning them 30 deg made all ten tips converge
+        L = 0.74 * s * (1.0 - 0.18 * i / max(n_sca - 1, 1))
         out.append(common(row="scapular", i=i + 1, root=root, parent="shoulder",
-                          yaw=100.0 + 30.0 * i / max(n_sca - 1, 1), length=L, width=0.25 * L,
+                          yaw=108.0 + 6.0 * i / max(n_sca - 1, 1), length=L, width=0.25 * L,
                           lead=0.40, tip_at=0.74, tip_pow=2.2, tip_floor=0.28, fold_to=8.0,
                           roll=-9.0, layer=layer))
         layer += 1
     # alula: three small stiff feathers on the thumb
-    for i, ln in enumerate((0.30, 0.41, 0.50)):
+    for i, ln in enumerate((0.20, 0.26, 0.32)):
         root = J["wrist"] + (J["thumb_tip"] - J["wrist"]) * (0.35 + 0.3 * i)
         out.append(common(row="alula", i=i + 1, root=root, parent="thumb_cmc",
                           yaw=22.0 - 5.0 * i, length=ln * s, width=0.22 * ln * s,
@@ -1082,9 +1151,8 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
             elif row == "secondary":
                 covert(f"{tag}greater{i:02d}", fe, 0.375 * FA_P * s, 0.55, 0.05, 1, b,
                        sec_pitch, 0.5, 3.0, ventral)
-                if not ventral:
-                    covert(f"median{i:02d}", fe, 0.22 * FA_P * s, 0.70, 0.06, 2, b,
-                           sec_pitch, 0.25, 6.0, ventral, tip_floor=0.35)
+                covert(f"{tag}median{i:02d}", fe, 0.22 * FA_P * s, 0.70, 0.06, 2, b,
+                       sec_pitch, 0.25, 6.0, ventral, tip_floor=0.35)
     # lesser / marginal coverts: scale-like rows along the arm. Their roots sit
     # just BEHIND the bone line and their tips point straight back, so the arm is
     # buried under rounded overlapping scales and no quill ends poke forward.
@@ -1094,14 +1162,29 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
         n = 18 - 2 * r
         pts = _along(arm, np.linspace(0.02, 0.98, n) + (0.5 / n) * (r % 2))
         for j, p in enumerate(pts):
-            root = p + np.array([0.0, 0.0, 0.02 * s - 0.05 * s * r])
+            root = p + np.array([0.0, 0.0, 0.02 * s - 0.02 * s * r])
             root[1] = height(root[0]) - tier * 0.7 * thickness
             hf = min(host, key=lambda f: float(np.linalg.norm(f["root"] - root)))
             blade = _blade(length * FA_P * s * _jit(j + 5 * r), 0.7 * length * FA_P * s,
                            thickness * 0.8, curl=0.03, lead_frac=0.4, tip=0.70, tip_pow=2.4,
-                           calamus=0.0, tip_floor=0.35, n=8, m=5)
+                           calamus=0.0, tip_floor=0.35, root_floor=0.22, n=8, m=5)
             out.append(Piece(f"lesser{r}_{j:02d}", _place_feather(blade, root, 90.0, -12.0),
                              bone=bone_of[(hf["row"], hf["i"])]))
+    # ... and the same on the underside, so the leading edge is a smooth feathered
+    # band on both faces instead of a bare rod seen from below
+    if underwing:
+        for r, (length, tier) in enumerate(((0.14, 1), (0.12, 2))):
+            n = 18 - 2 * r
+            pts = _along(arm, np.linspace(0.02, 0.98, n) + (0.5 / n) * (r % 2))
+            for j, p in enumerate(pts):
+                root = p + np.array([0.0, 0.0, 0.02 * s - 0.02 * s * r])
+                root[1] = height(root[0]) + tier * 0.6 * thickness
+                hf = min(host, key=lambda f: float(np.linalg.norm(f["root"] - root)))
+                blade = _blade(length * FA_P * s * _jit(j + 9 * r), 0.7 * length * FA_P * s,
+                               thickness * 0.8, curl=0.03, lead_frac=0.4, tip=0.70, tip_pow=2.4,
+                               calamus=0.0, tip_floor=0.35, root_floor=0.22, n=8, m=5)
+                out.append(Piece(f"under_lesser{r}_{j:02d}", _place_feather(blade, root, 90.0, 12.0),
+                                 bone=bone_of[(hf["row"], hf["i"])]))
     return out
 
 
@@ -1116,8 +1199,8 @@ def _feather_bones(sk, height, s) -> list[Piece]:
         t = np.linspace(0.0, 1.0, len(pts))
         return _tube(pts, r0 + (r1 - r0) * t, 9)
 
-    out.append(Piece("arm", tube([J["shoulder"], J["elbow"], J["wrist"]], 0.052 * s,
-                                 0.038 * s, 6), chain=("elbow", "wrist")))
+    out.append(Piece("arm", tube([J["shoulder"], J["elbow"], J["wrist"]], 0.030 * s,
+                                 0.022 * s, 6), chain=("elbow", "wrist")))
     out.append(Piece("hand", tube([J["wrist"], J["d3_mcp"], J["d3_tip"]], 0.030 * s,
                                   0.012 * s, 5), chain=("d3_mcp", "d3_tip")))
     out.append(Piece("wrist_knob", _ball(J["wrist"] + np.array([0, -0.02 * s, 0]), 0.045 * s),
@@ -1139,8 +1222,8 @@ def feathered_wing(fold=0.0, **kw) -> Mesh:
 
 # --------------------------------------------------------------------------
 
-STYLES = {"membrane": membrane_wing, "feathered": feathered_wing}
-RIGS = {"membrane": membrane_rig, "feathered": feathered_rig}
+STYLES = {"membrane": membrane_wing, "dragon": dragon_wing, "feathered": feathered_wing}
+RIGS = {"membrane": membrane_rig, "dragon": dragon_rig, "feathered": feathered_rig}
 
 
 def make_wing(style: str = "membrane", **kw) -> Mesh:

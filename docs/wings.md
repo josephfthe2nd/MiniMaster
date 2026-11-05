@@ -49,7 +49,7 @@ chiropteran morphometrics; angles are in the wing plane, from the span axis (+X)
 toward the trailing edge (+Z).
 
 An independent check on the result: the planform-area aspect ratio of the membrane
-wing comes out at **5.1**. The literature gives 6–7 for flying foxes; the roost photograph —
+wing comes out at **4.7**. The literature gives 6–7 for flying foxes; the roost photograph —
 foreshortened, wrist flexed — gives 4.7–5.8; the build sits between them
 (`test_membrane_planform_has_a_realistic_aspect_ratio` accepts 4.5–8, a paddle being below 3).
 
@@ -64,8 +64,8 @@ foreshortened, wrist flexed — gives 4.7–5.8; the build sits between them
 | digit IV | 0.70 + 0.43 + 0.33 FA | |
 | digit V | 0.73 + 0.36 + 0.30 FA | sweeps back toward the hip |
 | hooked tip | +24…+46° at the last knuckle | the falcate wingtip |
-| thumb | 0.28 FA + 0.12 FA claw | hangs ventrally, hooked |
-| fan off the forearm | II +36°, III +47°, IV +76°, V +106° | the skeleton and the roost silhouette give 32/56/87/127°; the literature aspect ratio (6–7) wants less. This sits between them (AR 5.1) and makes the wrist a visible forward corner, as in the photographs; II is held close to III so it lies inside the leading edge instead of standing out as a second horn |
+| thumb | 0.22 FA + 0.08 FA claw | a small hook that curls forward and up, so it reads from above |
+| fan off the forearm | II +40°, III +50°, IV +76°, V +104° | the skeleton and the roost silhouette give 32/56/87/127°; the literature aspect ratio (6–7) wants less. This sits between them (AR 4.7) and makes the wrist a visible forward corner, as in the photographs; II is held close to III so it lies inside the leading edge instead of standing out as a second horn |
 | root | ~1.0 FA, down the back to the waist | the plagiopatagium runs shoulder → hip |
 
 The earlier version had a nearly straight arm, single-bone digits, a 0.4 FA root and a
@@ -88,9 +88,11 @@ the hooked bone never pokes out in front of the sheet.
 | --- | --- | --- |
 | III–IV | 0.03 (taut) | 0.40 |
 | IV–V | 0.26 (the deep one) | 0.50 |
-| V → body | 0.09 (one long shallow arc) | 0.30 |
+| V → body | 0.05 (a long, nearly straight edge) | 0.30 |
 
-`SCALLOP_DRAGON` is a drop-in: `A.back_wings("membrane", scallop=W.SCALLOP_DRAGON)`. The
+The dragon is its own registered style, `A.back_wings("dragon")` / `W.make_wing_rig("dragon")`: the same
+skeleton and rig with `SCALLOP_DRAGON`, longer spiny tips, a flatter sheet and ribs 1.35× heavier
+(dragon art exaggerates what a bat wing already is). The
 digit tips end in short needles — III 0.10 FA, IV and V about half that, II none — and the
 scallop arcs meet them at a cusp.
 
@@ -164,7 +166,8 @@ never changes: a shell that is watertight at rest is watertight in every pose.
 | a finger or the arm | blended **only over its own chain's bones**, by proximity — it bends smoothly at its knuckles and is never pulled by the finger next door |
 | the membrane | blended over the arm and finger bones by distance in the wing plane; the **root edge is bound to a body bone**, so the sheet stays glued to the flank however the arm moves |
 
-**Controls** (all clamped to anatomical limits, `wingrig.LIMITS`):
+**Controls** (clamped to anatomical limits, `wingrig.LIMITS`; the caller's object is never
+modified):
 
 | control | meaning | range |
 | --- | --- | --- |
@@ -172,18 +175,33 @@ never changes: a shell that is watertight at rest is watertight in every pose.
 | `raise_` | shoulder elevation (flap) | −70° … +85° |
 | `swing` | humerus swung back (+) or forward | −30° … +85° |
 | `twist` | roll about the span axis | ±45° |
-| `fan` | finger spread, 0 together … 1 rest | 0 … 1.5 |
+| `fan` | finger spread, 0 together … 1 rest. A bird's primaries spread about the hand axis; a membrane clamps it to 0.55 … 1.2 (a sheet tears long before the fingers close) | 0 … 1.5 |
 | `curl` | finger knuckle flexion | −10° … 150° |
+| `wrist_flex` | cocks the hand out of the wing plane at the wrist, tip up (+) or drooping (−) | −60° … +45° |
+| `hand_twist` | rolls the hand about its own axis (wash-out) | ±30° |
 
 **Presets** (`wingrig.PRESETS`): `glide`, `half_fold`, `folded`, `upstroke` (wrist up, arm
-half-folded, leading edge edge-on), `downstroke`, `mid_downstroke`.
+half-folded, leading edge edge-on), `downstroke`, `mid_downstroke`. `PoseControls.flap(phase)`
+generates a cycle in which the shoulder leads while the wrist (40°) and the finger curl (70°) lag it,
+so the hand trails the wrist — hanging below it on the upstroke — instead of the whole wing swinging
+like a plank. The upstroke is not the downstroke played backwards: the arm half-folds and the fingers
+close to shed the air, then the arm extends and the hand pronates for the power stroke.
+
+Feather headings are computed from the **in-plane** rotations only, so lifting, twisting or cocking a
+wing tilts its plane without changing where the feathers point within it: the 3D angle between the
+first and last primary stays 61° under any raise, twist or wrist flex (a first version read the plan
+projection of the tilted frame and spread the fan to 166° at raise 100).
 
 **Folding.** Stowing closes the Z of the arm: the humerus tucks onto the **body line** (the
 direction from shoulder to root — *not* the frame's +Z, which on a real placement points
 down-and-outward, so folding toward it splays the wing sideways), the forearm swings forward
-onto it to an elbow interior of ~25°, the hand folds back along the forearm, the fan collapses,
-and each finger hairpins at its knuckles. Feathers fold like a closing fan, each turning about
-its own root until it lies along the body line.
+onto it to an elbow interior of ~25°, the hand folds back along the forearm (wrist 172°), the
+fan collapses, the thumb tucks along the forearm, and each finger folds like a concertina at its
+knuckles (90% of a full hairpin; the three bones end up roughly parallel). The stowed wing is also
+**lifted off its plane** (bat 12°, bird 12°): that plane is sunk into the back so a print is
+welded, and a wing lying along it would be buried in the torso. Feathers fold like a closing fan,
+each turning about its own root until it lies along the body line; scapulars, the alula and the
+lesser coverts fold with them.
 
 **The membrane in a fold.** Skinning moves the vertices that sit on a finger with that finger
 but leaves everything between two fingers wherever blended transforms drop it, and a closing
@@ -195,7 +213,10 @@ height √(L²−g²)/2, standing along the bones' own up direction, alternating
 way a closing fan zig-zags. Skin is elastic, so nothing pleats until a panel has closed by ~10%
 (otherwise a gentle finger curl inflates the hand like a balloon), and the fingers do not hairpin
 until the wing is past half folded, so a half-fold is a taut half-closed wing and not a scroll.
-The long inboard panel pleats less: it hangs as a drape.
+Each panel pleats in several fine lobes (1/2/2/3) rather than one bladder, the slab keeps its
+grid's own orientation (re-orienting cells toward a skinned "up" vector turned the whole shell inside
+out where a panel doubled back: signed volume fell from +0.75 to −0.03), and a stretch limiter pulls
+any edge back toward 1.15× its rest length. The long inboard panel pleats less: it hangs as a drape.
 
 **Validated** (`tests/test_wingrig.py`): the rest pose reproduces the mesh to 1e-12; weights are
 a partition of unity with ≤4 influences; rigid pieces use exactly one bone; a finger is pulled
@@ -227,10 +248,15 @@ air beside the figure. `WING_ROOT` is therefore a **body point** (the lower back
 The wing plane has to contain it: with a fixed roll the plane slopes forward as it descends the
 back, and the projected target landed on the *front of the belly* (a folded wing then poked out
 of the abdomen — the old placement measured 28 sampled vertices up to 0.85 units in front of the
-torso). When `Appendage.root_point` is set the roll is therefore **derived** so the plane contains
-both the span axis and the line to the root; the root is exactly in-plane and on the back for any
-body shape, the builder passes its plan coordinates to the wing, and `fold` stows the wing along
-the same line.
+torso). When `Appendage.root_point` is set the frame is therefore **built from body-space vectors**:
+the span axis is the hint itself (about 18° back from vertical in profile), the chord points at the
+root, and only the origin follows the body, sunk a fixed distance straight into the back. The
+root is exactly in-plane and on the back, the builder passes its plan coordinates to the wing, and
+`fold` stows the wing along the same line. (An earlier version projected the hint into the tangent
+plane of one quad of the morphed body, so a shoulder or pectoral slider re-aimed the whole wing —
+19.5° between the plain and the anatomy-adjusted body, with the spread membrane anywhere from
+flat to 6 units behind the back. `test_the_wings_orientation_does_not_depend_on_body_morphs`
+checks five bodies.)
 
 A mirrored pair is an exact mirror image, which took two fixes: the mirrored anchor already
 carries a mirrored tangent, so negating local Y (not X) leaves a true mirror; and the anchor

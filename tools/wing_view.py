@@ -20,7 +20,8 @@ MEMBRANE = sh.Material(base_color="#6f4f3f", roughness=0.74, specular=0.28,
                        f0=0.035, wrap=0.40, scatter="#8c4a38", rim=0.24)
 PLUMAGE = sh.Material(base_color="#cdc4b6", roughness=0.55, specular=0.42,
                       f0=0.040, wrap=0.26, scatter="#9a8f80", rim=0.20)
-MATS = {"membrane": MEMBRANE, "feathered": PLUMAGE}
+DRAGON_HIDE = sh.Material(base_color="#5a3d36", roughness=0.70, specular=0.30, f0=0.035, wrap=0.40, scatter="#8a3b2c", rim=0.26)
+MATS = {"membrane": MEMBRANE, "dragon": DRAGON_HIDE, "feathered": PLUMAGE}
 
 def _smooth(x, a, b):
     t = np.clip((x - a) / (b - a), 0.0, 1.0)
@@ -39,7 +40,7 @@ def albedo(rig, style, mesh=None):
     variation so each shingle reads), bones darker than the membrane that
     stretches between them, the membrane lighter toward its free edge."""
     from minimaster.character import shading as sh
-    base = sh.hex_to_linear("#a89b88" if style == "feathered" else "#7a5a49")
+    base = sh.hex_to_linear("#a89b88" if style == "feathered" else ("#6a4638" if style == "dragon" else "#7a5a49"))
     sk = rig.skeleton
     V = rig.rest_mesh.vertices
     out = np.tile(base, (len(V), 1))
@@ -69,7 +70,7 @@ def albedo(rig, style, mesh=None):
             f = _smooth(r / max(r.max(), 1e-9), 0.15, 1.0)
             tint = np.array([1.0, 0.82, 0.70])               # warm, translucent edge
             out[a:b] = base * (0.80 + 0.40 * f)[:, None] * (1.0 - f[:, None] * (1.0 - tint) * 0.6)
-        elif style == "membrane":                           # bones, claw, knobs
+        elif style in ("membrane", "dragon"):               # bones, claw, knobs
             out[a:b] = base * 0.52
     return out
 
@@ -77,7 +78,7 @@ def albedo(rig, style, mesh=None):
 # Where the membrane root lands on the body, in wing units (plan x, z): what
 # back_wings() produces on the default body. Isolated renders use it so the
 # planform matches the one on the figure instead of the standalone default.
-BODY_ROOT = {"membrane": (-3.3, 2.3), "feathered": None}
+BODY_ROOT = {"membrane": (-3.3, 2.3), "dragon": (-3.3, 2.3), "feathered": None}
 
 
 def make_rig(style, **kw):

@@ -210,7 +210,8 @@ def test_closing_the_fan_brings_the_fingertips_together(membrane):
     def spread(pose):
         J = membrane.posed_joints(membrane.pose_from_controls(**pose))
         return np.linalg.norm(J["d3_tip"] - J["d5_tip"])
-    assert spread({"fan": 0.0}) < 0.5 * spread({})
+    lo = membrane.skeleton.fan_range[0]
+    assert spread({"fan": lo}) < 0.75 * spread({})
 
 
 def test_curl_bends_the_fingers_toward_the_underside(membrane):
@@ -552,3 +553,92 @@ def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
             sign = 1.0 if name.endswith("l") else -1.0
             assert _inside_body(w, tris).mean() < limit, (style, name)
             assert (sign * w[:, 0] < -0.1).mean() < 0.02, (style, name)
+
+
+# -- orientation must not depend on the body's sliders -------------------------
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_the_wings_orientation_does_not_depend_on_body_morphs():
+    """Regression: the span axis came from projecting a hint into the tangent
+    plane of ONE quad of the morphed body, so a shoulder or pectoral slider
+    re-aimed the wing -- 19.5 degrees between the plain and the anatomy-adjusted
+    body, with the spread membrane anywhere from flat to 6 units behind the back.
+    The rake is now authored (the hint, in body space); only the origin follows
+    the body."""
+    from minimaster.character import creature_anatomy as ca
+    from minimaster.character.sliders import Character, SliderCatalog
+    base, lib = mh.load()
+    cat = SliderCatalog(lib.names)
+
+    def body(**macro):
+        c = Character()
+        c.macro.update(**macro)
+        return lib.apply(base.verts, c.target_weights(cat))
+
+    adj = Character()
+    adj.macro.update(gender=1.0, muscle=0.55)
+    ca.apply_to(adj, [A.back_wings("membrane")], cat)
+    bodies = [body(gender=1.0), lib.apply(base.verts, adj.target_weights(cat)),
+              body(gender=0.0), body(gender=1.0, weight=1.0, muscle=1.0),
+              body(gender=1.0, weight=0.0, muscle=0.0)]
+    axes = []
+    for v in bodies:
+        app = A.back_wings("membrane")
+        for name, pw in app.build_rigs(base, v):
+            ax = pw.matrix[:3, 0] / np.linalg.norm(pw.matrix[:3, 0])
+            axes.append(ax if name.endswith("l") else ax * np.array([-1.0, 1.0, 1.0]))
+        (_, L), (_, R) = app.build(base, v)
+        assert np.abs(L.vertices @ np.diag([-1.0, 1.0, 1.0]).T - R.vertices).max() < 1e-9
+    axes = np.array(axes)
+    worst = max(np.degrees(np.arccos(np.clip(a @ b, -1, 1))) for a in axes for b in axes)
+    assert worst < 3.0, f"the span axis moves {worst:.1f} degrees between bodies"
+
+
+def test_the_primary_fan_does_not_change_when_the_wing_is_raised_or_twisted(feathered):
+    """Regression: feather headings were read from the plan projection of a tilted
+    frame, so raise_ 90 made P1-P10 span 123 degrees instead of 62. The fan is a
+    property of the plumage, not of how the wing is held: its 3D angle must not
+    change under any rigid motion of the arm."""
+    sk = feathered.skeleton
+
+    def fan_angle(**kw):
+        posed = feathered.posed_joints(feathered.pose_from_controls(**kw))
+        d = {}
+        for f in sk.feathers:
+            if f["row"] == "primary":
+                v = posed[f["tip"]] - posed[f["root"]]
+                d[f["root"]] = v / np.linalg.norm(v)
+        a, b = d["primary01_r"], d["primary10_r"]
+        return np.degrees(np.arccos(np.clip(a @ b, -1.0, 1.0)))
+
+    rest = fan_angle()
+    for kw in ({"raise_": 90.0}, {"raise_": -60.0}, {"twist": 45.0}, {"twist": -45.0},
+               {"wrist_flex": -60.0}, {"hand_twist": 30.0}):
+        assert fan_angle(**kw) == pytest.approx(rest, abs=0.5), kw
+    # and a stowed wing stays packed even when it is raised
+    assert fan_angle(fold=1.0, raise_=45.0) < 12.0
+
+
+def test_a_folding_membrane_never_turns_inside_out(membrane):
+    """Regression: the slab was re-oriented per cell toward the skinned 'up'
+    vector, which turned it inside out wherever a panel doubled back (signed
+    volume fell from +0.75 to -0.03 as the wing stowed)."""
+    rest = membrane.rest_mesh.integrity_report()["volume"]
+    for fold in (0.25, 0.5, 0.75, 1.0):
+        vol = membrane.pose(fold=fold).integrity_report()["volume"]
+        assert vol > 0.4 * rest, (fold, vol, rest)
+    assert membrane.pose(fold=1.0, raise_=45.0).integrity_report()["volume"] > 0.4 * rest
+
+
+def test_controls_are_not_mutated_by_posing(membrane):
+    from minimaster.character.wingrig import PoseControls as PC
+    c = PC(raise_=200.0, fold=3.0)
+    membrane.pose_from_controls(c)
+    assert (c.raise_, c.fold) == (200.0, 3.0)
+
+
+def test_a_membrane_refuses_a_fan_its_skin_cannot_take(membrane):
+    """fan=0 closed the fingers on a sheet that cannot follow (stretch up to 2.9x)."""
+    closed = membrane.pose_from_controls(fan=0.0)
+    limit = membrane.pose_from_controls(fan=membrane.skeleton.fan_range[0])
+    assert closed == limit
