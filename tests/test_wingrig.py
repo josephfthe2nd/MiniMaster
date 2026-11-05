@@ -642,3 +642,18 @@ def test_a_membrane_refuses_a_fan_its_skin_cannot_take(membrane):
     closed = membrane.pose_from_controls(fan=0.0)
     limit = membrane.pose_from_controls(fan=membrane.skeleton.fan_range[0])
     assert closed == limit
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_every_pose_control_can_ride_in_a_wing_definition():
+    """Regression: POSE_KEYS was hand-written, so back_wings(..., wrist_flex=20)
+    leaked a pose control into the wing builder and crashed."""
+    from dataclasses import fields
+    from minimaster.character.wingrig import PoseControls as PC
+    assert set(A.Appendage.POSE_KEYS) == {f.name for f in fields(PC)}
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    for key, val in (("wrist_flex", -30.0), ("hand_twist", 20.0), ("curl", 20.0), ("fan", 0.8)):
+        built = A.back_wings("membrane", **{key: val}).build(base, v)
+        rest = A.back_wings("membrane").build(base, v)
+        assert not np.allclose(built[0][1].vertices, rest[0][1].vertices), key

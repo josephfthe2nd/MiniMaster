@@ -30,11 +30,13 @@ Two ways to get the appendage geometry:
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from ..core.mesh import Mesh
+from .wingrig import PoseControls
 
 
 # --------------------------------------------------------------------------
@@ -485,7 +487,9 @@ class Appendage:
 
     # pose controls that may ride along in ``params`` for a wing; everything
     # else in ``params`` shapes the wing itself
-    POSE_KEYS = ("fold", "raise_", "swing", "twist", "fan", "curl")
+    # derived from PoseControls so a new control can never be left out (the list
+    # was hand-written, and wrist_flex / hand_twist crashed the builder)
+    POSE_KEYS = tuple(f.name for f in dataclasses.fields(PoseControls))
 
     def _anchor_frame(self, body_v, body_q, idx, pt):
         """The 4x4 placement of the appendage for side ``idx`` (0 left, 1 right)."""
