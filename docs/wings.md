@@ -49,8 +49,9 @@ chiropteran morphometrics; angles are in the wing plane, from the span axis (+X)
 toward the trailing edge (+Z).
 
 An independent check on the result: the planform-area aspect ratio of the membrane
-wing comes out at **6.1**, inside the 6–7 reported for flying foxes, even though that
-figure was never an input (`test_membrane_planform_has_a_realistic_aspect_ratio`).
+wing comes out at **5.1**. The literature gives 6–7 for flying foxes; the roost photograph —
+foreshortened, wrist flexed — gives 4.7–5.8; the build sits between them
+(`test_membrane_planform_has_a_realistic_aspect_ratio` accepts 4.5–8, a paddle being below 3).
 
 ## The membrane wing (bat / dragon)
 
@@ -62,9 +63,9 @@ figure was never an input (`test_membrane_planform_has_a_realistic_aspect_ratio`
 | digit III | 0.71 + 0.57 + 0.70 FA | longest; makes the wingtip |
 | digit IV | 0.70 + 0.43 + 0.33 FA | |
 | digit V | 0.73 + 0.36 + 0.30 FA | sweeps back toward the hip |
-| hooked tip | +24…+36° at the last knuckle | the falcate wingtip |
+| hooked tip | +24…+46° at the last knuckle | the falcate wingtip |
 | thumb | 0.28 FA + 0.12 FA claw | hangs ventrally, hooked |
-| fan off the forearm | II +18°, III +33°, IV +61°, V +90° | mounted skeletons splay 35–90° depending on the mount; this is the compromise that also matches the flight silhouettes |
+| fan off the forearm | II +36°, III +47°, IV +76°, V +106° | the skeleton and the roost silhouette give 32/56/87/127°; the literature aspect ratio (6–7) wants less. This sits between them (AR 5.1) and makes the wrist a visible forward corner, as in the photographs; II is held close to III so it lies inside the leading edge instead of standing out as a second horn |
 | root | ~1.0 FA, down the back to the waist | the plagiopatagium runs shoulder → hip |
 
 The earlier version had a nearly straight arm, single-bone digits, a 0.4 FA root and a
@@ -90,8 +91,8 @@ the hooked bone never pokes out in front of the sheet.
 | V → body | 0.09 (one long shallow arc) | 0.30 |
 
 `SCALLOP_DRAGON` is a drop-in: `A.back_wings("membrane", scallop=W.SCALLOP_DRAGON)`. The
-digit tips are **needles** that poke 0.14 FA past the membrane edge, and the scallop arcs
-meet them at a cusp.
+digit tips end in short needles — III 0.10 FA, IV and V about half that, II none — and the
+scallop arcs meet them at a cusp.
 
 **Surface.** Camber is 6% of chord at rest (a gliding bat reaches 12%); the panels billow
 a few percent between the bones; the hand rises ~9° off the arm (`gull`), so the wrist is
@@ -107,21 +108,22 @@ humerus, and five tiers of coverts shingle over their bases.
 
 | row | count | length (× longest primary) | width / length | direction |
 | --- | --- | --- | --- | --- |
-| primaries P1–P10 | 10 | 0.60 … **1.00** (P7/P8) … 0.70 (P10) | 0.20 (P1) … 0.13 … 0.105 (P10) | **−15° (P10) to +75° (P1), ~10° apart** |
+| primaries P1–P10 | 10 | 0.60 … **1.00** (P7/P8) … 0.70 (P10) | 0.20 (P1) … 0.13 … 0.105 (P10) | **+8° (P10) to +70° (P1), ~7° apart** — P10 continues the hand axis |
 | secondaries | 14 | 0.62 … 0.70 | 0.23 | +78° … +100° |
-| tertials | 4 | 0.55 … 0.62 | 0.30 | +100° … +115° |
+| tertials | 7 | 0.62 … 0.48 | 0.27 | +100° … +118° |
 | primary coverts | 10 | 0.30 … 0.15 of the primary | 0.26 | follow their primary |
 | greater / median coverts | 14 + 14 | 0.375 / 0.22 | 0.38 / 0.50 | follow their secondary |
 | lesser coverts | 3 rows of 18–14 | 0.10 … 0.07 | 0.9 | along the arm's leading edge |
 | alula | 3 | 0.18 / 0.25 / 0.30 | 0.22 | on the thumb |
-| scapulars | 9 | ~0.45 | 0.25 | +100° … +130° |
+| scapulars | 10 | ~0.45 | 0.25 | +100° … +130° |
 
 The longest primary is ~1.65 FA, so a primary is 7–8× as long as it is wide: a long narrow
 blade, not a paddle. The hand is only ~0.58 FA (the first build gave it 0.94), which is what
 makes the primaries root at the right spacing (~0.065 FA) and overlap ~65% at the base.
 
 **One feather.** A bare quill for the first tenth of the length, then a vane that widens to
-its maximum by ~40% and holds nearly parallel-sided before closing in an ogive tip. The
+its maximum by ~40% and holds nearly parallel-sided before closing in an ogive onto a
+**rounded cap** (`tip_floor`; a point read as a saw along the trailing edge). The
 rachis is off-centre — the leading vane is 25–30% of the width on the outer primaries, 35–40%
 on the inner ones — and the outer primaries are **emarginated**: the leading vane narrows
 sharply near the tip so the feathers separate into slotted fingers. The shaft droops and the
@@ -133,7 +135,13 @@ P10. That is achieved with **roll**, not height: each feather's leading vane til
 trailing vane down, so it rides over the next one while every root stays on the arm. (An
 earlier version stacked feathers vertically; the roots climbed 1.6 units off the arm and the
 bone floated beneath the plumage.) The coverts lie over the flight-feather bases, the
-leading-edge row on top.
+leading-edge row on top. Each tier is **staggered** half a pitch against the one behind it
+(each covert straddles two flight feathers, so rows brick instead of stacking into columns),
+ends in a rounded tip, and has jittered lengths so its lower edge is not a ruled line. Three
+rows of rounded lesser coverts bury the arm, rooted just behind the bone line pointing
+straight back so no quill ends poke forward; an **underwing covert field** covers the
+underside, which is what an angel seen from the front shows. Scapulars and the alula are
+rigged feathers like the flight feathers, so a fold re-aims all the plumage.
 
 ## The rig
 
@@ -184,13 +192,18 @@ between its two posed bounding fingers**: the interior is the chord between them
 panel's own rest curvature (scallop sag, billow) scaled by how far the gap has closed, and
 the slack the sheet cannot lose buckles into a pleat — a tent of slant L/2 over a base g,
 height √(L²−g²)/2, standing along the bones' own up direction, alternating panel to panel the
-way a closing fan zig-zags. The long inboard panel pleats less: it hangs as a drape.
+way a closing fan zig-zags. Skin is elastic, so nothing pleats until a panel has closed by ~10%
+(otherwise a gentle finger curl inflates the hand like a balloon), and the fingers do not hairpin
+until the wing is past half folded, so a half-fold is a taut half-closed wing and not a scroll.
+The long inboard panel pleats less: it hangs as a drape.
 
 **Validated** (`tests/test_wingrig.py`): the rest pose reproduces the mesh to 1e-12; weights are
 a partition of unity with ≤4 influences; rigid pieces use exactly one bone; a finger is pulled
 only by its own bones; bones never change length under any pose; every pose of both styles is
 watertight per piece; the root stays on the body while the wing flaps (≤0.16 units of drift
-against 8–12 at the tip); finger tubes stay on the sheet; a posed mirrored pair on the body is
+against 8–12 at the tip); the membrane root lies in the wing's plane on the back and no folded
+wing pokes out in front of the torso (it would have failed on the old placement); finger tubes
+stay on the sheet; a posed mirrored pair on the body is
 an exact mirror image (1e-15); body-space skin matrices (`M S M⁻¹`) reproduce the placed mesh
 for mirrored placements; and the joints attach to a body `Armature` through the chest.
 
@@ -210,10 +223,14 @@ hairline-joined (at offset 0 only 2% of the root lies inside the torso; at −0.
 
 On a real body the frame's +Z does not run down the spine — it points down-and-*outward*
 (≈ (0.80, −0.55, 0.24) in MakeHuman coordinates) — so a membrane root laid along it hangs in the
-air beside the figure. `WING_ROOT` is therefore a **body point** (the lower back at the waist);
-the builder converts it into the wing's plan coordinates (`Appendage.root_point`), so the root edge
-runs from the scapula down the real back for any body shape, and `fold` stows the wing along the
-same line.
+air beside the figure. `WING_ROOT` is therefore a **body point** (the lower back at the waist).
+The wing plane has to contain it: with a fixed roll the plane slopes forward as it descends the
+back, and the projected target landed on the *front of the belly* (a folded wing then poked out
+of the abdomen — the old placement measured 28 sampled vertices up to 0.85 units in front of the
+torso). When `Appendage.root_point` is set the roll is therefore **derived** so the plane contains
+both the span axis and the line to the root; the root is exactly in-plane and on the back for any
+body shape, the builder passes its plan coordinates to the wing, and `fold` stows the wing along
+the same line.
 
 A mirrored pair is an exact mirror image, which took two fixes: the mirrored anchor already
 carries a mirrored tangent, so negating local Y (not X) leaves a true mirror; and the anchor

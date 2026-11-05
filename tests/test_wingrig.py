@@ -291,6 +291,45 @@ def test_wing_joints_attach_to_a_body_armature(membrane):
 
 
 @pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_the_membrane_root_lies_in_the_wings_own_plane_on_the_back():
+    """Regression: with a fixed roll the wing plane sloped forward as it
+    descended the back, so the waist target projected into it landed on the
+    FRONT of the belly. The roll is now derived so the plane contains the line
+    to the root: the target is in-plane (local y = 0) and the joint is on the back."""
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    cv, _ = base.body_cage(v)
+    for name, pw in A.back_wings("membrane").build_rigs(base, v):
+        sign = 1.0 if name.endswith("l") else -1.0
+        target = np.array([sign * A.WING_ROOT[0], A.WING_ROOT[1], A.WING_ROOT[2]])
+        local = np.linalg.inv(pw.matrix) @ np.append(target, 1.0)
+        assert abs(local[1]) < 1e-6, f"{name}: the root target is {local[1]:.3f} out of the wing plane"
+        root_local = pw.rig.skeleton.root
+        # joints are lifted onto the membrane surface (a few hundredths off the
+        # plane), so compare the in-plane position
+        assert np.allclose([root_local[0], root_local[2]], [local[0], local[2]], atol=1e-6), name
+        root = pw.matrix[:3, :3] @ root_local + pw.matrix[:3, 3]
+        assert np.linalg.norm(root - target) < 0.15, name
+        assert root[2] < 0.0, f"{name}: the root is on the belly side (z={root[2]:.2f})"
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+@pytest.mark.parametrize("style", STYLES)
+@pytest.mark.parametrize("fold", [0.0, 1.0])
+def test_no_wing_pokes_out_in_front_of_the_torso(style, fold):
+    """A stowed wing lies along the back; nothing of it may appear in front of
+    the body's own front surface at the same height."""
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    cv, _ = base.body_cage(v)
+    for name, pw in A.back_wings(style).build_rigs(base, v):
+        w = pw.pose(fold=fold).vertices
+        for x, y, z in w[::7]:
+            near = (np.abs(cv[:, 1] - y) < 0.3) & (np.abs(cv[:, 0] - x) < 1.2)
+            if near.any():
+                assert z <= cv[near, 2].max() + 0.25, (name, fold, (x, y, z))
+
+
 class TestOnTheBody:
     @pytest.mark.parametrize("style", STYLES)
     def test_a_posed_pair_is_still_an_exact_mirror_image(self, style):
