@@ -112,12 +112,14 @@ humerus, and five tiers of coverts shingle over their bases.
 | --- | --- | --- | --- | --- |
 | primaries P1–P10 | 10 | 0.60 … **1.00** (P7/P8) … 0.70 (P10) | 0.20 (P1) … 0.13 … 0.105 (P10) | **+8° (P10) to +70° (P1), ~7° apart** — P10 continues the hand axis |
 | secondaries | 14 | 0.62 … 0.70 | 0.23 | +78° … +100° |
-| tertials | 7 | 0.62 … 0.48 | 0.27 | +100° … +118° |
+| tertials | 7 | 0.55 … 0.40 | 0.27 | +100° … +118° |
 | primary coverts | 10 | 0.30 … 0.15 of the primary | 0.26 | follow their primary |
 | greater / median coverts | 14 + 14 | 0.375 / 0.22 | 0.38 / 0.50 | follow their secondary |
+| tertial coverts | 7 + 7 | 0.30 / 0.18 | 0.60 / 0.75 | follow their tertial |
 | lesser coverts | 3 rows of 18–14 | 0.10 … 0.07 | 0.9 | along the arm's leading edge |
-| alula | 3 | 0.18 / 0.25 / 0.30 | 0.22 | on the thumb |
-| scapulars | 10 | ~0.45 | 0.25 | +100° … +130° |
+| marginal coverts | 2 rows of 20–18, both faces | 0.11 / 0.09 | 0.8 | rooted *ahead* of the arm, sweeping back over it |
+| alula | 3 | 0.20 / 0.26 / 0.32 | 0.22 | rooted at 15 / 30 / 45% along the thumb |
+| scapulars | 7 | ~0.45 | 0.32 | +108° … +122° |
 
 The longest primary is ~1.65 FA, so a primary is 7–8× as long as it is wide: a long narrow
 blade, not a paddle. The hand is only ~0.58 FA (the first build gave it 0.94), which is what
@@ -141,7 +143,10 @@ leading-edge row on top. Each tier is **staggered** half a pitch against the one
 (each covert straddles two flight feathers, so rows brick instead of stacking into columns),
 ends in a rounded tip, and has jittered lengths so its lower edge is not a ruled line. Three
 rows of rounded lesser coverts bury the arm, rooted just behind the bone line pointing
-straight back so no quill ends poke forward; an **underwing covert field** covers the
+straight back; two **marginal** rows root *ahead* of it and sweep back over it with broad
+rounded quill ends, so the leading edge seen from the front is feathered right to the front and
+not a bare rod with quill ends poking out (the third critique round's main finding on this wing);
+the covert field runs on over the tertials to the back instead of stopping at the elbow; an **underwing covert field** covers the
 underside, which is what an angel seen from the front shows. Scapulars and the alula are
 rigged feathers like the flight feathers, so a fold re-aims all the plumage.
 
@@ -172,8 +177,8 @@ modified):
 | control | meaning | range |
 | --- | --- | --- |
 | `fold` | 0 spread … 1 stowed | 0 … 1 |
-| `raise_` | shoulder elevation (flap) | −70° … +85° |
-| `swing` | humerus swung back (+) or forward | −30° … +85° |
+| `raise_` | shoulder elevation (flap); the top shrinks with `fold` (100° spread, 25° stowed) | −70° … +100° |
+| `swing` | humerus swung back (+) or forward; the top shrinks with `fold` (90° spread, 5° stowed) | −30° … +85° |
 | `twist` | roll about the span axis | ±45° |
 | `fan` | finger spread, 0 together … 1 rest. A bird's primaries spread about the hand axis; a membrane clamps it to 0.55 … 1.2 (a sheet tears long before the fingers close) | 0 … 1.5 |
 | `curl` | finger knuckle flexion | −10° … 150° |
@@ -198,7 +203,7 @@ down-and-outward, so folding toward it splays the wing sideways), the forearm sw
 onto it to an elbow interior of ~25°, the hand folds back along the forearm (wrist 172°), the
 fan collapses, the thumb tucks along the forearm, and each finger folds like a concertina at its
 knuckles (90% of a full hairpin; the three bones end up roughly parallel). The stowed wing is also
-**lifted off its plane** (bat 12°, bird 12°): that plane is sunk into the back so a print is
+**lifted off its plane** (bat 12°, bird 20° — a feathered wing is deep): that plane is sunk into the back so a print is
 welded, and a wing lying along it would be buried in the torso. Feathers fold like a closing fan,
 each turning about its own root until it lies along the body line; scapulars, the alula and the
 lesser coverts fold with them.
@@ -213,10 +218,30 @@ height √(L²−g²)/2, standing along the bones' own up direction, alternating
 way a closing fan zig-zags. Skin is elastic, so nothing pleats until a panel has closed by ~10%
 (otherwise a gentle finger curl inflates the hand like a balloon), and the fingers do not hairpin
 until the wing is past half folded, so a half-fold is a taut half-closed wing and not a scroll.
-Each panel pleats in several fine lobes (1/2/2/3) rather than one bladder, the slab keeps its
-grid's own orientation (re-orienting cells toward a skinned "up" vector turned the whole shell inside
+Each panel pleats in several fine lobes (1/2/2/3) rather than one bladder, and a pleat is softly
+capped (`PLEAT_CAP`, 0.45 units per lobe): a stowed membrane is a bundle lying among the fingers,
+not a tent three finger-thicknesses tall (the folded bat stood 4.0 units off the plane before, 2.3
+after). The slab keeps its grid's own orientation (re-orienting cells toward a skinned "up" vector turned the whole shell inside
 out where a panel doubled back: signed volume fell from +0.75 to −0.03), and a stretch limiter pulls
 any edge back toward 1.15× its rest length. The long inboard panel pleats less: it hangs as a drape.
+
+**Composition and limits.** A knuckle curl (about the digit's own flexion axis) and the fold
+concertina (in the wing plane) are *multiplied* as matrices — curl first, then the swing — rather
+than having their Euler angles summed, which is not a rotation of anything once two axes are
+involved (`test_a_knuckle_curl_and_the_fold_concertina_multiply_instead_of_adding`). Controls are
+offsets on top of what `fold` already does, so the shoulder's `swing` and `raise_` ranges shrink
+as the wing stows (`FOLD_LIMITS`): fold 1 with swing 85 once asked the humerus for 195° and put
+half the membrane across the midline.
+
+**Slab normals.** A scalloped patagium leaves each fingertip along the grid's own rays, where the
+cross product of the two grid tangents collapses and its direction — even its sign — is noise. On
+the dragon (scallops 0.30–0.50) 205 vertices were within 20° of degenerate and one column of the
+slab had its thickness lying *in* the sheet; the pleats, which stand along that axis, ballooned.
+`grid_normals` now blends toward a reference normal (the sheet's mean normal at rest, the skinned
+"up" vector when posed) wherever the tangents are within ~20° of parallel, and is bit-identical
+elsewhere. Separately, the camber weight stepped from 0.25 to 1.0 at digit V, leaving a 0.13-unit
+ledge down the finger (more than half the membrane's thickness); it is now smoothed over nine
+columns. The dragon is part of the rig test matrix.
 
 **Validated** (`tests/test_wingrig.py`): the rest pose reproduces the mesh to 1e-12; weights are
 a partition of unity with ≤4 influences; rigid pieces use exactly one bone; a finger is pulled

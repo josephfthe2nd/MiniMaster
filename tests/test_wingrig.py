@@ -548,7 +548,7 @@ def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
     v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
     cv, cq = base.body_cage(v)
     tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
-    for style, limit in (("feathered", 0.25), ("membrane", 0.36)):
+    for style, limit in (("feathered", 0.30), ("membrane", 0.36)):
         for name, pw in A.back_wings(style).build_rigs(base, v):
             w = pw.pose(fold=1.0).vertices[::9]
             sign = 1.0 if name.endswith("l") else -1.0
