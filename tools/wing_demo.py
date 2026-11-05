@@ -85,7 +85,7 @@ def main():
     # the rig on its own: poses of one wing (no body), three views each
     strips = []
     for style in ("membrane", "feathered"):
-        rig = W.make_wing_rig(style)
+        rig = V.make_rig(style)
         poses = [{}, {"fold": 0.5}, {"fold": 1.0}, {"raise_": 45.0}, {"raise_": -40.0},
                  {"curl": 35.0}]
         meshes = [rig.pose_mesh(rig.pose_from_controls(**p)) for p in poses]

@@ -44,7 +44,7 @@ def albedo(rig, style, mesh=None):
     V = rig.rest_mesh.vertices
     out = np.tile(base, (len(V), 1))
     tips = {f["tip"]: f for f in sk.feathers}
-    row_tint = {"primary": 0.86, "secondary": 0.93, "tertial": 0.99}
+    row_tint = {"primary": 0.86, "secondary": 0.93, "tertial": 0.99, "scapular": 1.02, "alula": 0.9}
     for p in rig.pieces:
         a, b = rig.ranges[p.name]
         v = V[a:b]
@@ -58,10 +58,10 @@ def albedo(rig, style, mesh=None):
             perp = np.array([-d[2], 0.0, d[0]]) / max(float(np.hypot(d[0], d[2])), 1e-9)
             lat = (v - r0) @ perp
             e = np.clip(np.abs(lat - np.median(lat)) / max(np.ptp(lat) / 2.0, 1e-9), 0.0, 1.0)
-            m = (0.62 + 0.38 * _smooth(t, 0.04, 0.45)) * (1.0 - 0.42 * e ** 1.3) * row_tint[f["row"]]
+            m = (0.62 + 0.38 * _smooth(t, 0.04, 0.45)) * (1.0 - 0.42 * e ** 1.3) * row_tint.get(f["row"], 1.0)
             out[a:b] = base * (m * _jitter(p.name, 0.09))[:, None]
         elif style == "feathered" and p.bone is not None or p.name.startswith(
-                ("greater", "median", "primary_covert", "lesser", "scapular", "alula")):
+                ("greater", "median", "primary_covert", "lesser", "under_")):
             tier = 1.02 if p.name.startswith(("greater", "primary_covert")) else 1.10
             out[a:b] = base * (tier * _jitter(p.name, 0.08))
         elif p.membrane:
@@ -72,6 +72,17 @@ def albedo(rig, style, mesh=None):
         elif style == "membrane":                           # bones, claw, knobs
             out[a:b] = base * 0.52
     return out
+
+
+# Where the membrane root lands on the body, in wing units (plan x, z): what
+# back_wings() produces on the default body. Isolated renders use it so the
+# planform matches the one on the figure instead of the standalone default.
+BODY_ROOT = {"membrane": (-3.3, 2.3), "feathered": None}
+
+
+def make_rig(style, **kw):
+    root = BODY_ROOT.get(style)
+    return W.make_wing_rig(style, **({"root": root} if root else {}), **kw)
 
 
 # name -> (azimuth, elevation)
@@ -107,7 +118,7 @@ def main():
     for a in sys.argv[3:]:
         k, v = a.split("=")
         kw.append((k, float(v)))
-    rig = W.make_wing_rig(style)
+    rig = make_rig(style)
     poses = [{}] + [rig.pose_from_controls(**{k: v}) for k, v in kw]
     meshes = [rig.pose_mesh(p) for p in poses]
     img = render_views(meshes, style, colors=albedo(rig, style))

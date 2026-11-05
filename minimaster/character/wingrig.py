@@ -148,6 +148,9 @@ def clamp_controls(c: "PoseControls") -> "PoseControls":
     return c
 
 
+# How far a membrane panel can close before it has to buckle into a pleat.
+ELASTIC = 0.90
+
 # --------------------------------------------------------------------------
 # the rig
 
@@ -325,7 +328,10 @@ class WingRig:
             for k, (c0, c1) in enumerate(piece.pleat["sectors"]):
                 g_rest = np.linalg.norm(r_mid[:, c1] - r_mid[:, c0], axis=1)
                 g_pose = np.linalg.norm(mid[:, c1] - mid[:, c0], axis=1)
-                slack = np.maximum(g_rest ** 2 - g_pose ** 2, 0.0)
+                # skin is elastic: it takes up a few percent of closure by itself,
+                # and only buckles beyond that (a gentle curl must not inflate)
+                g_eff = ELASTIC * g_rest
+                slack = np.maximum(g_eff ** 2 - g_pose ** 2, 0.0)
                 fade = np.clip(slack / (0.02 * g_rest ** 2 + 1e-30), 0.0, 1.0)
                 if not fade.any():
                     continue

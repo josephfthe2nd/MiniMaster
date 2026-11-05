@@ -492,7 +492,10 @@ class Appendage:
             hint = hint * np.array([-1.0, 1.0, 1.0])
         anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
         anchor.offset = self.offset
-        rot = _euler(np.radians([self.roll, 0.0, 0.0]))
+        roll = self.roll
+        if self.root_point is not None:
+            roll = self._roll_toward_root(anchor, body_v, idx)
+        rot = _euler(np.radians([roll, 0.0, 0.0]))
         if idx == 1:
             # The mirrored anchor already carries a mirrored tangent, and
             # reflecting the tangent flips the handedness of the frame's
@@ -502,6 +505,31 @@ class Appendage:
             # reflection, so the pair stays a mirror image at any roll angle.
             rot = np.diag([1.0, -1.0, 1.0]) @ rot
         return anchor_matrix(anchor, body_v, self.scale, rot)
+
+    def _roll_toward_root(self, anchor, body_v, idx) -> float:
+        """Roll (degrees about the span axis) that puts the attachment line in
+        the wing's own plane.
+
+        A wing's plane contains its span axis (aimed up and out) and its chord.
+        With a fixed roll the plane slopes forward as it descends the back, so a
+        root target projected into it lands on the belly instead of the waist.
+        Rolling until the chord points at the target makes the plane contain the
+        span axis AND the line to the root: the root is then exactly in-plane
+        and on the back, for any body shape.
+        """
+        origin, basis = anchor.resolve(body_v)
+        rp = np.asarray(self.root_point, dtype=np.float64)
+        if idx == 1:
+            rp = rp * np.array([-1.0, 1.0, 1.0])
+        t, bt, n = basis[:, 0], basis[:, 1], basis[:, 2]
+        r = rp - origin
+        r = r - float(r @ t) * t                    # the part perpendicular to the span axis
+        ln = float(np.linalg.norm(r))
+        if ln < 1e-9:
+            return self.roll
+        zb, zn = float(r @ bt) / ln, float(r @ n) / ln
+        # local +Z = -sin(roll) bt + cos(roll) n; a mirrored side negates the bt term
+        return float(np.degrees(np.arctan2(-zb if idx == 0 else zb, zn)))
 
     def _points(self):
         points = [np.asarray(self.anchor_point, dtype=np.float64)]
