@@ -159,6 +159,16 @@ LIMITS = {
     "hand_twist": (-30.0, 30.0),
 }
 
+# A control is an offset on top of what ``fold`` already does, so its range is
+# what the joint has LEFT, not a constant: a wing stowed along the spine has used
+# up the humerus's swing (fold 1 + swing 85 once asked for 195 degrees at the
+# shoulder, and half the membrane ended up on the far side of the body), and its
+# wrist is already over the back.
+FOLD_LIMITS = {
+    "swing": lambda f: 85.0 * (1.0 - f) + 5.0,
+    "raise_": lambda f: 100.0 - 75.0 * f,
+}
+
 # Named poses over the controls. A flap cycle is up -> down -> up: the upstroke
 # lifts the wrist and half-folds the arm with the leading edge turned edge-on;
 # the downstroke sweeps through level with the arm extended, leading edge down.
@@ -177,11 +187,53 @@ def clamp_controls(c: "PoseControls", fan_range=None) -> "PoseControls":
     object is left alone). ``fan_range`` narrows ``fan`` for a skeleton whose
     skin cannot take the full range (a membrane tears long before a feather)."""
     out = replace(c)
+    f = float(np.clip(c.fold, 0.0, 1.0))
     for name, (lo, hi) in LIMITS.items():
         if name == "fan" and fan_range is not None:
             lo, hi = fan_range
+        elif name in FOLD_LIMITS:
+            hi = FOLD_LIMITS[name](f)
         setattr(out, name, float(np.clip(getattr(c, name), lo, hi)))
     return out
+
+
+def grid_normals(grid: np.ndarray, ref: np.ndarray | None = None) -> np.ndarray:
+    """Per-vertex unit normals of an (n+1, m+1, 3) surface grid.
+
+    The cross product of the two grid tangents is only trustworthy while those
+    tangents are well apart. A scalloped patagium leaves each fingertip along
+    a line nearly parallel to the grid's own rays, so ``du x dv`` collapses
+    there and its direction (even its sign) is noise: on the dragon wing 205
+    vertices were worse than 20 degrees from degenerate and one column of the
+    slab came out with its thickness lying *in* the sheet. Where the tangents
+    are close to parallel the normal is therefore taken from ``ref`` instead
+    (default: the sheet's mean normal, made perpendicular to ``du``) and the
+    two are blended smoothly. Well-conditioned vertices are untouched.
+    """
+    du = np.gradient(grid, axis=0)
+    dv = np.gradient(grid, axis=1)
+    cr = np.cross(du, dv)
+    ln = np.linalg.norm(cr, axis=2, keepdims=True)
+    nrm = cr / np.maximum(ln, 1e-12)
+    sin = ln[..., 0] / np.maximum(np.linalg.norm(du, axis=2) * np.linalg.norm(dv, axis=2), 1e-12)
+    t = np.clip((sin - 0.10) / 0.30, 0.0, 1.0)
+    w = t * t * (3.0 - 2.0 * t)
+    if bool((w >= 1.0).all()):
+        return nrm
+    if ref is None:
+        good = (w > 0.99)[..., None]
+        mean = (nrm * good).sum(axis=(0, 1))
+        if float(np.linalg.norm(mean)) < 1e-9:
+            return nrm
+        ref = np.broadcast_to(mean / np.linalg.norm(mean), nrm.shape)
+    ref = np.asarray(ref, dtype=np.float64)
+    tu = du / np.maximum(np.linalg.norm(du, axis=2, keepdims=True), 1e-12)
+    ref = ref - np.einsum("ijk,ijk->ij", ref, tu)[..., None] * tu     # perpendicular to the rays
+    ref = ref / np.maximum(np.linalg.norm(ref, axis=2, keepdims=True), 1e-12)
+    flip = np.where(np.einsum("ijk,ijk->ij", nrm, ref) < 0.0, -1.0, 1.0)[..., None]
+    # a conditioned vertex keeps its own sign; only an unreliable one is flipped to agree
+    out = np.where((w >= 1.0)[..., None], nrm, w[..., None] * (nrm * flip) + (1.0 - w[..., None]) * ref)
+    return out / np.maximum(np.linalg.norm(out, axis=2, keepdims=True), 1e-12)
 
 
 # How far a membrane panel can close before it has to buckle into a pleat.
@@ -189,6 +241,8 @@ ELASTIC = 0.90
 # How far skin may stretch (relative to its rest length) before the limiter
 # pulls it back. Compression is free -- that is what the pleats are for.
 MAX_STRETCH = 1.15
+# Tallest a single pleat may stand off the sheet (soft limit, wing units).
+PLEAT_CAP = 0.45
 
 # --------------------------------------------------------------------------
 # the rig
@@ -409,6 +463,10 @@ class WingRig:
                 # k fine pleats instead of one bladder: each is a tent of slant L/2k
                 # over a base g/k, so k lobes of height h/k
                 kl = float(lobes[k])
+                # a stowed wing is a bundle, not a tent: skin that cannot be taken
+                # up by fine pleats is bunched toward the fingers instead of
+                # standing up a few bone-thicknesses off the plane
+                h = PLEAT_CAP * kl * np.tanh(h / (PLEAT_CAP * kl))
                 pleat = (h / kl)[:, None, None] * np.sin(kl * np.pi * s_ij)[..., None] * n_axis[:, None, :]
                 fresh = ruled_p + d_pose + pleat
                 w = fade[:, None, None]                                   # blend in with closure
@@ -419,10 +477,9 @@ class WingRig:
                 continue
             new_mid = limited
             # rebuild the two faces of the slab about the new mid-surface
-            du = np.gradient(new_mid, axis=0)
-            dv = np.gradient(new_mid, axis=1)
-            nrm = np.cross(du, dv)
-            nrm /= np.maximum(np.linalg.norm(nrm, axis=2, keepdims=True), 1e-12)
+            # (where the grid is degenerate -- scallop tips leave the fingers along
+            # the rays -- the skinned up vector stands in for the cross product)
+            nrm = grid_normals(new_mid, ref=up)
             # Keep the grid's own orientation. Flipping cells toward the skinned
             # "up" vector looked safe but turned the slab inside out wherever a
             # panel folded over itself (signed volume fell from +0.75 to -0.03 as

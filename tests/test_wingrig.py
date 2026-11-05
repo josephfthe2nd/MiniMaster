@@ -16,7 +16,7 @@ from minimaster.character import wings as W
 from minimaster.character.wingrig import PlacedWing, PoseControls
 from minimaster.core.armature import Armature
 
-STYLES = ("membrane", "feathered")
+STYLES = ("membrane", "dragon", "feathered")
 
 # a spread of poses that exercises every control, alone and combined
 POSES = [
@@ -507,7 +507,8 @@ def test_a_stowed_wing_can_still_be_raised(rig):
         # wrist's lift cancels against the humerus's
         J = rig.posed_joints(rig.pose_from_controls(fold=1.0, raise_=raise_))
         return -J["elbow"][1]
-    assert height(45.0) - height(0.0) > 1.5
+    # (a stowed wing has used up most of the raise range -- see FOLD_LIMITS)
+    assert height(25.0) - height(0.0) > 0.8
 
 
 def test_the_folded_hand_lies_back_along_the_forearm(membrane):
@@ -547,7 +548,7 @@ def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
     v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
     cv, cq = base.body_cage(v)
     tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
-    for style, limit in (("feathered", 0.35), ("membrane", 0.36)):
+    for style, limit in (("feathered", 0.25), ("membrane", 0.36)):
         for name, pw in A.back_wings(style).build_rigs(base, v):
             w = pw.pose(fold=1.0).vertices[::9]
             sign = 1.0 if name.endswith("l") else -1.0
@@ -657,3 +658,110 @@ def test_every_pose_control_can_ride_in_a_wing_definition():
         built = A.back_wings("membrane", **{key: val}).build(base, v)
         rest = A.back_wings("membrane").build(base, v)
         assert not np.allclose(built[0][1].vertices, rest[0][1].vertices), key
+
+
+# -- round-3 rig fixes ----------------------------------------------------
+
+def _membrane_slab(rig):
+    piece = next(p for p in rig.pieces if p.pleat)
+    a, b = rig.ranges[piece.name]
+    n1, m1 = piece.pleat["shape"]
+    return piece, a, n1, m1
+
+
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_the_slab_thickness_axis_is_consistent_across_the_whole_sheet(style):
+    """The dragon's deep scallops leave each fingertip along the grid's own rays,
+    where du x dv collapses; one column of the slab then had its thickness lying
+    in the sheet (and the pleats, which stand along that axis, ballooned)."""
+    rig = W.make_wing_rig(style)
+    piece, a, n1, m1 = _membrane_slab(rig)
+    nv = n1 * m1
+    V = rig.rest_mesh.vertices[a:a + 2 * nv]
+    up = V[:nv] - V[nv:]
+    up /= np.linalg.norm(up, axis=1, keepdims=True)
+    # the sheet is a gently cambered plane facing -y (up): no vertex may lie on
+    # the wrong side, and none may be tilted far off it (the root edge is steepest)
+    assert (up[:, 1] < -0.65).all(), float(up[:, 1].max())
+
+
+def test_grid_normals_are_untouched_where_the_grid_is_well_conditioned():
+    from minimaster.character.wingrig import grid_normals
+    u, v = np.meshgrid(np.linspace(0, 3, 7), np.linspace(0, 2, 5), indexing="ij")
+    grid = np.stack([u, 0.1 * u * v, v], axis=2)
+    du, dv = np.gradient(grid, axis=0), np.gradient(grid, axis=1)
+    want = np.cross(du, dv)
+    want /= np.linalg.norm(want, axis=2, keepdims=True)
+    assert np.allclose(grid_normals(grid), want)
+
+
+def test_grid_normals_survive_a_degenerate_column():
+    from minimaster.character.wingrig import grid_normals
+    u, v = np.meshgrid(np.linspace(0, 3, 9), np.linspace(0, 2, 7), indexing="ij")
+    grid = np.stack([u, 0 * u, v], axis=2)
+    # fold column 3 back onto its neighbours' ray: du x dv ~ 0 there
+    grid[:, 3] = grid[:, 2] + 1e-4 * (grid[:, 4] - grid[:, 2])
+    n = grid_normals(grid)
+    assert np.isfinite(n).all()
+    assert (np.abs(n[..., 1]) > 0.95).all()          # all still face +-y, none in-plane
+    assert (np.sign(n[..., 1]) == np.sign(n[0, 0, 1])).all()
+
+
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+@pytest.mark.parametrize("pose", [{"fold": 0.6}, {"fold": 1.0}, {"curl": 40.0, "fold": 0.3}],
+                         ids=str)
+def test_a_posed_membrane_keeps_its_thickness(style, pose):
+    """The slab is rebuilt about the pleated mid-surface; it must come out as
+    thick as it went in, not ballooned or collapsed."""
+    rig = W.make_wing_rig(style)
+    piece, a, n1, m1 = _membrane_slab(rig)
+    nv = n1 * m1
+    rest = rig.rest_mesh.vertices[a:a + 2 * nv]
+    t_rest = np.linalg.norm(rest[:nv] - rest[nv:], axis=1)
+    V = rig.pose_mesh(rig.pose_from_controls(**pose)).vertices[a:a + 2 * nv]
+    t = np.linalg.norm(V[:nv] - V[nv:], axis=1)
+    ratio = t / t_rest
+    assert np.isclose(ratio, 1.0, atol=0.35).mean() > 0.98, (ratio.min(), ratio.max())
+
+
+def test_a_knuckle_curl_and_the_fold_concertina_multiply_instead_of_adding(membrane):
+    from minimaster.core import math3d as m3
+    sk = membrane.skeleton
+    c = PoseControls(fold=0.8, curl=30.0)
+    pose = sk.controls_to_pose(c)
+    k = (0.8 - 0.45) / 0.55
+    k = k * k * (3.0 - 2.0 * k)
+    for name, chain in sk.chains.items():
+        for jn, bend in zip(chain[1:-1], sk.bends[name]):
+            a = np.radians(sk.out_angle[jn])
+            axis = np.array([-np.sin(a), 0.0, np.cos(a)])
+            curl = W._rotation_about(axis, c.curl * sk.curl_gain)
+            fold = m3.rot_y(-(180.0 - bend) * sk.knuckle_fold * k)
+            assert np.allclose(m3.euler_rotation(*pose[jn]), fold @ curl, atol=1e-6), jn
+
+
+def test_the_fold_dependent_limits_leave_only_the_unused_range():
+    from minimaster.character.wingrig import clamp_controls
+    assert clamp_controls(PoseControls(fold=0.0, swing=85.0, raise_=100.0)).swing == 85.0
+    assert clamp_controls(PoseControls(fold=0.0, swing=85.0, raise_=100.0)).raise_ == 100.0
+    stowed = clamp_controls(PoseControls(fold=1.0, swing=85.0, raise_=100.0))
+    assert stowed.swing <= 5.0 + 1e-9 and stowed.raise_ <= 25.0 + 1e-9
+    # monotone: the more folded, the less is left
+    prev = (1e9, 1e9)
+    for f in np.linspace(0.0, 1.0, 6):
+        c = clamp_controls(PoseControls(fold=float(f), swing=85.0, raise_=100.0))
+        assert c.swing <= prev[0] + 1e-9 and c.raise_ <= prev[1] + 1e-9
+        prev = (c.swing, c.raise_)
+    # negative ranges do not shrink
+    low = clamp_controls(PoseControls(fold=1.0, swing=-30.0, raise_=-70.0))
+    assert (low.swing, low.raise_) == (-30.0, -70.0)
+
+
+@pytest.mark.parametrize("fold", [0.0, 0.5, 1.0])
+def test_extreme_controls_cannot_wrench_the_humerus_past_what_a_shoulder_does(rig, fold):
+    J0 = rig.posed_joints({})
+    h0 = J0["elbow"] - J0["shoulder"]
+    J = rig.posed_joints(rig.pose_from_controls(fold=fold, swing=85.0, raise_=100.0))
+    h = J["elbow"] - J["shoulder"]
+    ang = np.degrees(np.arccos(np.clip(h @ h0 / np.linalg.norm(h) / np.linalg.norm(h0), -1, 1)))
+    assert ang < 125.0, ang

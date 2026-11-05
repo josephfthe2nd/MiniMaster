@@ -39,8 +39,8 @@ import numpy as np
 
 from ..core import math3d as m3
 from ..core.mesh import Mesh
-from .wingrig import (Piece, PoseControls, WingRig, compose, raise_,
-                      swing_back, twist)
+from .wingrig import (Piece, PoseControls, WingRig, compose, grid_normals,
+                      raise_, swing_back, twist)
 
 DEFAULT_SPAN = 13.0         # wing units; one MakeHuman unit is a decimetre
 CAMBER = 0.06               # of chord, at rest; a gliding bat reaches 0.12 (armwing 0.118-0.131)
@@ -118,15 +118,6 @@ def _tube(points, radii, sides: int = 8) -> Mesh:
     return _orient(Mesh(verts, np.asarray(tris, dtype=np.int64)))
 
 
-def _grid_normals(grid: np.ndarray) -> np.ndarray:
-    """Per-vertex normals of an (n+1, m+1, 3) surface grid."""
-    du = np.gradient(grid, axis=0)
-    dv = np.gradient(grid, axis=1)
-    nrm = np.cross(du, dv)
-    ln = np.linalg.norm(nrm, axis=2, keepdims=True)
-    return nrm / np.maximum(ln, 1e-12)
-
-
 def _slab_from_grid(grid: np.ndarray, thickness: np.ndarray) -> Mesh:
     """Thicken a surface grid into a closed solid.
 
@@ -136,7 +127,7 @@ def _slab_from_grid(grid: np.ndarray, thickness: np.ndarray) -> Mesh:
     """
     n1, m1, _ = grid.shape
     n, m = n1 - 1, m1 - 1
-    nrm = _grid_normals(grid)
+    nrm = grid_normals(grid)
     half = (thickness / 2.0)[:, :, None]
     top = (grid + nrm * half).reshape(-1, 3)
     bot = (grid - nrm * half).reshape(-1, 3)
@@ -262,6 +253,14 @@ def _euler_from_matrix(R) -> tuple[float, float, float]:
     return tuple(float(np.degrees(v)) for v in (rx, ry, rz))
 
 
+def _then(first, second) -> tuple[float, float, float]:
+    """Euler form of "``first``, then ``second``" (either may be ``None``): the
+    matrix product, not the sum of the angles."""
+    if first is None:
+        return tuple(second)
+    return _euler_from_matrix(m3.euler_rotation(*second) @ m3.euler_rotation(*first))
+
+
 def _rotation_about(axis, deg) -> np.ndarray:
     """Rodrigues rotation of ``deg`` degrees about a unit ``axis``."""
     u = np.asarray(axis, dtype=np.float64)
@@ -327,7 +326,7 @@ BIRD_SPEC = {
     # carpometacarpus + one phalanx, 0.58 FA in all; the primaries root along it
     "digits": {"III": {"mc": 0.36, "p": (0.22,), "fan": 15.0, "bends": (3.0,)}},
     "fold": (-10.0, -140.0, 172.0),
-    "fold_lift": 12.0,
+    "fold_lift": 20.0,         # a feathered wing is deep: it needs to stand off the back further
     "curl_gain": 0.35,         # the hand flexes as a unit: a curl must not split the fan
 }
 _NUM = {"II": 2, "III": 3, "IV": 4, "V": 5}
@@ -546,8 +545,11 @@ class WingSkeleton:
             for name, chain in self.chains.items():
                 for jn, bend in zip(chain[1:-1], self.bends[name]):
                     amount = (180.0 - bend) * self.knuckle_fold
-                    pose[jn] = compose(pose.get(jn, (0.0, 0.0, 0.0)), swing_back(amount * k))
-                    planar[jn] = compose(planar.get(jn, (0.0, 0.0, 0.0)), swing_back(amount * k))
+                    # rotations do not add: a curl (about the digit's own flexion
+                    # axis) is applied first and the in-plane concertina swings the
+                    # flexed finger, so the two are multiplied as matrices
+                    pose[jn] = _then(pose.get(jn), swing_back(amount * k))
+                    planar[jn] = _then(planar.get(jn), swing_back(amount * k))
         # Feathers fold like a closing fan: each turns about its own root toward
         # the folded direction, allowing for whatever its parent bone has done.
         # ``fan`` spreads the plumage about its own axis, independently of fold:
@@ -681,7 +683,13 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
     # camber: arch along each ray, strongest in the plagiopatagium where the
     # rays are chordwise; billow: panels bulge between the fingers
     ray = np.linalg.norm(B - I, axis=1)
+    # (the weight differs between the hand panels and the arm panel, but it must
+    # change gradually: a step at digit V left a 0.13-unit ledge down the finger,
+    # more than half the membrane's thickness)
     w_cam = np.where(kind == "dist", 0.25, 1.0)
+    pad = 4
+    ext = np.concatenate([np.full(pad, w_cam[0]), w_cam, np.full(pad, w_cam[-1])])
+    w_cam = np.convolve(ext, np.ones(2 * pad + 1) / (2 * pad + 1), mode="valid")
     arch = np.sin(np.pi * np.clip(tt, 0, 1) ** CAMBER_PEAK)
     grid[:, :, 1] -= camber * ray[None, :] * w_cam[None, :] * arch
     # sector gap lengths for the billow amplitude
