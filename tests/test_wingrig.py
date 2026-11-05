@@ -765,3 +765,19 @@ def test_extreme_controls_cannot_wrench_the_humerus_past_what_a_shoulder_does(ri
     h = J["elbow"] - J["shoulder"]
     ang = np.degrees(np.arccos(np.clip(h @ h0 / np.linalg.norm(h) / np.linalg.norm(h0), -1, 1)))
     assert ang < 125.0, ang
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_a_named_pose_can_ride_along_in_the_appendage_params():
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    plain = dict(A.back_wings("membrane").build(base, v))
+    folded = dict(A.back_wings("membrane", preset="folded").build(base, v))
+    explicit = dict(A.back_wings("membrane", fold=1.0).build(base, v))
+    for name in plain:
+        assert np.allclose(folded[name].vertices, explicit[name].vertices)
+        assert not np.allclose(folded[name].vertices, plain[name].vertices)
+    # explicit controls override the preset
+    over = dict(A.back_wings("membrane", preset="folded", fold=0.0).build(base, v))
+    for name in plain:
+        assert np.allclose(over[name].vertices, plain[name].vertices)

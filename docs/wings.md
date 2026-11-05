@@ -253,6 +253,22 @@ stay on the sheet; a posed mirrored pair on the body is
 an exact mirror image (1e-15); body-space skin matrices (`M S M⁻¹`) reproduce the placed mesh
 for mirrored placements; and the joints attach to a body `Armature` through the chest.
 
+**Limits of the rig, stated plainly.**
+
+- Linear blend skinning through a host `Armature` (`PlacedWing.attach`, `skin_matrices_body`)
+  moves the bones, feathers and the part of the membrane that rides a finger. The membrane's
+  between-finger re-evaluation (pleats, stretch limiter) is a *post-process on the vertices* that
+  an external skinning engine does not run: through a host armature a stowed membrane is the raw
+  skinned sheet. Use `PlacedWing.pose` / `WingRig.pose_mesh` for the finished shape.
+- Pose dictionaries (joint → Euler) are not interpolable: Euler triples do not blend, and the
+  fold/pleat state is non-linear in them. Interpolate the **controls** (`PoseControls`, or the
+  `flap(phase)` generator) and rebuild the pose per frame.
+- The stretch limiter is a fixed-iteration Jacobi pass, not a solver: under extreme controls a
+  few edges stay a little over 1.15x.
+- A folded membrane at print thickness cannot be a physically pleated bundle (the folded sheet
+  has more volume than the space between the fingers), so a stowed bat/dragon is a damped bundle,
+  capped in height, that reads as folded rather than a faithful accordion. Print them spread.
+
 ## Placement
 
 Appendages are authored at the origin; the wing's frame is

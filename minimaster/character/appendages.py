@@ -490,6 +490,9 @@ class Appendage:
     # derived from PoseControls so a new control can never be left out (the list
     # was hand-written, and wrist_flex / hand_twist crashed the builder)
     POSE_KEYS = tuple(f.name for f in dataclasses.fields(PoseControls))
+    # a named pose (wingrig.PRESETS) may ride along too; explicit controls
+    # override what the preset sets
+    PRESET_KEY = "preset"
 
     def _anchor_frame(self, body_v, body_q, idx, pt):
         """The 4x4 placement of the appendage for side ``idx`` (0 left, 1 right)."""
@@ -592,7 +595,8 @@ class Appendage:
         from .wings import make_wing_rig
         v = base.verts if verts is None else verts
         body_v, body_q = base.body_cage(v)
-        shape = {k: x for k, x in self.params.items() if k not in self.POSE_KEYS}
+        shape = {k: x for k, x in self.params.items()
+                 if k not in self.POSE_KEYS and k != self.PRESET_KEY}
         style = shape.pop("style", "membrane")
         out = []
         points = self._points()
@@ -614,12 +618,16 @@ class Appendage:
         """The pose controls riding in ``params`` (e.g. ``fold``)."""
         return {k: x for k, x in self.params.items() if k in self.POSE_KEYS}
 
+    def pose_preset(self):
+        """The named pose riding in ``params`` (e.g. ``"folded"``), or ``None``."""
+        return self.params.get(self.PRESET_KEY)
+
     def build(self, base, verts=None):
         """Return ``[(name, Mesh)]`` placed on the current morphed body."""
         v = base.verts if verts is None else verts
         if self.kind == "wing":
-            controls = self.pose_controls()
-            return [(name, pw.pose(**controls) if controls else pw.mesh())
+            controls, preset = self.pose_controls(), self.pose_preset()
+            return [(name, pw.pose(preset, **controls) if (controls or preset) else pw.mesh())
                     for name, pw in self.build_rigs(base, v)]
         body_v, body_q = base.body_cage(v)
         out = []
