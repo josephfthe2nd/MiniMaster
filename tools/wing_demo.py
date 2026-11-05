@@ -6,6 +6,7 @@
                   feathered wings, each spread and folded (a pose of the rig).
 ``wing_rig.png``  one wing, no body: the rig through rest / half fold / folded /
                   raised / lowered / curled, in three views.
+``wing_flap.png`` a flap cycle seen from the front, eight phases per style.
 """
 import sys
 
@@ -100,6 +101,23 @@ def main():
     rig_sheet = np.concatenate(strips, axis=0)
     po.write_png("docs/images/wing_rig.png", rig_sheet)
     print("wrote docs/images/wing_rig.png", rig_sheet.shape)
+
+    # a flap cycle: the shoulder leads, the wrist and the fingers lag it, so the
+    # hand trails the wrist instead of the wing swinging like a plank
+    from minimaster.character.wingrig import PoseControls
+    cycle = []
+    for style in ("membrane", "feathered"):
+        rig = V.make_rig(style)
+        colors = V.albedo(rig, style)
+        meshes = [rig.pose_mesh(rig.pose_from_controls(PoseControls.flap(ph, amp=45.0)))
+                  for ph in range(0, 360, 45)]
+        fit = V.frame([m.transform(V.WING_TO_WORLD) for m in meshes])
+        cycle.append(np.concatenate([po.render_portrait(
+            [po.Shell(m.transform(V.WING_TO_WORLD), V.MATS[style], base_colors=colors)],
+            size=(260, 300), azimuth=90.0, elevation=8.0, fit=fit) for m in meshes], axis=1))
+    flap = np.concatenate(cycle, axis=0)
+    po.write_png("docs/images/wing_flap.png", flap)
+    print("wrote docs/images/wing_flap.png", flap.shape)
 
     base, lib = sc.base, sc.lib
     v = sc.character(None)[1]

@@ -295,10 +295,13 @@ BAT_SPEC = {
 # forearm swings FORWARD onto it (negative = toward the leading edge; it starts
 # forward of the humerus, so folding it the other way would open the elbow), and
 # the hand folds back along the forearm.
-BAT_SPEC["fold"] = (-10.0, -100.0, 135.0)   # shoulder offset, elbow, wrist swing at fold=1
-# Stowed, the fingers hairpin at their knuckles (MCP +100..150, IP +120..160 in
-# the photographs), which is what cuts a folded wing to ~0.15 of its spread.
-BAT_SPEC["knuckle_fold"] = (95.0, 85.0)     # MCP, IP swing at fold=1
+BAT_SPEC["fold"] = (-10.0, -100.0, 172.0)   # shoulder offset, elbow, wrist swing at fold=1
+# Stowed, the fingers fold at their knuckles like a concertina: each phalanx lies
+# back along the one before (180 deg less the rest bend), so metacarpal, P1 and P2
+# end up three parallel bars -- which is what cuts a folded wing to ~0.15 of its
+# spread. (The photographs show MCP +100..150 and IP +120..160.)
+BAT_SPEC["knuckle_fold"] = 0.60             # fraction of a full concertina at each knuckle
+BAT_SPEC["fold_lift"] = 12.0                # degrees a stowed wing is lifted off its (buried) plane
 
 # A bird's hand is short (carpometacarpus + one finger) and its ulna long; the
 # flight surface is feathers rooted along ulna and hand, not skin between fingers.
@@ -308,7 +311,8 @@ BIRD_SPEC = {
     "thumb": (0.18, -35.0),                      # the alula's digit
     # carpometacarpus + one phalanx, 0.58 FA in all; the primaries root along it
     "digits": {"III": {"mc": 0.36, "p": (0.22,), "fan": 15.0, "bends": (3.0,)}},
-    "fold": (-10.0, -140.0, 140.0),
+    "fold": (-10.0, -140.0, 172.0),
+    "fold_lift": 16.0,
     "curl_gain": 0.35,         # the hand flexes as a unit: a curl must not split the fan
 }
 _NUM = {"II": 2, "III": 3, "IV": 4, "V": 5}
@@ -331,8 +335,10 @@ class WingSkeleton:
                  tip_pad=0.0, root=None):
         spec = BAT_SPEC if spec is None else spec
         self.fold_angles = spec.get("fold", (0.0, 150.0, 150.0))
-        self.knuckle_fold = spec.get("knuckle_fold", (0.0, 0.0))
+        self.knuckle_fold = float(spec.get("knuckle_fold", 0.0))
+        self.bends = {n: list(d["bends"]) for n, d in spec["digits"].items()}
         self.curl_gain = spec.get("curl_gain", 1.0)
+        self.fold_lift = float(spec.get("fold_lift", 0.0))
         self.feathers: list[dict] = []
         J: dict[str, np.ndarray] = {}
         P: dict[str, str | None] = {}
@@ -453,14 +459,21 @@ class WingSkeleton:
 
     # -- rig controls -----------------------------------------------------
 
-    def _plan_swing(self, pose, joint: str) -> float:
-        """Degrees the plan direction of a joint's outgoing bones has turned
-        (toward the trailing edge) from the swings of it and its ancestors."""
-        total, j = 0.0, joint
+    def _heading_after(self, pose, joint: str, heading_deg: float) -> float:
+        """Plan heading (degrees from +X toward +Z) that a direction at rest
+        ``heading_deg`` has once the rotations of ``joint`` and all its ancestors
+        are applied. Read from the accumulated rotation matrix, not from euler
+        components: a 172-degree wrist swing has no unique euler form."""
+        chain, j = [], joint
         while j is not None:
-            total += -pose.get(j, (0.0, 0.0, 0.0))[1]
+            chain.append(j)
             j = self.parent[j]
-        return total
+        R = np.eye(3)
+        for name in reversed(chain):                       # root first
+            R = R @ m3.euler_rotation(*pose.get(name, (0.0, 0.0, 0.0)))
+        a = np.radians(heading_deg)
+        v = R @ np.array([np.cos(a), 0.0, np.sin(a)])
+        return float(np.degrees(np.arctan2(v[2], v[0])))
 
     def controls_to_pose(self, c: PoseControls) -> dict[str, tuple[float, float, float]]:
         """Joint rotations (wing frame) for the animator-level controls."""
@@ -469,13 +482,30 @@ class WingSkeleton:
         # swing the humerus from its rest direction onto the body line
         s_fold = self.body_angle - self._hum_angle + s_off
         pose: dict[str, tuple[float, float, float]] = {}
-        pose["shoulder"] = compose(raise_(c.raise_), swing_back(c.swing + s_fold * f),
-                                   twist(c.twist))
+        # The shoulder: lift about the axis perpendicular to the arm AS IT IS NOW
+        # (so a stowed wing can be raised too -- about the frame's Z it could not),
+        # i.e. swing about Y after rotating about Z, then roll about the span axis.
+        swing_total = c.swing + s_fold * f
+        # A stowed wing is also lifted off the plane it was welded in: that plane
+        # is sunk into the back so a print is joined, but a wing lying along it
+        # would be buried in the torso rather than resting on it.
+        lift = c.raise_ + self.fold_lift * f
+        pose["shoulder"] = _euler_from_matrix(
+            m3.rot_y(-swing_total) @ m3.rot_z(-lift) @ m3.rot_x(c.twist))
         pose["elbow"] = swing_back(e_fold * f)
-        pose["wrist"] = swing_back(w_fold * f)
-        pose["thumb_cmc"] = swing_back(-25.0 * f)
+        # The wrist hinges in the wing plane (the fold) and cocks out of it
+        # (wrist_flex, hand_twist) about the HAND's own axes.
+        a_h = np.radians(self.out_angle[self.chains["III"][0]])
+        hand_axis = np.array([np.cos(a_h), 0.0, np.sin(a_h)])
+        perp = np.array([-np.sin(a_h), 0.0, np.cos(a_h)])
+        pose["wrist"] = _euler_from_matrix(
+            m3.rot_y(-w_fold * f) @ _rotation_about(perp, -c.wrist_flex)
+            @ _rotation_about(hand_axis, c.hand_twist))
+        # the thumb tucks along the forearm instead of standing out sideways
+        pose["thumb_cmc"] = swing_back(70.0 * f)
         # the fan closes toward the forearm axis as the wing folds
-        s = float(np.clip(c.fan, 0.0, 1.5)) * (1.0 - 0.92 * f)
+        fan = float(np.clip(c.fan, 0.0, 1.5))
+        s = fan * (1.0 - 0.92 * f)
         for name, phi in self.fan.items():
             n = _NUM[name]
             pose[f"d{n}_cmc"] = swing_back(phi * (s - 1.0))
@@ -485,21 +515,33 @@ class WingSkeleton:
                     a = self.out_angle[jn]
                     axis = np.array([-np.sin(np.radians(a)), 0.0, np.cos(np.radians(a))])
                     pose[jn] = _euler_from_matrix(_rotation_about(axis, c.curl * self.curl_gain))
-        if f and any(self.knuckle_fold):
-            # Stowing hairpins each finger at its knuckles (in the wing plane) --
-            # but only once the wing is mostly stowed: half-folded, the hand is
-            # folded and the fingers closed yet still straight.
+        if f and self.knuckle_fold:
+            # Stowing folds each finger like a concertina at its knuckles (in the
+            # wing plane) -- but only once the wing is mostly stowed: half-folded,
+            # the hand is folded and the fingers closed yet still straight.
             k = float(np.clip((f - 0.45) / 0.55, 0.0, 1.0))
             k = k * k * (3.0 - 2.0 * k)
             for name, chain in self.chains.items():
-                for jn, amount in zip(chain[1:-1], self.knuckle_fold):
+                for jn, bend in zip(chain[1:-1], self.bends[name]):
+                    amount = (180.0 - bend) * self.knuckle_fold
                     pose[jn] = compose(pose.get(jn, (0.0, 0.0, 0.0)), swing_back(amount * k))
         # Feathers fold like a closing fan: each turns about its own root toward
         # the folded direction, allowing for whatever its parent bone has done.
+        # ``fan`` spreads the plumage about its own axis, independently of fold:
+        # the primaries about the hand axis, the secondaries about the normal.
+        hand_dir = float(np.degrees(a_h))
         for fe in self.feathers:
-            now = fe["yaw"] + self._plan_swing(pose, fe["parent"])
-            want = fe["yaw"] + (self.body_angle + fe["target"] - fe["yaw"]) * f
-            delta = want - now
+            y0 = fe["yaw"]
+            if fe["row"] == "primary":
+                y_eff = hand_dir + (y0 - hand_dir) * fan
+            elif fe["row"] == "secondary":
+                y_eff = 90.0 + (y0 - 90.0) * float(np.sqrt(fan))
+            else:
+                y_eff = y0
+            now = self._heading_after(pose, fe["parent"], y0)
+            want = y_eff + (self.body_angle + fe["target"] - y_eff) * f
+            # the shortest way round, so a feather never spins the long way
+            delta = (want - now + 180.0) % 360.0 - 180.0
             if abs(delta) > 1e-9:
                 pose[fe["root"]] = swing_back(delta)
         return pose
@@ -534,7 +576,7 @@ SCALLOP_BAT = {"III-IV": 0.03, "IV-V": 0.26, "V-root": 0.09}
 SCALLOP_DRAGON = {"III-IV": 0.40, "IV-V": 0.50, "V-root": 0.30}
 
 
-def membrane_pieces(span=13.0, thickness=0.16, sweep=0.0, droop=0.0, gull=0.16,
+def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
                     camber=CAMBER, scallop=None, root_chord=1.4,
                     billow=0.04, propatagium=True, bones=True, rows=22,
                     spike=0.10, root=None, spec=None):
@@ -629,7 +671,7 @@ def membrane_pieces(span=13.0, thickness=0.16, sweep=0.0, droop=0.0, gull=0.16,
     # is the low point of the wing (measured +5..+11 deg on flying foxes)
     grid[:, :, 1] -= gull * np.clip(grid[:, :, 0] - float(W[0]), 0.0, None)
 
-    thick = np.maximum(thickness * (1.0 - 0.4 * tt), thickness * 0.3)
+    thick = np.maximum(thickness * (1.0 - 0.25 * tt), thickness * 0.7)   # never below ~0.3 mm printed
     # column range of each panel between two bone lines (the root line, last,
     # is body and never pleats)
     starts = [0]
@@ -640,7 +682,8 @@ def membrane_pieces(span=13.0, thickness=0.16, sweep=0.0, droop=0.0, gull=0.16,
                                 pleat={"shape": grid.shape[:2], "sectors": panels,
                                        # the long inboard panel hangs as a drape,
                                        # not a tent as deep as the fingers' panels
-                                       "gains": [1.0, 1.0, 1.0, 0.45]})]
+                                       "gains": [1.0, 1.0, 1.0, 0.8],
+                                       "lobes": [1, 2, 2, 3]})]
 
     # -- propatagium: skin fills the elbow notch in front of the arm -----
     # With the arm a Z (humerus aft, forearm forward) the elbow sits behind the
@@ -818,7 +861,7 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
                      + cup * W[:, None] * np.abs(v)[None, :] ** 1.5)
     # raised along the shaft, thin toward the vane edges and the tip
     th = thickness * (1.0 - 0.68 * np.abs(v))[None, :] * (1.0 - 0.45 * t)[:, None]
-    return _slab_from_grid(grid, np.maximum(th, thickness * 0.22))
+    return _slab_from_grid(grid, np.maximum(th, thickness * 0.40))
 
 
 def _place_feather(mesh: Mesh, root, yaw_deg, roll_deg=0.0) -> Mesh:

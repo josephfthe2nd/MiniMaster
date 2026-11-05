@@ -436,7 +436,7 @@ def test_a_stowed_wing_lies_along_the_body_line_not_the_frames_z(feathered):
     for f in sk.feathers:
         d = tip(f)
         heading = np.arctan2(d[2], d[0])
-        assert abs(np.degrees(heading) - np.degrees(want)) <= 16.0, f["root"]   # the alula rests ~15 off
+        assert abs(np.degrees(heading) - np.degrees(want)) <= 20.0, f["root"]   # the alula rests ~15 off, a little more once lifted out of plane
 
 
 @pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
@@ -452,3 +452,103 @@ def test_the_membrane_root_is_aimed_at_the_waist_of_the_actual_body():
         # the wing plane carries the root to the target's projection into it
         assert abs(root_body[1] - target[1]) < 1.2, name
         assert abs(root_body[0] - target[0]) < 1.2, name
+
+
+# -- the pose controls round 2 added ------------------------------------------
+
+def test_the_birds_fan_control_actually_spreads_the_primaries(feathered):
+    """Regression: the feather compensation cancelled the fan swing exactly, so
+    fan=0..1.5 left every primary where it was."""
+    sk = feathered.skeleton
+
+    def spread(fan):
+        posed = feathered.posed_joints(feathered.pose_from_controls(fan=fan))
+        yaws = []
+        for f in sk.feathers:
+            if f["row"] == "primary":
+                d = posed[f["tip"]] - posed[f["root"]]
+                yaws.append(np.degrees(np.arctan2(d[2], d[0])))
+        return max(yaws) - min(yaws)
+
+    s = [spread(f) for f in (0.0, 0.5, 1.0, 1.5)]
+    assert s == sorted(s) and s[0] < 3.0 and s[2] > 40.0, s
+
+
+def test_a_flap_leads_with_the_wrist_and_the_hand_trails(membrane):
+    """At the top of the upstroke the hand hangs BELOW the wrist; a plank swung
+    from the shoulder (raise only) holds the tip above it."""
+    from minimaster.character.wingrig import PoseControls as PC
+
+    def hand_over_wrist(ctrl):
+        J = membrane.posed_joints(membrane.pose_from_controls(ctrl))
+        return J["d3_tip"][1] - J["wrist"][1]          # +Y is down
+
+    plank = hand_over_wrist(PC(raise_=45.0))
+    flap = hand_over_wrist(PC.flap(90.0, amp=45.0))
+    assert flap > plank + 1.0, (flap, plank)
+
+
+def test_wrist_flex_cocks_the_hand_out_of_the_wing_plane(rig):
+    J0 = rig.posed_joints({})
+    up = rig.posed_joints(rig.pose_from_controls(wrist_flex=30.0))
+    down = rig.posed_joints(rig.pose_from_controls(wrist_flex=-30.0))
+    assert up["d3_tip"][1] < J0["d3_tip"][1] - 0.5        # cocked up = smaller y
+    assert down["d3_tip"][1] > J0["d3_tip"][1] + 0.5      # drooping = larger y
+    # the arm itself does not move
+    assert np.allclose(up["wrist"], J0["wrist"])
+
+
+def test_a_stowed_wing_can_still_be_raised(rig):
+    """Regression: raise rotated about the frame's Z, which is parallel to a
+    stowed humerus, so a folded wing could not be lifted."""
+    def height(raise_):
+        # the ELBOW: in a Z-fold the forearm folds back along the humerus, so the
+        # wrist's lift cancels against the humerus's
+        J = rig.posed_joints(rig.pose_from_controls(fold=1.0, raise_=raise_))
+        return -J["elbow"][1]
+    assert height(45.0) - height(0.0) > 1.5
+
+
+def test_the_folded_hand_lies_back_along_the_forearm(membrane):
+    J = membrane.posed_joints(membrane.pose_from_controls(fold=1.0))
+    fore = J["wrist"] - J["elbow"]
+    mc = J["d3_mcp"] - J["wrist"]
+    c = float(fore @ mc / (np.linalg.norm(fore) * np.linalg.norm(mc)))
+    assert c < -0.7, f"the hand is not folded back along the forearm (cos {c:.2f})"
+
+
+def test_the_thumb_tucks_along_the_forearm_when_stowed(membrane):
+    J0 = membrane.posed_joints({})
+    J1 = membrane.posed_joints(membrane.pose_from_controls(fold=1.0))
+    thumb = J1["thumb_tip"] - J1["wrist"]
+    fore = J1["wrist"] - J1["elbow"]
+    # lies roughly parallel to the forearm, not standing out sideways
+    assert abs(float(thumb @ fore)) / (np.linalg.norm(thumb) * np.linalg.norm(fore)) > 0.5
+
+
+def test_the_membrane_is_thick_enough_to_print(membrane):
+    """~0.3 mm at the 1.79 mm/unit of a 32 mm figure: the free edge included."""
+    a, b = membrane.ranges["membrane"]
+    n1, m1 = next(p for p in membrane.pieces if p.name == "membrane").pleat["shape"]
+    nv = n1 * m1
+    v = membrane.rest_mesh.vertices[a:b]
+    thick = np.linalg.norm(v[:nv] - v[nv:2 * nv], axis=1)
+    assert thick.min() > 0.15, f"thinnest membrane is {thick.min():.3f} units"
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
+    """The wing plane is sunk into the back so a print is welded; a stowed wing
+    lying along that plane was 57% inside the torso. A fold-coupled lift brings
+    it onto the surface, and the stowed pair never crosses the midline."""
+    from tests.test_wings import _inside_body
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    cv, cq = base.body_cage(v)
+    tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
+    for style, limit in (("feathered", 0.35), ("membrane", 0.36)):
+        for name, pw in A.back_wings(style).build_rigs(base, v):
+            w = pw.pose(fold=1.0).vertices[::9]
+            sign = 1.0 if name.endswith("l") else -1.0
+            assert _inside_body(w, tris).mean() < limit, (style, name)
+            assert (sign * w[:, 0] < -0.1).mean() < 0.02, (style, name)

@@ -426,12 +426,14 @@ WING_ROLL = -95.0
 # against ~40% here, which is a weld a 32 mm print can actually survive.
 WING_OFFSET = -0.9
 # Where a wing's attachment line ends on the body: the lower back at the waist,
-# off the midline. A bat's plagiopatagium runs from the shoulder down the flank
+# well off the midline (so a stowed pair lies side by side on the back instead of
+# piling onto the spine; z stays inside the back surface, -0.80 at that x). A
+# bat's plagiopatagium runs from the shoulder down the flank
 # to the hip, so the root edge is aimed at this body point (converted to the
 # wing's own frame) instead of at a fixed local direction. The wing's local +Z
 # points down-and-OUTWARD on the back, so without this the root hangs in the air
 # beside the figure.
-WING_ROOT = (0.55, 0.40, -0.60)
+WING_ROOT = (1.20, 0.40, -0.60)
 
 
 def back_wings(style: str = "membrane", scale: float = 1.0,

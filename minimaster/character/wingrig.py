@@ -106,6 +106,10 @@ class PoseControls:
     ``fan``    0 fingers together .. 1 rest spread (independent of ``fold``).
     ``curl``   degrees every finger bends at its knuckles, toward the underside
                (+) -- the downstroke's cupped hand.
+    ``wrist_flex``  degrees the hand is cocked out of the wing plane at the wrist,
+               tip up (+) or drooping (-). In a real flap the wrist leads and the
+               hand trails: on the upstroke it hangs below the wrist.
+    ``hand_twist``  degrees the hand rolls about its own axis (wash-out / pronation).
     """
 
     fold: float = 0.0
@@ -114,6 +118,23 @@ class PoseControls:
     twist: float = 0.0
     fan: float = 1.0
     curl: float = 0.0
+    wrist_flex: float = 0.0
+    hand_twist: float = 0.0
+
+    @classmethod
+    def flap(cls, phase_deg: float, amp: float = 45.0, **kw) -> "PoseControls":
+        """One instant of a flap cycle. ``phase_deg`` 0 = mid-stroke going up,
+        90 = top of the upstroke, 270 = bottom of the downstroke. The shoulder
+        leads; the wrist and the finger curl lag it (40 and 70 degrees of phase),
+        so the hand trails the wrist -- hanging below it when the wing is raised --
+        instead of the whole wing swinging like a plank."""
+        ph = np.radians(phase_deg)
+        c = cls(raise_=amp * float(np.sin(ph)),
+                wrist_flex=-0.6 * amp * float(np.sin(ph - np.radians(40.0))),
+                curl=0.35 * amp * float(np.sin(ph - np.radians(70.0))) + 0.3 * amp * 0.35)
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return c
 
 
 # Anatomical ranges of the controls, from skeleton and flight photographs (and
@@ -121,11 +142,13 @@ class PoseControls:
 # what the joints allow, so the controls are clamped to these.
 LIMITS = {
     "fold": (0.0, 1.0),
-    "raise_": (-70.0, 85.0),          # shoulder elevation: hanging .. wrists-over-back
+    "raise_": (-70.0, 100.0),         # shoulder elevation: hanging .. wrists-over-back
     "swing": (-30.0, 85.0),           # humerus protraction .. stowed along the spine
     "twist": (-45.0, 45.0),           # humerus roll: supination .. pronation
     "fan": (0.0, 1.5),
     "curl": (-10.0, 150.0),           # knuckle flexion
+    "wrist_flex": (-60.0, 45.0),      # hand drooping .. cocked up
+    "hand_twist": (-30.0, 30.0),
 }
 
 # Named poses over the controls. A flap cycle is up -> down -> up: the upstroke
@@ -135,9 +158,9 @@ PRESETS = {
     "glide": {},
     "half_fold": {"fold": 0.5},
     "folded": {"fold": 1.0},
-    "upstroke": {"raise_": 55.0, "fold": 0.35, "twist": -15.0, "fan": 0.7},
-    "downstroke": {"raise_": -40.0, "twist": 15.0, "curl": 12.0},
-    "mid_downstroke": {"raise_": 5.0, "twist": 10.0},
+    "upstroke": {"raise_": 55.0, "fold": 0.35, "twist": -15.0, "fan": 0.7, "wrist_flex": -30.0},
+    "downstroke": {"raise_": -40.0, "twist": 15.0, "curl": 12.0, "wrist_flex": 20.0},
+    "mid_downstroke": {"raise_": 5.0, "twist": 10.0, "wrist_flex": 8.0},
 }
 
 
@@ -150,6 +173,9 @@ def clamp_controls(c: "PoseControls") -> "PoseControls":
 
 # How far a membrane panel can close before it has to buckle into a pleat.
 ELASTIC = 0.90
+# How far skin may stretch (relative to its rest length) before the limiter
+# pulls it back. Compression is free -- that is what the pleats are for.
+MAX_STRETCH = 1.15
 
 # --------------------------------------------------------------------------
 # the rig
@@ -191,7 +217,7 @@ class WingRig:
     """
 
     def __init__(self, skeleton, pieces: list[Piece], influences: int = 4,
-                 membrane_power: float = 3.0, membrane_eps: float = 0.25):
+                 membrane_power: float = 4.0, membrane_eps: float = 0.06):
         self.skeleton = skeleton
         self.pieces = list(pieces)
         self.armature = Armature()
@@ -313,6 +339,7 @@ class WingRig:
         for piece, (a, b) in specs:
             n1, m1 = piece.pleat["shape"]
             gains = piece.pleat.get("gains", [1.0] * len(piece.pleat["sectors"]))
+            lobes = piece.pleat.get("lobes", [1] * len(piece.pleat["sectors"]))
             nv = n1 * m1
             rest = self.rest_mesh.vertices[a:b]
             pos = posed[a:b]
@@ -366,12 +393,18 @@ class WingRig:
                 ruled_p = mid[:, c0][:, None, :] + chord_p[:, None, :] * s_ij[..., None]
                 h = (gain * gains[k] * 0.5 * np.sqrt(slack) * fade
                      * (1.0 if k % 2 == 0 else -1.0))
-                pleat = h[:, None, None] * np.sin(np.pi * s_ij)[..., None] * n_axis[:, None, :]
+                # k fine pleats instead of one bladder: each is a tent of slant L/2k
+                # over a base g/k, so k lobes of height h/k
+                kl = float(lobes[k])
+                pleat = (h / kl)[:, None, None] * np.sin(kl * np.pi * s_ij)[..., None] * n_axis[:, None, :]
                 fresh = ruled_p + d_pose + pleat
                 w = fade[:, None, None]                                   # blend in with closure
                 new_mid[:, c0:c1 + 1] = (1.0 - w) * mid[:, c0:c1 + 1] + w * fresh
-            if not touched:
+            pinned = (self._wt[a:a + nv, 0] >= 0.97).reshape(n1, m1)
+            limited = self._limit_stretch(new_mid, r_mid, pinned)
+            if not touched and np.allclose(limited, new_mid):
                 continue
+            new_mid = limited
             # rebuild the two faces of the slab about the new mid-surface
             du = np.gradient(new_mid, axis=0)
             dv = np.gradient(new_mid, axis=1)
@@ -382,6 +415,37 @@ class WingRig:
             pos[:nv] = (new_mid + nrm * r_half[..., None]).reshape(-1, 3)
             pos[nv:2 * nv] = (new_mid - nrm * r_half[..., None]).reshape(-1, 3)
         return posed
+
+    @staticmethod
+    def _limit_stretch(mid, rest_mid, pinned, iters: int = 16):
+        """Jacobi passes that pull any grid edge longer than MAX_STRETCH x its
+        rest length back, moving both ends equally (``pinned`` vertices -- those
+        riding a bone -- stay put). Linear-blend skinning across a hairpin
+        collapses some rows and stretches their neighbours; skin does not."""
+        rest_u = np.linalg.norm(np.diff(rest_mid, axis=0), axis=2)      # between rows
+        rest_v = np.linalg.norm(np.diff(rest_mid, axis=1), axis=2)      # between columns
+        free = (~pinned)[..., None]
+        for _ in range(iters):
+            disp = np.zeros_like(mid)
+            cnt = np.zeros(mid.shape[:2])
+            for d_axis, rest in ((0, rest_u), (1, rest_v)):
+                a = mid[:-1] if d_axis == 0 else mid[:, :-1]
+                b = mid[1:] if d_axis == 0 else mid[:, 1:]
+                d = b - a
+                length = np.linalg.norm(d, axis=2)
+                over = length - MAX_STRETCH * rest
+                mask = over > 1e-9
+                corr = (np.where(mask, over / np.maximum(length, 1e-12), 0.0))[..., None] * d * 0.5
+                if d_axis == 0:
+                    disp[:-1] += corr; disp[1:] -= corr
+                    cnt[:-1] += mask; cnt[1:] += mask
+                else:
+                    disp[:, :-1] += corr; disp[:, 1:] -= corr
+                    cnt[:, :-1] += mask; cnt[:, 1:] += mask
+            if not cnt.any():
+                break
+            mid = mid + np.where(free, disp / np.maximum(cnt, 1.0)[..., None], 0.0)
+        return mid
 
     def pose_piece(self, name: str, pose=None) -> Mesh:
         a, b = self.ranges[name]
