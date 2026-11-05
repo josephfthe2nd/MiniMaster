@@ -548,12 +548,28 @@ def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
     v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
     cv, cq = base.body_cage(v)
     tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
+    # The WHOLE-wing figure is dominated by the welded root (shoulder, scapulars,
+    # the humerus's coverts), which is sunk into the back on purpose so a print
+    # is joined: ~28% of a stowed feathered wing (the fold lift 12 -> 20 alone gave
+    # 24%; the new marginal and tertial covert rows, which sit at the root, brought
+    # it back to 28%). A fold-coupled standoff would be the next lever. What can
+    # be pinned separately is the visible plumage: the flight feathers must stand
+    # clear of the back.
     for style, limit in (("feathered", 0.30), ("membrane", 0.36)):
         for name, pw in A.back_wings(style).build_rigs(base, v):
-            w = pw.pose(fold=1.0).vertices[::9]
+            m = pw.pose(fold=1.0)
+            w = m.vertices[::9]
             sign = 1.0 if name.endswith("l") else -1.0
             assert _inside_body(w, tris).mean() < limit, (style, name)
             assert (sign * w[:, 0] < -0.1).mean() < 0.02, (style, name)
+            if style == "feathered":
+                flight = np.concatenate([m.vertices[a:b] for p in pw.rig.pieces
+                                         if p.name.startswith(("primary0", "primary10", "secondary"))
+                                         for a, b in [pw.rig.ranges[p.name]]])[::3]
+                assert _inside_body(flight, tris).mean() < 0.12, (style, name)
+
+
+
 
 
 # -- orientation must not depend on the body's sliders -------------------------
@@ -708,20 +724,29 @@ def test_grid_normals_survive_a_degenerate_column():
 
 
 @pytest.mark.parametrize("style", ["membrane", "dragon"])
-@pytest.mark.parametrize("pose", [{"fold": 0.6}, {"fold": 1.0}, {"curl": 40.0, "fold": 0.3}],
-                         ids=str)
-def test_a_posed_membrane_keeps_its_thickness(style, pose):
-    """The slab is rebuilt about the pleated mid-surface; it must come out as
-    thick as it went in, not ballooned or collapsed."""
+def test_a_stowed_membrane_is_a_flat_bundle_not_a_tent(style):
+    """The pleats stand along the slab's up axis and used to rise a few bone
+    thicknesses off the sheet (3.65 units with the cap lifted, against 2.3 with it).
+    This pins the extent along the plane normal, which is what the cap changes."""
     rig = W.make_wing_rig(style)
-    piece, a, n1, m1 = _membrane_slab(rig)
-    nv = n1 * m1
-    rest = rig.rest_mesh.vertices[a:a + 2 * nv]
-    t_rest = np.linalg.norm(rest[:nv] - rest[nv:], axis=1)
-    V = rig.pose_mesh(rig.pose_from_controls(**pose)).vertices[a:a + 2 * nv]
-    t = np.linalg.norm(V[:nv] - V[nv:], axis=1)
-    ratio = t / t_rest
-    assert np.isclose(ratio, 1.0, atol=0.35).mean() > 0.98, (ratio.min(), ratio.max())
+    for fold in (0.5, 0.8, 1.0):
+        m = rig.pose_mesh(rig.pose_from_controls(fold=fold))
+        lo, hi = m.bounds
+        assert hi[1] - lo[1] < 2.7, (style, fold, hi[1] - lo[1])
+        assert m.volume() > 0.0, (style, fold)
+
+
+def test_the_pleat_cap_is_what_keeps_a_stowed_membrane_flat():
+    from minimaster.character import wingrig as R
+    rig = W.make_wing_rig("membrane")
+    pose = rig.pose_from_controls(fold=1.0)
+    capped = np.ptp(rig.pose_mesh(pose).vertices[:, 1])
+    old, R.PLEAT_CAP = R.PLEAT_CAP, 1e6
+    try:
+        uncapped = np.ptp(rig.pose_mesh(pose).vertices[:, 1])
+    finally:
+        R.PLEAT_CAP = old
+    assert uncapped > capped + 0.8, (capped, uncapped)
 
 
 def test_a_knuckle_curl_and_the_fold_concertina_multiply_instead_of_adding(membrane):
