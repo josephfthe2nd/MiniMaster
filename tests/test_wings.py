@@ -92,13 +92,45 @@ def test_unknown_style_is_rejected():
 
 # -- the planform -----------------------------------------------------------
 
-@pytest.mark.parametrize("style", STYLES)
-def test_planform_is_a_wing_not_a_paddle(style):
+def planform_area(mesh):
+    """Area seen from above. A closed solid projects twice, hence the half."""
+    t = mesh.vertices[mesh.faces][:, :, [0, 2]]
+    u, v = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]
+    return float((0.5 * np.abs(u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0])).sum() / 2.0)
+
+
+def test_membrane_planform_has_a_realistic_aspect_ratio():
     """Regression: fanning the digits off an already-swept forearm compounded
-    the angles until digit III sat 62 degrees off the span axis. The whole
-    chain's length went into chord and the wing came out square."""
-    mesh = W.make_wing(style=style)
+    the angles until digit III sat 62 degrees off the span axis, the whole
+    chain's length went into chord and the wing came out square. The root now
+    runs down to the hip, so a bounding-box ratio no longer says anything; the
+    planform-area aspect ratio does, and flying foxes sit at about 6-7."""
+    mesh = W.make_wing(style="membrane")
+    ar = 2.0 * span_of(mesh) ** 2 / planform_area(mesh)       # for the pair
+    assert 5.0 < ar < 8.0, f"aspect ratio {ar:.2f} is outside the 6-7 of a real bat"
+
+
+def test_feathered_planform_is_long_not_square():
+    mesh = W.make_wing(style="feathered")
     assert span_of(mesh) / chord_of(mesh) > 1.8, "planform is too stubby"
+
+
+def test_the_hand_wing_continues_outward_instead_of_sideways():
+    """Same regression, stated on the skeleton: wrist-to-tip of digit III must
+    stay close to the span axis."""
+    sk = W.WingSkeleton()
+    d = sk.digits["III"] - sk.wrist
+    assert np.degrees(np.arctan2(d[2], d[0])) < 35.0
+
+
+def test_the_arm_is_a_z_with_the_wrist_forward_of_the_shoulder():
+    """Every skeleton and photograph shows it: humerus aft, forearm forward, so
+    the wrist is the most forward point of the planform."""
+    sk = W.WingSkeleton()
+    assert sk.elbow[2] > sk.shoulder[2], "the elbow sits aft of the shoulder"
+    assert sk.wrist[2] < sk.shoulder[2], "the wrist sits forward of the shoulder"
+    assert sk.wrist[2] == min(v[2] for k, v in sk.joints.items()
+                              if k in ("shoulder", "elbow", "wrist", "d3_tip", "d4_tip", "d5_tip"))
 
 
 def test_digit_three_makes_the_wingtip():
@@ -129,8 +161,8 @@ def test_the_trailing_edge_is_scalloped_not_straight():
 
 
 def test_camber_lifts_the_membrane():
-    flat = W.membrane_wing(camber=0.0, droop=0.0, bones=False)
-    arched = W.membrane_wing(camber=0.2, droop=0.0, bones=False)
+    flat = W.membrane_wing(camber=0.0, droop=0.0, gull=0.0, bones=False)
+    arched = W.membrane_wing(camber=0.2, droop=0.0, gull=0.0, bones=False)
     # camber bulges toward -Y (the wing's upper surface)
     assert arched.vertices[:, 1].min() < flat.vertices[:, 1].min() - 0.2
 
@@ -166,7 +198,7 @@ def test_thickness_scales_the_solid():
 # -- feathers ---------------------------------------------------------------
 
 def test_one_feather_is_a_solid_with_an_asymmetric_vane():
-    f = W._feather(5.0, 1.2, 0.2)
+    f = W._blade(5.0, 1.2, 0.2)
     rep = f.integrity_report()
     assert rep["watertight"] and rep["volume"] > 0
     # lead_frac=0.34 puts more vane on the trailing side of the shaft
@@ -178,11 +210,34 @@ def test_feather_vane_stays_broad_instead_of_tapering_to_a_point():
     """Regression: a vane shaped like sin(pi*t) is widest only at its middle,
     so neighbours touch at one point and leave V-shaped gaps. Real vanes run
     nearly parallel-sided, which is what makes a wing read as shingled."""
-    f = W._feather(5.0, 1.0, 0.15, curl=0.0, sweep=0.0)
+    f = W._blade(5.0, 1.0, 0.15, curl=0.0, sweep=0.0)
     v = f.vertices
     mid = v[(v[:, 0] > 1.5) & (v[:, 0] < 3.5)]
     far = v[(v[:, 0] > 3.5) & (v[:, 0] < 4.4)]
     assert np.ptp(far[:, 2]) > 0.7 * np.ptp(mid[:, 2])
+
+
+def test_emargination_notches_the_leading_vane_near_the_tip():
+    """Soaring primaries are slotted: the leading vane narrows sharply toward
+    the tip, which is what lets the feathers spread into fingers."""
+    plain = W._blade(5.0, 1.0, 0.15, curl=0.0, sweep=0.0, emarg=0.0)
+    cut = W._blade(5.0, 1.0, 0.15, curl=0.0, sweep=0.0, emarg=0.7)
+    def lead_width(mesh):
+        v = mesh.vertices
+        sel = v[(v[:, 0] > 3.0) & (v[:, 0] < 3.4)]
+        return -sel[:, 2].min()
+    assert lead_width(cut) < 0.6 * lead_width(plain)
+    assert cut.integrity_report()["watertight"]
+
+
+def test_the_longest_flight_feather_is_a_primary():
+    sk, parts = W.feathered_pieces()
+    length = {}
+    for p in parts:
+        if p.name[:7] in ("primary", "seconda") and p.name[-2:].isdigit() and "covert" not in p.name:
+            length[p.name] = float(np.ptp(p.mesh.vertices @ np.array([1.0, 0, 0])))
+    longest = max(length, key=length.get)
+    assert longest.startswith("primary"), longest
 
 
 def test_feather_counts_change_the_mesh():

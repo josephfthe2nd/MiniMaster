@@ -1,0 +1,413 @@
+"""The wing rig: joints, skin weights and poses.
+
+``test_wings.py`` pins the geometry. These tests pin what makes it a *rig*: a
+mesh bound to a joint hierarchy that deforms when joints turn, without the
+topology changing, the bones stretching, or the root coming off the body.
+"""
+
+import itertools
+
+import numpy as np
+import pytest
+
+from minimaster.character import appendages as A
+from minimaster.character import mhbase as mh
+from minimaster.character import wings as W
+from minimaster.character.wingrig import PlacedWing, PoseControls
+from minimaster.core.armature import Armature
+
+STYLES = ("membrane", "feathered")
+
+# a spread of poses that exercises every control, alone and combined
+POSES = [
+    {}, {"fold": 0.5}, {"fold": 1.0}, {"raise_": 45.0}, {"raise_": -45.0},
+    {"swing": 30.0}, {"twist": 25.0}, {"curl": 30.0}, {"fan": 0.0},
+    {"fold": 0.7, "raise_": 20.0, "twist": -10.0},
+]
+
+
+@pytest.fixture(scope="module", params=STYLES)
+def rig(request):
+    return W.make_wing_rig(request.param)
+
+
+@pytest.fixture(scope="module")
+def membrane():
+    return W.make_wing_rig("membrane")
+
+
+@pytest.fixture(scope="module")
+def feathered():
+    return W.make_wing_rig("feathered")
+
+
+def bone_lengths(rig, pose):
+    J = rig.armature.posed_positions(pose)
+    return {k: float(np.linalg.norm(J[k] - J[rig.armature.joints[k].parent]))
+            for k in rig.bone_keys}
+
+
+# -- the joint hierarchy --------------------------------------------------
+
+def test_the_skeleton_is_a_real_anatomical_hierarchy(membrane):
+    arm = membrane.armature
+    assert arm.joints["root"].parent is None
+    assert arm.ancestors("d3_tip") == ["d3_ip", "d3_mcp", "d3_cmc", "wrist",
+                                       "elbow", "shoulder", "root"]
+    # the thumb hangs off the wrist, not off a finger
+    assert arm.ancestors("thumb_tip")[:2] == ["thumb_cmc", "wrist"]
+    # every digit has its own base joint at the wrist so the fan can spread
+    for n in (2, 3, 4, 5):
+        assert np.allclose(arm.joints[f"d{n}_cmc"].position, arm.joints["wrist"].position)
+
+
+def test_digits_are_chains_of_phalanges_with_knuckles(membrane):
+    sk = membrane.skeleton
+    # joints: base at the wrist, then one per knuckle, then the tip. So digit
+    # III is a metacarpal + two phalanges (3 bones), digit II a metacarpal + one.
+    assert sk.chains["III"] == ["d3_cmc", "d3_mcp", "d3_ip", "d3_tip"]
+    assert sk.chains["II"] == ["d2_cmc", "d2_mcp", "d2_tip"]
+
+
+def test_every_flight_feather_has_its_own_root_and_tip_joint(feathered):
+    sk = feathered.skeleton
+    rows = {f["row"] for f in sk.feathers}
+    assert rows == {"primary", "secondary", "tertial"}
+    for f in sk.feathers:
+        assert feathered.armature.joints[f["tip"]].parent == f["root"]
+        assert feathered.armature.joints[f["root"]].parent == f["parent"]
+
+
+# -- rest pose and weights ------------------------------------------------
+
+def test_the_rest_pose_reproduces_the_mesh_exactly(rig):
+    assert np.array_equal(rig.pose_mesh({}).vertices, rig.rest_mesh.vertices)
+    zeros = {k: (0.0, 0.0, 0.0) for k in rig.armature.joints}
+    assert np.abs(rig.pose_mesh(zeros).vertices - rig.rest_mesh.vertices).max() < 1e-12
+
+
+def test_every_vertex_has_valid_normalised_weights(rig):
+    idx, wt = rig.weights()
+    assert (wt >= 0.0).all()
+    assert np.allclose(wt.sum(axis=1), 1.0, atol=1e-9)
+    assert idx.max() < len(rig.bone_keys)
+    assert (wt > 0).sum(axis=1).max() <= 4
+
+
+def test_rigid_pieces_follow_exactly_one_bone(rig):
+    idx, wt = rig.weights()
+    rigid = [p for p in rig.pieces if p.bone is not None]
+    assert rigid
+    for p in rigid:
+        a, b = rig.ranges[p.name]
+        assert (wt[a:b, 0] == 1.0).all() and (wt[a:b, 1:] == 0.0).all(), p.name
+        assert (idx[a:b, 0] == rig.bone_keys.index(p.bone)).all(), p.name
+
+
+def test_a_finger_is_pulled_only_by_its_own_bones(membrane):
+    idx, wt = membrane.weights()
+    for name, chain in membrane.skeleton.chains.items():
+        a, b = membrane.ranges[f"digit_{name}"]
+        used = {membrane.bone_keys[i] for i in np.unique(idx[a:b][wt[a:b] > 0])}
+        assert used <= set(chain[1:]), f"digit {name} is pulled by {used - set(chain[1:])}"
+
+
+def test_each_flight_feather_is_welded_to_its_own_tip_bone(feathered):
+    for f in feathered.skeleton.feathers:
+        name = f"{f['row']}{f['tip'][len(f['row']):len(f['row']) + 2]}"
+        assert feathered.dominant_bone(name) == f["tip"]
+
+
+def test_coverts_ride_on_the_flight_feather_they_lie_over(feathered):
+    """A greater covert that stayed behind when its secondary fanned out would
+    leave a hole; it is bound to the same bone instead."""
+    for row, src in (("greater", "secondary"), ("primary_covert", "primary")):
+        for i in (1, 5):
+            assert (feathered.dominant_bone(f"{row}{i:02d}")
+                    == feathered.dominant_bone(f"{src}{i:02d}"))
+
+
+def test_the_membrane_root_is_bound_to_the_body_bone(membrane):
+    """The root edge must follow the torso, not the arm."""
+    a, b = membrane.ranges["membrane"]
+    v = membrane.rest_mesh.vertices[a:b]
+    idx, wt = membrane.weights()
+    root = (v[:, 0] < 0.02 * membrane.skeleton.span) & (v[:, 2] > 0.5 * membrane.skeleton.root[2])
+    assert root.sum() > 10
+    carried = {membrane.bone_keys[i] for i in idx[a:b][root][:, 0]}
+    assert carried == {"shoulder"}, carried                     # root -> shoulder bone
+
+
+# -- posing ----------------------------------------------------------------
+
+@pytest.mark.parametrize("pose", POSES, ids=lambda p: "+".join(p) or "rest")
+def test_bones_never_stretch(rig, pose):
+    rest = bone_lengths(rig, {})
+    posed = bone_lengths(rig, rig.pose_from_controls(**pose))
+    for k, length in rest.items():
+        assert posed[k] == pytest.approx(length, abs=1e-9), k
+
+
+@pytest.mark.parametrize("pose", POSES, ids=lambda p: "+".join(p) or "rest")
+def test_every_pose_stays_a_watertight_solid_per_piece(rig, pose):
+    """Skinning moves vertices but never edges, so closed shells stay closed."""
+    posed = rig.pose_mesh(rig.pose_from_controls(**pose))
+    assert np.isfinite(posed.vertices).all()
+    for p in rig.pieces:
+        a, b = rig.ranges[p.name]
+        assert p.mesh.integrity_report()["watertight"], p.name
+        assert posed.faces[(posed.faces >= a).all(axis=1) & (posed.faces < b).all(axis=1)].size \
+            == p.mesh.faces.size, p.name
+
+
+def test_posing_is_deterministic(rig):
+    pose = rig.pose_from_controls(fold=0.4, raise_=15.0)
+    assert np.array_equal(rig.pose_mesh(pose).vertices, rig.pose_mesh(pose).vertices)
+
+
+def reach(rig, mesh):
+    """Farthest any vertex gets from the shoulder. (Not the x-extent: a folding
+    wing's tips swing back across the shoulder, so its x-range is not monotonic.)"""
+    return float(np.linalg.norm(mesh.vertices - rig.skeleton.shoulder, axis=1).max())
+
+
+def test_folding_makes_the_wing_compact(rig):
+    assert reach(rig, rig.pose(fold=1.0)) < 0.6 * reach(rig, rig.rest_mesh)
+
+
+def test_fold_is_progressive(rig):
+    reaches = [reach(rig, rig.pose(fold=f)) for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
+    # never grows as the wing closes (it may level off once stowed, when the
+    # farthest point is simply the thumb or an elbow knob)
+    assert all(b <= a + 0.02 * reaches[0] for a, b in zip(reaches, reaches[1:])), reaches
+    assert reaches[0] > 1.5 * reaches[-1]
+
+
+def test_raising_lifts_the_wingtip_toward_the_upper_surface(rig):
+    """+Y is the underside, so a raised tip has a smaller y."""
+    tip0 = rig.posed_joints({})["d3_tip"]
+    tip_up = rig.posed_joints(rig.pose_from_controls(raise_=40.0))["d3_tip"]
+    tip_dn = rig.posed_joints(rig.pose_from_controls(raise_=-40.0))["d3_tip"]
+    assert tip_up[1] < tip0[1] - 2.0
+    assert tip_dn[1] > tip0[1] + 2.0
+    reach = np.linalg.norm(tip0 - rig.armature.joints["shoulder"].position)
+    assert tip0[1] - tip_up[1] == pytest.approx(reach * np.sin(np.radians(40.0)), rel=0.35)
+
+
+def test_the_root_stays_on_the_body_while_the_wing_flaps(membrane):
+    a, b = membrane.ranges["membrane"]
+    v = membrane.rest_mesh.vertices[a:b]
+    root = (v[:, 0] < 0.02 * membrane.skeleton.span) & (v[:, 2] > 0.5 * membrane.skeleton.root[2])
+    tip = v[:, 0] > 0.9 * v[:, 0].max()
+    for pose in ({"raise_": 50.0}, {"raise_": -30.0}, {"fold": 1.0}):
+        moved = np.linalg.norm(membrane.pose(**pose).vertices[a:b] - v, axis=1)
+        assert moved[root].max() < 0.05 * moved[tip].mean(), pose
+
+
+def test_closing_the_fan_brings_the_fingertips_together(membrane):
+    def spread(pose):
+        J = membrane.posed_joints(membrane.pose_from_controls(**pose))
+        return np.linalg.norm(J["d3_tip"] - J["d5_tip"])
+    assert spread({"fan": 0.0}) < 0.5 * spread({})
+
+
+def test_curl_bends_the_fingers_toward_the_underside(membrane):
+    J0 = membrane.posed_joints({})
+    J1 = membrane.posed_joints(membrane.pose_from_controls(curl=35.0))
+    for n in (3, 4, 5):
+        assert J1[f"d{n}_tip"][1] > J0[f"d{n}_tip"][1] + 0.2
+
+
+def test_finger_bones_stay_on_the_sheet_when_the_wing_moves(membrane):
+    """A finger tube is skinned over its own bones and the membrane over all of
+    them; if the two ever disagreed the bone would peel off the skin."""
+    a, b = membrane.ranges["digit_III"]
+    ma, mb = membrane.ranges["membrane"]
+
+    def gap(pose):
+        m = membrane.pose_mesh(pose)
+        tube = m.vertices[a:b][::3]
+        sheet = m.vertices[ma:mb]
+        d = np.linalg.norm(tube[:, None, :] - sheet[None, ::2, :], axis=2).min(axis=1)
+        return float(d.max())
+
+    rest = gap({})
+    for pose in ({"fold": 0.5}, {"raise_": 40.0}, {"curl": 30.0}, {"fan": 0.3}):
+        assert gap(membrane.pose_from_controls(**pose)) < max(4.0 * rest, 0.6), pose
+
+
+def test_a_folding_membrane_pleats_instead_of_exploding(membrane):
+    """The slack corrective has to stay bounded: pleats are fabric folds, not
+    spikes, so nothing may leave the wing's own reach."""
+    spread = float(np.ptp(membrane.rest_mesh.vertices[:, 0]))
+    for f in (0.3, 0.6, 1.0):
+        v = membrane.pose(fold=f).vertices
+        assert np.abs(v - membrane.rest_mesh.vertices.mean(axis=0)).max() < 1.5 * spread
+
+
+# -- placement on a body ---------------------------------------------------
+
+def _rot(deg):
+    a = np.radians(deg)
+    return np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1.0]])
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_body_space_skin_matrices_reproduce_the_placed_mesh(membrane, mirror):
+    """A host armature that only knows body space must be able to pose the wing:
+    M S M^-1 applied to the placed rest vertices equals the placed posed ones,
+    for a mirrored (det < 0) placement too."""
+    M = np.eye(4)
+    M[:3, :3] = _rot(37.0) * (np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)) * 0.8
+    M[:3, 3] = [1.0, -2.0, 3.0]
+    pw = PlacedWing(membrane, M)
+    pose = membrane.pose_from_controls(fold=0.4, raise_=25.0)
+    placed_rest = membrane.rest_mesh.transform(M)
+    want = pw.mesh(pose).vertices
+    skins = pw.skin_matrices_body(pose)
+    a, b = membrane.ranges["thumb"]
+    key = "thumb_tip"
+    S = skins[key]
+    got = placed_rest.vertices[a:b] @ S[:3, :3].T + S[:3, 3]
+    assert np.allclose(got, want[a:b], atol=1e-9)
+
+
+def test_wing_joints_attach_to_a_body_armature(membrane):
+    body = Armature()
+    body.add_joint("chest", (0.0, 0.0, 14.0))
+    M = np.eye(4)
+    M[:3, 3] = [2.0, 0.0, 15.0]
+    names = PlacedWing(membrane, M).attach(body, "chest", prefix="wing_l")
+    assert "wing_l:shoulder" in names and "wing_l:d3_tip" in names
+    assert body.joints["wing_l:root"].parent == "chest"
+    assert np.allclose(body.joints["wing_l:shoulder"].position,
+                       membrane.armature.joints["shoulder"].position + [2.0, 0.0, 15.0])
+    assert body.ancestors("wing_l:d3_tip")[-2:] == ["wing_l:root", "chest"]
+    # the body armature can now pose the wing through the chest
+    posed = body.posed_positions({"chest": (0.0, 0.0, 30.0)})
+    assert not np.allclose(posed["wing_l:d3_tip"], body.joints["wing_l:d3_tip"].position)
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+class TestOnTheBody:
+    @pytest.mark.parametrize("style", STYLES)
+    def test_a_posed_pair_is_still_an_exact_mirror_image(self, style):
+        base, lib = mh.load()
+        v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+        rigs = A.back_wings(style).build_rigs(base, v)
+        for pose in ({"fold": 0.6}, {"raise_": 35.0, "twist": 10.0}, {"curl": 20.0}):
+            (_, left), (_, right) = rigs
+            mirrored = left.pose(**pose).vertices @ np.diag([-1.0, 1.0, 1.0]).T
+            assert np.abs(mirrored - right.pose(**pose).vertices).max() < 1e-9, pose
+
+    @pytest.mark.parametrize("style", STYLES)
+    def test_posed_wings_on_the_body_are_watertight_and_follow_the_pose(self, style):
+        base, lib = mh.load()
+        v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+        app = A.back_wings(style)
+        rest = dict(app.build(base, v))
+        for name, pw in app.build_rigs(base, v):
+            folded = pw.pose(fold=1.0)
+            assert folded.integrity_report()["watertight"], name
+            assert np.ptp(folded.vertices, axis=0).max() < np.ptp(rest[name].vertices, axis=0).max()
+
+    def test_a_fold_given_in_the_appendage_params_is_a_pose_not_a_rebuild(self):
+        base, lib = mh.load()
+        v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+        folded = A.back_wings("membrane", fold=1.0).build(base, v)
+        rigs = A.back_wings("membrane").build_rigs(base, v)
+        for (name, mesh), (_, pw) in zip(folded, rigs):
+            assert np.allclose(mesh.vertices, pw.pose(fold=1.0).vertices)
+
+    def test_only_wings_are_rigged(self):
+        base = mh.BaseMesh()
+        with pytest.raises(ValueError, match="only wings are rigged"):
+            A.Appendage("tail", anchor_point=(0, 0, 0)).build_rigs(base)
+
+
+def test_pose_controls_default_is_the_rest_pose():
+    assert PoseControls().fold == 0.0 and PoseControls().fan == 1.0
+
+
+def test_unknown_style_has_no_rig():
+    with pytest.raises(KeyError, match="unknown wing style"):
+        W.make_wing_rig("jetpack")
+
+
+# -- named poses and joint limits -------------------------------------------
+
+from minimaster.character.wingrig import LIMITS, PRESETS  # noqa: E402
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_is_a_valid_pose_of_both_rigs(rig, name):
+    posed = rig.pose_mesh(rig.pose_from_controls(name))
+    assert np.isfinite(posed.vertices).all()
+    assert posed.integrity_report()["watertight"]
+
+
+def test_a_preset_can_be_overridden_by_keywords(membrane):
+    a = membrane.pose_from_controls("upstroke")
+    b = membrane.pose_from_controls("upstroke", raise_=10.0)
+    assert a["shoulder"] != b["shoulder"]
+
+
+def test_folded_preset_is_fold_one(membrane):
+    assert np.allclose(membrane.pose("folded").vertices, membrane.pose(fold=1.0).vertices)
+
+
+def test_upstroke_lifts_the_tip_and_downstroke_lowers_it(membrane):
+    tip = lambda name: membrane.posed_joints(membrane.pose_from_controls(name))["d3_tip"][1]  # noqa: E731
+    rest = membrane.posed_joints({})["d3_tip"][1]
+    assert tip("upstroke") < rest < tip("downstroke")
+
+
+def test_controls_are_clamped_to_what_the_joints_allow(rig):
+    """Asking for an impossible pose gets the nearest possible one, not a wing
+    wrenched through its own body."""
+    lo, hi = LIMITS["raise_"]
+    assert np.allclose(rig.pose_mesh(rig.pose_from_controls(raise_=hi + 500)).vertices,
+                       rig.pose_mesh(rig.pose_from_controls(raise_=hi)).vertices)
+    assert np.allclose(rig.pose_mesh(rig.pose_from_controls(fold=7.0)).vertices,
+                       rig.pose_mesh(rig.pose_from_controls(fold=1.0)).vertices)
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_a_placed_wing_accepts_a_named_pose():
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    (_, left), _ = A.back_wings("membrane").build_rigs(base, v)
+    assert np.allclose(left.pose("folded").vertices, left.pose(fold=1.0).vertices)
+
+
+# -- the folded wing lies along the body -------------------------------------
+
+def test_a_stowed_wing_lies_along_the_body_line_not_the_frames_z(feathered):
+    """On a real placement the frame's +Z points down-and-OUTWARD, so folding
+    feathers toward +Z splays them sideways. They must fold toward the line from
+    shoulder to root, which is the body."""
+    sk = feathered.skeleton
+    root = sk.root
+    assert abs(sk.body_angle - np.degrees(np.arctan2(root[2], root[0]))) < 1e-9
+    posed = feathered.posed_joints(feathered.pose_from_controls(fold=1.0))
+    tip = lambda f: posed[f["tip"]] - posed[f["root"]]  # noqa: E731
+    want = np.radians(sk.body_angle)
+    for f in sk.feathers:
+        d = tip(f)
+        heading = np.arctan2(d[2], d[0])
+        assert abs(np.degrees(heading) - np.degrees(want)) < 15.0, f["root"]
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+def test_the_membrane_root_is_aimed_at_the_waist_of_the_actual_body():
+    base, lib = mh.load()
+    v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+    app = A.back_wings("membrane")
+    for name, pw in app.build_rigs(base, v):
+        root_body = pw.matrix[:3, :3] @ pw.rig.skeleton.root + pw.matrix[:3, 3]
+        target = np.asarray(A.WING_ROOT) * (1.0 if name.endswith("l") else -1.0)
+        target = np.array([abs(A.WING_ROOT[0]) * (1 if name.endswith("l") else -1),
+                           A.WING_ROOT[1], A.WING_ROOT[2]])
+        # the wing plane carries the root to the target's projection into it
+        assert abs(root_body[1] - target[1]) < 1.2, name
+        assert abs(root_body[0] - target[0]) < 1.2, name

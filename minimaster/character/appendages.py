@@ -170,16 +170,22 @@ class SurfaceAnchor:
         return origin + n * self.offset, np.stack([t, bt, n], axis=1)
 
 
-def place(mesh: Mesh, anchor: SurfaceAnchor, verts, scale=1.0,
-          rotation=None) -> Mesh:
-    """Put an appendage (authored +Z = outward, origin at its base) onto the
-    body at ``anchor``, resolved against the current morphed ``verts``."""
+def anchor_matrix(anchor: SurfaceAnchor, verts, scale=1.0, rotation=None) -> np.ndarray:
+    """The 4x4 that puts an appendage (authored +Z = outward, origin at its
+    base) onto the body at ``anchor``, resolved against the morphed ``verts``."""
     origin, basis = anchor.resolve(verts)
     m = np.eye(4)
     rot = basis if rotation is None else basis @ rotation
     m[:3, :3] = rot * float(scale)
     m[:3, 3] = origin
-    return mesh.transform(m)
+    return m
+
+
+def place(mesh: Mesh, anchor: SurfaceAnchor, verts, scale=1.0,
+          rotation=None) -> Mesh:
+    """Put an appendage (authored +Z = outward, origin at its base) onto the
+    body at ``anchor``, resolved against the current morphed ``verts``."""
+    return mesh.transform(anchor_matrix(anchor, verts, scale, rotation))
 
 
 # --------------------------------------------------------------------------
@@ -419,6 +425,13 @@ WING_ROLL = -95.0
 # along a hairline: at offset 0 just 2% of the root lies inside the torso,
 # against ~40% here, which is a weld a 32 mm print can actually survive.
 WING_OFFSET = -0.9
+# Where a wing's attachment line ends on the body: the lower back at the waist,
+# off the midline. A bat's plagiopatagium runs from the shoulder down the flank
+# to the hip, so the root edge is aimed at this body point (converted to the
+# wing's own frame) instead of at a fixed local direction. The wing's local +Z
+# points down-and-OUTWARD on the back, so without this the root hangs in the air
+# beside the figure.
+WING_ROOT = (0.55, 0.40, -0.60)
 
 
 def back_wings(style: str = "membrane", scale: float = 1.0,
@@ -431,7 +444,8 @@ def back_wings(style: str = "membrane", scale: float = 1.0,
     """
     return Appendage("wing", anchor_point=WING_ANCHOR, mirror=mirror,
                      up_hint=WING_UP_HINT, roll=WING_ROLL, offset=WING_OFFSET,
-                     scale=scale, params=dict(style=style, **params))
+                     root_point=WING_ROOT, scale=scale,
+                     params=dict(style=style, **params))
 
 
 @dataclass
@@ -463,15 +477,82 @@ class Appendage:
     # so an appendage that merely touches the skin is welded along a hairline
     # and can print detached; a broad root needs real interpenetration.
     offset: float = 0.0
+    # Body-space point where the appendage's attachment line ends (wings only).
+    # Mirrored with the anchor; converted into the wing's own frame at build.
+    root_point: tuple | None = None
+
+    # pose controls that may ride along in ``params`` for a wing; everything
+    # else in ``params`` shapes the wing itself
+    POSE_KEYS = ("fold", "raise_", "swing", "twist", "fan", "curl")
+
+    def _anchor_frame(self, body_v, body_q, idx, pt):
+        """The 4x4 placement of the appendage for side ``idx`` (0 left, 1 right)."""
+        hint = np.asarray(self.up_hint, dtype=np.float64)
+        if idx == 1:                    # mirrored side needs a mirrored hint
+            hint = hint * np.array([-1.0, 1.0, 1.0])
+        anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
+        anchor.offset = self.offset
+        rot = _euler(np.radians([self.roll, 0.0, 0.0]))
+        if idx == 1:
+            # The mirrored anchor already carries a mirrored tangent, and
+            # reflecting the tangent flips the handedness of the frame's
+            # bitangent (n' x t' = -M(n x t)). Negating local X on top of that
+            # cancels out into a 180-degree roll, not a mirror; negating local
+            # Y is what leaves a true mirror. The roll rides inside that
+            # reflection, so the pair stays a mirror image at any roll angle.
+            rot = np.diag([1.0, -1.0, 1.0]) @ rot
+        return anchor_matrix(anchor, body_v, self.scale, rot)
+
+    def _points(self):
+        points = [np.asarray(self.anchor_point, dtype=np.float64)]
+        if self.mirror:
+            points.append(points[0] * np.array([-1.0, 1.0, 1.0]))
+        return points
+
+    def build_rigs(self, base, verts=None):
+        """``[(name, PlacedWing)]`` -- wings as posable rigs on the current body.
+
+        Only wings have a rig. Each carries its skeleton, skin weights and the
+        placement that puts it on the morphed body, so the pair can be posed
+        (fold, raise, flap) and re-meshed without rebuilding anything.
+        """
+        if self.kind != "wing":
+            raise ValueError(f"only wings are rigged, not {self.kind!r}")
+        from .wings import make_wing_rig
+        v = base.verts if verts is None else verts
+        body_v, body_q = base.body_cage(v)
+        shape = {k: x for k, x in self.params.items() if k not in self.POSE_KEYS}
+        style = shape.pop("style", "membrane")
+        out = []
+        points = self._points()
+        for idx, pt in enumerate(points):
+            M = self._anchor_frame(body_v, body_q, idx, pt)
+            kw = dict(shape)
+            if self.root_point is not None and "root" not in kw:
+                rp = np.asarray(self.root_point, dtype=np.float64)
+                if idx == 1:
+                    rp = rp * np.array([-1.0, 1.0, 1.0])
+                local = np.linalg.inv(M) @ np.append(rp, 1.0)      # into wing units
+                kw["root"] = (float(local[0]), float(local[2]))
+            rig = make_wing_rig(style, **kw)
+            side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
+            out.append((f"wing{side}", rig.placed(M)))
+        return out
+
+    def pose_controls(self) -> dict:
+        """The pose controls riding in ``params`` (e.g. ``fold``)."""
+        return {k: x for k, x in self.params.items() if k in self.POSE_KEYS}
 
     def build(self, base, verts=None):
         """Return ``[(name, Mesh)]`` placed on the current morphed body."""
         v = base.verts if verts is None else verts
+        if self.kind == "wing":
+            controls = self.pose_controls()
+            return [(name, pw.pose(**controls) if controls else pw.mesh())
+                    for name, pw in self.build_rigs(base, v)]
         body_v, body_q = base.body_cage(v)
         out = []
-        points = [np.asarray(self.anchor_point, dtype=np.float64)]
-        if self.mirror:
-            points.append(points[0] * np.array([-1.0, 1.0, 1.0]))
+        points = self._points()
         for idx, pt in enumerate(points):
             if self.kind == "harvest":
                 chain = list(self.chain)
@@ -486,23 +567,8 @@ class Appendage:
                 if builder is None:
                     raise KeyError(f"unknown appendage kind {self.kind!r}; "
                                    f"have {sorted(BUILDERS) + ['harvest']}")
-                proto = builder(**self.params)
-                hint = np.asarray(self.up_hint, dtype=np.float64)
-                if idx == 1:            # mirrored side needs a mirrored hint
-                    hint = hint * np.array([-1.0, 1.0, 1.0])
-                anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
-                anchor.offset = self.offset
-                rot = _euler(np.radians([self.roll, 0.0, 0.0]))
-                if idx == 1:
-                    # The mirrored anchor already carries a mirrored tangent,
-                    # and reflecting the tangent flips the handedness of the
-                    # frame's bitangent (n' x t' = -M(n x t)). Negating local X
-                    # on top of that cancels out into a 180-degree roll, not a
-                    # mirror; negating local Y is what leaves a true mirror.
-                    # The roll rides inside that reflection, so the pair stays
-                    # a mirror image at any roll angle.
-                    rot = np.diag([1.0, -1.0, 1.0]) @ rot
-                mesh = place(proto, anchor, body_v, self.scale, rot)
+                mesh = builder(**self.params).transform(
+                    self._anchor_frame(body_v, body_q, idx, pt))
             side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
             out.append((f"{self.kind}{side}", mesh))
         return out

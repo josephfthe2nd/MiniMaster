@@ -208,20 +208,32 @@ targets depend on — is never disturbed. Each is bound to a body face by
 barycentric coordinates, so it follows every morph, and a mirrored pair is an
 exact mirror image.
 
-A wing is built as a **modified forelimb**, not a shape: humerus, radius, wrist
-and an elongated hand, with the flight surface hung on that skeleton. Two
-styles share the arm — a bat/dragon **membrane** (propatagium, dactylopatagium
-and plagiopatagium over digits II–V, ~12% camber, a clawed free thumb) and a
-bird/angel **feathered** wing (10 primaries off the hand, 12 secondaries off the
-forearm, shingled coverts, an alula). `fold` stows either one against the back.
+A wing is built as a **modified forelimb**, not a shape, and it is **rigged**:
+humerus, radius, wrist and an elongated hand form a real joint hierarchy
+(shoulder → elbow → wrist → knuckled digits, or one root/tip joint per flight
+feather), every vertex is skinned to those joints, and folding, raising or
+flapping the wing is a pose of the rig, not a rebuild. Two styles share the
+arm — a bat/dragon **membrane** wing (Z-shaped arm, three-segment fingers with
+hooked tips, per-gap scalloped edge, propatagium, a root that runs down the back
+to the waist, a clawed free thumb) and a bird/angel **feathered** wing (graded,
+emarginated primaries fanning −15°…+75°, secondaries, tertials, five covert
+tiers, alula, scapulars). Proportions are fitted to measurements of real
+flying-fox and eagle/galah/flamingo reference photographs.
 
 ![wings](docs/images/wings.png)
 
+```python
+rigs = A.back_wings("membrane").build_rigs(base, verts)   # [("wing_l", PlacedWing), ...]
+rigs[0][1].pose("upstroke")                                # or fold=1.0, raise_=40, curl=30 ...
+```
+
+![the rig](docs/images/wing_rig.png)
+
 `back_wings()` carries the placement — the shoulder-blade anchor, the span
-direction, the roll that lays the root down the flank instead of leaving it
-projecting into the air behind the figure, and the sink that welds it into the
-torso so it prints attached rather than hairline-joined. See
-[docs/wings.md](docs/wings.md) for the anatomy behind the proportions.
+direction, the sink that welds the root into the torso so it prints attached
+rather than hairline-joined, and the body point the membrane root runs down to,
+so the wing hangs from the actual back for any body shape. See
+[docs/wings.md](docs/wings.md) for the anatomy, the measurements and the rig.
 
 They also **change the body that carries them**. A wing is powered by the
 pectoralis and latissimus anchored on the trunk, so attaching one broadens the

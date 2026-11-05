@@ -1,128 +1,111 @@
-"""The wing sheet: both styles on a body, plus spread-vs-folded and planforms.
+"""The wing sheets: both styles on a body, spread and posed, plus the rig strips.
 
-    PYTHONPATH=. python tools/wing_demo.py
+    PYTHONPATH=. python tools/wing_demo.py            # writes docs/images/wings.png + wing_rig.png
+
+``wings.png``     back and profile views of a plain body, membrane wings and
+                  feathered wings, each spread and folded (a pose of the rig).
+``wing_rig.png``  one wing, no body: the rig through rest / half fold / folded /
+                  raised / lowered / curled, in three views.
 """
+import sys
+
 import numpy as np
 
-from minimaster.character import appendages as A
-from minimaster.character import creature_anatomy as ca
-from minimaster.character import mhbase as mh
-from minimaster.character import portrait as po
-from minimaster.character import shading as sh
-from minimaster.character import wings as W
-from minimaster.character.sliders import Character, SliderCatalog
-from minimaster.core.mesh import Mesh
+sys.path.insert(0, ".")
 
-# wing-local (X span, Y down, Z chord) -> world Z-up, wing's top upward
-WING_TO_WORLD = np.array([[1.0, 0, 0, 0], [0, 0, 1.0, 0],
-                          [0, -1.0, 0, 0], [0, 0, 0, 1.0]])
-
-MEMBRANE = sh.Material(base_color="#6f4f3f", roughness=0.74, specular=0.28,
-                       f0=0.035, wrap=0.40, scatter="#8c4a38", rim=0.24)
-PLUMAGE = sh.Material(base_color="#cdc4b6", roughness=0.55, specular=0.42,
-                      f0=0.040, wrap=0.26, scatter="#9a8f80", rim=0.20)
-MATS = {"membrane": MEMBRANE, "feathered": PLUMAGE}
-
-def wing_appendage(style, **params):
-    return A.back_wings(style, **params)
+from minimaster.character import appendages as A  # noqa: E402
+from minimaster.character import creature_anatomy as ca  # noqa: E402
+from minimaster.character import mhbase as mh  # noqa: E402
+from minimaster.character import portrait as po  # noqa: E402
+from minimaster.character import wings as W  # noqa: E402
+from minimaster.character.sliders import Character, SliderCatalog  # noqa: E402
+from minimaster.core.mesh import Mesh  # noqa: E402
+from tools import wing_view as V  # noqa: E402
 
 
-def panel_planforms():
-    """Each style on its own, seen from above."""
-    out = []
-    for style, fn in (("membrane", W.membrane_wing), ("feathered", W.feathered_wing)):
-        mesh = fn().transform(WING_TO_WORLD)
-        lo, hi = mesh.bounds
-        out.append(po.render_portrait(
-            [po.Shell(mesh, MATS[style])], size=(660, 460), azimuth=0.0,
-            elevation=86.0, fit=((lo + hi) / 2.0, float(np.linalg.norm(hi - lo)) / 2.0)))
-    return np.concatenate(out, axis=1)
+class Scene:
+    """A body, plus a wing appendage built on it for each style."""
 
+    def __init__(self):
+        self.base, self.lib = mh.load()
+        self.cat = SliderCatalog(self.lib.names)
+        self.cache = {}
 
-def panel_on_body(base, lib, cat, size=(560, 800)):
-    """Plain, membrane-winged and feather-winged, all framed identically."""
-    panels = []
-    variants = [(None, None), ("membrane", 0.0), ("feathered", 0.0),
-                ("membrane", 1.0)]
-    fit = None
-    for style, fold in variants:
+    def character(self, style):
         c = Character()
         c.macro.update(gender=1.0, muscle=0.55)
-        apps = []
-        if style:
-            apps = [wing_appendage(style, fold=fold)]
-            ca.apply_to(c, apps, cat)
-        v = lib.apply(base.verts, c.target_weights(cat))
-        shells = po.character_shells(base, v, levels=1, with_eyes=True)
-        if fit is None:                       # frame every panel off the body
-            lo, hi = shells[0].mesh.bounds
-            fit = ((lo + hi) / 2.0, float(np.linalg.norm(hi - lo)) / 2.0 * 1.5)
-        for app in apps:
-            for _, m in app.build(base, v):
-                shells.append(po.Shell(m.transform(po.MH_TO_Z_UP), MATS[style]))
-        # straight from behind and slightly above: an off-axis camera turns
-        # one wing face-on and the other edge-on and reads as an asymmetry
-        panels.append(po.render_portrait(shells, size=size, azimuth=180.0,
-                                         elevation=22.0, fit=fit))
-    return np.concatenate(panels, axis=1)
+        app = A.back_wings(style) if style else None
+        if app:
+            ca.apply_to(c, [app], self.cat)
+        v = self.lib.apply(self.base.verts, c.target_weights(self.cat))
+        return app, v
+
+    def render(self, style, pose, azimuth, elevation, size, fit):
+        key = style
+        if key not in self.cache:
+            app, v = self.character(style)
+            body = po.character_shells(self.base, v, levels=1, with_eyes=True)
+            rigs = app.build_rigs(self.base, v) if app else []
+            self.cache[key] = (body, rigs)
+        body, rigs = self.cache[key]
+        shells = list(body)
+        for _, pw in rigs:
+            m = pw.pose(**pose).transform(po.MH_TO_Z_UP)
+            shells.append(po.Shell(m, V.MATS[style], base_colors=V.albedo(pw.rig, style)))
+        return po.render_portrait(shells, size=size, azimuth=azimuth, elevation=elevation, fit=fit)
+
+    def fit(self, scale):
+        body, _ = self.cache.setdefault("body", self._body())
+        lo, hi = body[0].mesh.bounds
+        return (lo + hi) / 2.0, float(np.linalg.norm(hi - lo)) / 2.0 * scale
+
+    def _body(self):
+        _, v = self.character(None)
+        return po.character_shells(self.base, v, levels=1, with_eyes=True), []
 
 
-def panel_side(base, lib, cat, size=(560, 800)):
-    """Profile: the root has to lie ALONG the back, not stick out behind it."""
-    panels = []
-    fit = None
-    for style in (None, "membrane", "feathered"):
-        c = Character()
-        c.macro.update(gender=1.0, muscle=0.55)
-        apps = [wing_appendage(style)] if style else []
-        if apps:
-            ca.apply_to(c, apps, cat)
-        v = lib.apply(base.verts, c.target_weights(cat))
-        shells = po.character_shells(base, v, levels=1, with_eyes=True)
-        if fit is None:
-            lo, hi = shells[0].mesh.bounds
-            fit = ((lo + hi) / 2.0, float(np.linalg.norm(hi - lo)) / 2.0 * 1.2)
-        for app in apps:
-            for _, m in app.build(base, v):
-                shells.append(po.Shell(m.transform(po.MH_TO_Z_UP), MATS[style]))
-        panels.append(po.render_portrait(shells, size=size, azimuth=270.0,
-                                         elevation=6.0, fit=fit))
-    return np.concatenate(panels, axis=1)
+def panel_row(sc, columns, azimuth, elevation, size, scale):
+    fit = sc.fit(scale)
+    return np.concatenate([sc.render(style, pose, azimuth, elevation, size, fit)
+                           for style, pose in columns], axis=1)
 
 
 def main():
-    base, lib = mh.load()
-    cat = SliderCatalog(lib.names)
-    body = panel_on_body(base, lib, cat)
-    side = panel_side(base, lib, cat)
-    plans = panel_planforms()
-    # pad the narrower strip so the two rows stack cleanly
-    w = max(body.shape[1], side.shape[1], plans.shape[1])
-
-    def pad(img):
-        if img.shape[1] == w:
-            return img
-        out = np.zeros((img.shape[0], w, 4), dtype=img.dtype)
-        out[:, :, :3] = img[0, 0, :3]
-        out[:, :, 3] = 255
-        off = (w - img.shape[1]) // 2
-        out[:, off:off + img.shape[1]] = img
-        return out
-
-    sheet = np.concatenate([pad(body), pad(side), pad(plans)], axis=0)
+    sc = Scene()
+    columns = [(None, {}), ("membrane", {}), ("feathered", {}),
+               ("membrane", {"fold": 1.0}), ("feathered", {"fold": 1.0})]
+    # straight from behind and slightly above: an off-axis camera turns one wing
+    # face-on and the other edge-on and reads as an asymmetry
+    back = panel_row(sc, columns, 180.0, 18.0, (440, 640), 1.55)
+    side = panel_row(sc, columns, 270.0, 6.0, (440, 640), 1.30)
+    sheet = np.concatenate([back, side], axis=0)
     po.write_png("docs/images/wings.png", sheet)
     print("wrote docs/images/wings.png", sheet.shape)
 
+    # the rig on its own: poses of one wing (no body), three views each
+    strips = []
     for style in ("membrane", "feathered"):
-        m = W.make_wing(style=style)
-        rep = m.integrity_report()
-        print(f"  {style:10s} tris={len(m.faces):6d} watertight={rep['watertight']} "
-              f"span={float(np.ptp(m.vertices[:, 0])):.1f}")
+        rig = W.make_wing_rig(style)
+        poses = [{}, {"fold": 0.5}, {"fold": 1.0}, {"raise_": 45.0}, {"raise_": -40.0},
+                 {"curl": 35.0}]
+        meshes = [rig.pose_mesh(rig.pose_from_controls(**p)) for p in poses]
+        colors = V.albedo(rig, style)
+        # frame every pose off the spread wing so scale is comparable
+        fit = V.frame([m.transform(V.WING_TO_WORLD) for m in meshes[:1]])
+        cols = [np.concatenate([po.render_portrait(
+            [po.Shell(m.transform(V.WING_TO_WORLD), V.MATS[style], base_colors=colors)],
+            size=(300, 300), azimuth=V.VIEWS[v][0], elevation=V.VIEWS[v][1], fit=fit)
+            for m in meshes], axis=1) for v in ("plan", "three_quarter", "front")]
+        strips.append(np.concatenate(cols, axis=0))
+    rig_sheet = np.concatenate(strips, axis=0)
+    po.write_png("docs/images/wing_rig.png", rig_sheet)
+    print("wrote docs/images/wing_rig.png", rig_sheet.shape)
 
-    v = lib.apply(base.verts, Character().target_weights(cat))
+    base, lib = sc.base, sc.lib
+    v = sc.character(None)[1]
     cv, cq = base.body_cage(v)
     vol = Mesh(cv, np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])).volume()
-    pair = [m for _, m in wing_appendage("membrane").build(base, v)]
+    pair = [m for _, m in A.back_wings("membrane").build(base, v)]
     print()
     print(ca.flight_report(vol, ca.wingspan_of(pair)).as_text())
 
