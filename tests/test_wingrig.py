@@ -14,6 +14,7 @@ from minimaster.character import appendages as A
 from minimaster.character import mhbase as mh
 from minimaster.character import wings as W
 from minimaster.character.wingrig import PlacedWing, PoseControls
+from minimaster.core import math3d as m3
 from minimaster.core.armature import Armature
 
 STYLES = ("membrane", "dragon", "feathered")
@@ -149,18 +150,38 @@ def test_bones_never_stretch(rig, pose):
     posed = bone_lengths(rig, rig.pose_from_controls(**pose))
     for k, length in rest.items():
         assert posed[k] == pytest.approx(length, abs=1e-9), k
+    # The joint check above is forward kinematics (core/armature) and cannot fail from
+    # the wing's own code. What can: a rigid piece (a feather, the thumb, a knob) is moved
+    # by exactly one bone's matrix, so every one of its edges keeps its length.
+    posed_mesh = rig.pose_mesh(rig.pose_from_controls(**pose))
+    for piece in rig.pieces:
+        if piece.bone is None:
+            continue
+        a, b = rig.ranges[piece.name]
+        f = piece.mesh.faces
+        for i, j in ((0, 1), (1, 2), (2, 0)):
+            e0 = np.linalg.norm(rig.rest_mesh.vertices[a:b][f[:, i]] - rig.rest_mesh.vertices[a:b][f[:, j]], axis=1)
+            e1 = np.linalg.norm(posed_mesh.vertices[a:b][f[:, i]] - posed_mesh.vertices[a:b][f[:, j]], axis=1)
+            assert np.abs(e1 - e0).max() < 1e-9, piece.name
 
 
 @pytest.mark.parametrize("pose", POSES, ids=lambda p: "+".join(p) or "rest")
 def test_every_pose_stays_a_watertight_solid_per_piece(rig, pose):
-    """Skinning moves vertices but never edges, so closed shells stay closed."""
+    """Skinning moves vertices but never edges, so closed shells stay closed. Checked on the
+    POSED piece (the rest piece is trivially closed): finite, no degenerate face, every edge
+    shared exactly twice, outward orientation (positive signed volume) -- and a rigid piece
+    keeps its volume exactly."""
+    from minimaster.core.mesh import Mesh
     posed = rig.pose_mesh(rig.pose_from_controls(**pose))
     assert np.isfinite(posed.vertices).all()
     for p in rig.pieces:
         a, b = rig.ranges[p.name]
-        assert p.mesh.integrity_report()["watertight"], p.name
         assert posed.faces[(posed.faces >= a).all(axis=1) & (posed.faces < b).all(axis=1)].size \
             == p.mesh.faces.size, p.name
+        rep = Mesh(posed.vertices[a:b], p.mesh.faces).integrity_report()
+        assert rep["watertight"] and rep["outward"], (p.name, rep)
+        if p.bone is not None:
+            assert rep["volume"] == pytest.approx(p.mesh.volume(), rel=1e-9), p.name
 
 
 def test_posing_is_deterministic(rig):
@@ -208,11 +229,16 @@ def test_the_root_stays_on_the_body_while_the_wing_flaps(membrane):
 
 
 def test_closing_the_fan_brings_the_fingertips_together(membrane):
+    """The membrane's skin takes a fan closed to 0.9 of rest (10%), not the 0.55 it once did
+    (2.15x stretch): at that floor the tips are ~11% nearer; a third folded, where the sheet has
+    slack to give, it closes to 0.85 and the tips are 15% nearer."""
     def spread(pose):
         J = membrane.posed_joints(membrane.pose_from_controls(**pose))
         return np.linalg.norm(J["d3_tip"] - J["d5_tip"])
-    lo = membrane.skeleton.fan_range[0]
-    assert spread({"fan": lo}) < 0.75 * spread({})
+    lo = membrane.control_range("fan")[0]
+    assert lo == pytest.approx(0.9)
+    assert spread({"fan": lo}) < 0.92 * spread({})
+    assert spread({"fan": 0.0, "fold": 0.3}) < 0.88 * spread({"fold": 0.3})
 
 
 def test_curl_bends_the_fingers_toward_the_underside(membrane):
@@ -338,11 +364,21 @@ class TestOnTheBody:
         base, lib = mh.load()
         v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
         rigs = A.back_wings(style).build_rigs(base, v)
-        for pose in ({"fold": 0.6}, {"raise_": 35.0, "twist": 10.0}, {"curl": 20.0},
-                     {"fold": 1.0, "curl": 40.0}, {"fold": 0.5, "raise_": 30.0}):
-            (_, left), (_, right) = rigs
+        (_, left), (_, right) = rigs
+        # every control on its own (the old five poses never touched swing, wrist_flex,
+        # hand_twist or fan), a combined one, and every preset
+        poses = [{"fold": 0.6}, {"raise_": 35.0, "twist": 10.0}, {"curl": 20.0},
+                 {"fold": 1.0, "curl": 40.0}, {"fold": 0.5, "raise_": 30.0},
+                 {"swing": 30.0}, {"swing": -20.0}, {"wrist_flex": 25.0}, {"wrist_flex": -40.0},
+                 {"hand_twist": 20.0}, {"twist": -30.0}, {"fan": 0.6},
+                 {"fold": 0.4, "swing": 20.0, "twist": 15.0, "wrist_flex": 10.0, "hand_twist": -10.0,
+                  "curl": 25.0}]
+        for pose in poses:
             mirrored = left.pose(**pose).vertices @ np.diag([-1.0, 1.0, 1.0]).T
             assert np.abs(mirrored - right.pose(**pose).vertices).max() < 1e-9, pose
+        for preset in PRESETS:
+            mirrored = left.pose(preset).vertices @ np.diag([-1.0, 1.0, 1.0]).T
+            assert np.abs(mirrored - right.pose(preset).vertices).max() < 1e-9, preset
 
     @pytest.mark.parametrize("style", STYLES)
     def test_posed_wings_on_the_body_are_watertight_and_follow_the_pose(self, style):
@@ -473,8 +509,10 @@ def test_the_birds_fan_control_actually_spreads_the_primaries(feathered):
                 yaws.append(np.degrees(np.arctan2(d[2], d[0])))
         return max(yaws) - min(yaws)
 
+    # (the bird's fan has a range now: fan 0 asks for the closest it will go, which is a closed
+    # fan but no longer ten feathers on one heading; the range is pinned in test_wingrig_api.py)
     s = [spread(f) for f in (0.0, 0.5, 1.0, 1.5)]
-    assert s == sorted(s) and s[0] < 3.0 and s[2] > 40.0, s
+    assert s == sorted(s) and s[0] < 0.4 * s[2] and s[2] > 40.0, s
 
 
 def test_a_flap_leads_with_the_wrist_and_the_hand_trails(membrane):
@@ -552,7 +590,7 @@ def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
     v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
     cv, cq = base.body_cage(v)
     tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
-    for style, limit in (("feathered", 0.10), ("membrane", 0.36)):
+    for style, limit in (("feathered", 0.10), ("membrane", 0.15), ("dragon", 0.15)):
         for name, pw in A.back_wings(style).build_rigs(base, v):
             m = pw.pose(fold=1.0)
             w = m.vertices[::9]
@@ -561,11 +599,113 @@ def test_stowed_wings_rest_on_the_back_instead_of_being_buried_in_it():
             assert inside < limit, (style, name)
             assert (sign * w[:, 0] < -0.1).mean() < 0.02, (style, name)
             if style == "feathered":
-                assert inside > 0.01, f"{name}: the stowed wing no longer touches the back at all"
+                # (1.7% before the stowed wing leaned 11 degrees: touching, not joined; the contact
+                # DEPTH on every body morph is pinned in test_angel_poses.py)
+                assert inside > 0.03, f"{name}: the stowed wing is barely joined to the back"
                 flight = np.concatenate([m.vertices[a:b] for p in pw.rig.pieces
                                          if p.name.startswith(("primary0", "primary10", "secondary"))
                                          for a, b in [pw.rig.ranges[p.name]]])[::3]
                 assert _inside_body(flight, tris).mean() < 0.08, (style, name)
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_a_stowed_bat_or_dragon_shows_its_wrist_and_claw_and_lies_on_the_back_on_every_body(style):
+    """A roosting wing's identifying end is the wrist, with the claw hooking out of it. Stowed
+    along the plane it was mounted in (sunk 0.9 units into the scapula) the wrist knob, the thumb
+    and the claw were 100% inside the torso, the sheet 25-35%, the propatagium 51-58%: only the
+    pendant elbow showed. The wrist is the far end of a see-saw about the shoulder, so the stow
+    lifts the forearm out of the humerus's plane and the whole wing pivots a little about its root."""
+    from tests.test_wings import _inside_body
+    from minimaster.character import creature_anatomy as ca
+    from minimaster.character.sliders import Character, SliderCatalog
+    base, lib = mh.load()
+    cat = SliderCatalog(lib.names)
+    bodies = list(_morphed_bodies(base, lib))
+    slim = Character()
+    slim.macro.update(gender=0.0)
+    bodies.append(lib.apply(base.verts, slim.target_weights(cat)))
+    for i, v in enumerate(bodies):
+        cv, cq = base.body_cage(v)
+        tris = cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])]
+        for name, pw in A.back_wings(style).build_rigs(base, v):
+            w = pw.pose(fold=1.0).vertices
+
+            def buried(piece, step=2):
+                a, b = pw.rig.ranges[piece]
+                return float(_inside_body(w[a:b][::step], tris).mean())
+
+            assert buried("wrist_knob") < 0.30, (style, i, name, "the wrist is buried", buried("wrist_knob"))
+            assert buried("claw") < 0.30 and buried("thumb") < 0.30, (style, i, name, "the thumb is buried")
+            a, b = pw.rig.ranges["claw"]
+            sign = 1.0 if name.endswith("l") else -1.0
+            assert (sign * w[a:b, 0]).min() > 0.0, (style, i, name, "the claw hooks across the spine")
+            assert buried("membrane", 7) < 0.15, (style, i, name, "the sheet is buried", buried("membrane", 7))
+            assert buried("propatagium", 3) < 0.45, (style, i, name, "the skin in front of the arm is buried")
+            assert _inside_body(w[::9], tris).mean() < 0.15, (style, i, name, "the wing is buried")
+
+
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_the_stowed_wrist_stands_proud_of_the_wing_plane_and_the_wing_pivots_about_its_root(style):
+    """The stow lifts the forearm out of the humerus's plane at the elbow (the wrist is above the
+    shoulder, so lifting the arm as a whole only sank it) and pivots the whole wing about its root,
+    which stays on the waist. Both are spec parameters; this checks they do what they claim."""
+    rig = W.make_wing_rig(style)
+    sk = rig.skeleton
+    up = lambda v: -float(v[1])                              # noqa: E731  (+Y is down)
+    J0 = rig.posed_joints({})
+    J = rig.posed_joints(rig.pose_from_controls(fold=1.0))
+    assert up(J["wrist"] - J["shoulder"]) > 0.4, "the stowed wrist is not above the shoulder's plane"
+    assert up(J["thumb_tip"] - J["wrist"]) > 0.2 * np.linalg.norm(J["thumb_tip"] - J["wrist"]), \
+        "the stowed thumb still hangs toward the back"
+    assert np.allclose(J["root"], J0["root"], atol=1e-9), "the pivot moved: the root must stay on the waist"
+    assert up(J["shoulder"] - J["root"]) > 0.1, "the stowed wing does not stand off the back at its upper end"
+    # without the spec parameters it is the old stow: the wrist level with the shoulder
+    for key in ("stow_elbow_lift", "stow_root_lift", "stow_thumb_lift"):
+        assert getattr(sk, key) > 0.0, key
+        setattr(sk, key, 0.0)
+    flat = rig.posed_joints(rig.pose_from_controls(fold=1.0))
+    assert up(flat["wrist"] - flat["shoulder"]) < 0.2
+    # and none of it touches the spread wing
+    assert np.allclose(rig.posed_joints(rig.pose_from_controls())["wrist"], J0["wrist"])
+
+
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_a_big_curl_flexes_each_knuckle_less_than_asked_so_the_sheet_does_not_clump(style):
+    """Curl 60-100 asked every knuckle for 60-100 degrees (two knuckles a finger): the hand
+    spiralled into a fist and the sheet between the fingers crumpled into a clump at the tips with
+    the rods poking out. Up to ``curl_knee`` a curl is exactly what was asked for; beyond it a
+    knuckle follows at ``curl_slope`` of the rate."""
+    rig = W.make_wing_rig(style)
+    sk = rig.skeleton
+
+    def knuckle(curl):
+        # (the raw controls: the legal membrane range stops at curl 30 now, from the stretch bound,
+        # so the knee only shows past it -- it is the second line of defence)
+        R = m3.euler_rotation(*sk.controls_to_pose(PoseControls(curl=curl))["d3_mcp"])
+        return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))))
+
+    assert knuckle(20.0) == pytest.approx(20.0, abs=1e-6)
+    assert knuckle(sk.curl_knee) == pytest.approx(sk.curl_knee, abs=1e-6)
+    assert knuckle(100.0) < 65.0 and knuckle(150.0) < 85.0
+    assert knuckle(60.0) < knuckle(100.0) < knuckle(150.0), "the curl must stay monotonic"
+    # a negative curl (the fingers bending back) is not softened below the knee either
+    assert knuckle(-10.0) == pytest.approx(10.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_the_skin_in_front_of_the_arm_follows_the_arm_alone(style):
+    """The propatagium was skinned by plan distance over every arm and finger bone, so closing the
+    fan pulled it (0.1 units, by a few percent of weight on the metacarpals): skin on the arm
+    does not move with the fingers. It rides the humerus and the forearm and nothing else."""
+    rig = W.make_wing_rig(style)
+    a, b = rig.ranges["propatagium"]
+    idx, wt = rig.weights()
+    used = {rig.bone_keys[i] for i in np.unique(idx[a:b][wt[a:b] > 0.0])}
+    assert used <= {"elbow", "wrist"}, used
+    wide = rig.pose(fan=1.0).vertices[a:b]
+    closed = rig.pose(fan=rig.skeleton.fan_range[0]).vertices[a:b]
+    assert np.abs(wide - closed).max() < 0.01
 
 
 # -- orientation must not depend on the body's sliders -------------------------
@@ -651,10 +791,15 @@ def test_controls_are_not_mutated_by_posing(membrane):
 
 
 def test_a_membrane_refuses_a_fan_its_skin_cannot_take(membrane):
-    """fan=0 closed the fingers on a sheet that cannot follow (stretch up to 2.9x)."""
+    """fan=0 closed the fingers on a sheet that cannot follow (stretch up to 2.9x): the
+    request is clamped to a fan that is still well open (the range itself is not read from
+    the skeleton here, see tests/test_wingrig_api.py for the geometry it must keep)."""
     closed = membrane.pose_from_controls(fan=0.0)
-    limit = membrane.pose_from_controls(fan=membrane.skeleton.fan_range[0])
-    assert closed == limit
+    assert closed == membrane.pose_from_controls(fan=membrane.skeleton.fan_range[0])
+    assert closed != membrane.pose_from_controls()                  # it did not stay at rest
+    J0, Jc = membrane.posed_joints({}), membrane.posed_joints(closed)
+    gap = lambda J: np.linalg.norm(J["d3_tip"] - J["d5_tip"])       # noqa: E731
+    assert gap(Jc) > 0.4 * gap(J0)
 
 
 @pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
@@ -779,9 +924,18 @@ def test_the_fold_dependent_limits_leave_only_the_unused_range():
         c = clamp_controls(PoseControls(fold=float(f), swing=85.0, raise_=100.0))
         assert c.swing <= prev[0] + 1e-9 and c.raise_ <= prev[1] + 1e-9
         prev = (c.swing, c.raise_)
-    # negative ranges do not shrink
+    # the other side shrinks too: a stowed wing lies on the back and has nothing left to be pressed
+    # into (fold 1 with swing -30 once put 38% of a bat inside the torso, raise_ -70 16% of an angel)
     low = clamp_controls(PoseControls(fold=1.0, swing=-30.0, raise_=-70.0))
-    assert (low.swing, low.raise_) == (-30.0, -70.0)
+    assert (low.swing, low.raise_) == (0.0, 0.0)
+    assert clamp_controls(PoseControls(fold=0.0, swing=-30.0, raise_=-70.0)).raise_ == -70.0
+    prev = (-1e9, -1e9)
+    for f in np.linspace(0.0, 1.0, 6):
+        c = clamp_controls(PoseControls(fold=float(f), swing=-30.0, raise_=-70.0))
+        assert c.swing >= prev[0] - 1e-9 and c.raise_ >= prev[1] - 1e-9
+        prev = (c.swing, c.raise_)
+    # and the table no longer contradicts itself: LIMITS says 85, and 85 is what fold 0 allows
+    assert clamp_controls(PoseControls(fold=0.0, swing=90.0)).swing == LIMITS["swing"][1] == 85.0
 
 
 @pytest.mark.parametrize("fold", [0.0, 0.5, 1.0])
@@ -972,13 +1126,18 @@ def test_the_knuckles_fold_over_the_last_stretch_not_through_the_whole_fold():
 @pytest.mark.parametrize("style", MEMBRANE_STYLES)
 def test_a_cupped_wing_keeps_its_skin_taut_and_a_folded_one_pleats(style, monkeypatch):
     """A curl leans the fingers in together; that is not the wing closing, and its slack
-    must not be gathered into the pleats of a stowed wing (rucked bulges at the tip)."""
+    must not be gathered into the pleats of a stowed wing (rucked bulges at the tip).
+
+    The sheet is re-evaluated between its fingers at every pose, so "how far the pass moves
+    the sheet" is measured against the same pass with the pleats switched off (gain 0): what
+    is left is what the pleats do. The pose has the fingers drawn most of the way together
+    (``fan`` 0.9) so there is slack to pleat; the hand is not folded back."""
     from minimaster.character import wingrig as R
     rig = W.make_wing_rig(style)
     assert rig._hand_fold(rig.pose_from_controls(curl=40.0)) == pytest.approx(0.0, abs=1e-6)
     assert rig._hand_fold(rig.pose_from_controls(fold=1.0)) > 0.85
     a, b = rig.ranges["membrane"]
-    curl = rig.pose_from_controls(curl=30.0)
+    curl = rig.pose_from_controls(curl=40.0, fan=0.9)
     stowed = rig.pose_from_controls(fold=1.0)
     taut = rig.pose_mesh(curl).vertices[a:b].copy()
     folded = rig.pose_mesh(stowed).vertices.copy()
@@ -987,11 +1146,12 @@ def test_a_cupped_wing_keeps_its_skin_taut_and_a_folded_one_pleats(style, monkey
         m.setattr(R, "PLEAT_CUPPED", 0.0)
         ruched = rig.pose_mesh(curl).vertices[a:b]
         folded_again = rig.pose_mesh(stowed).vertices
-    with monkeypatch.context() as m:                                # pure skinning, no pleats at all
-        m.setattr(R.WingRig, "_apply_pleats", lambda self, posed, pose=None, gain=0.8: posed)
-        skinned = rig.pose_mesh(curl).vertices[a:b]
-    moved = lambda v: float(np.linalg.norm(v - skinned, axis=1).mean())        # noqa: E731
-    # how far the pleat pass moves the sheet from where skinning leaves it: far less when taut
+    orig = R.WingRig._apply_pleats
+    with monkeypatch.context() as m:                                # the same pass without any pleats
+        m.setattr(R.WingRig, "_apply_pleats", lambda self, posed, pose=None, gain=0.8: orig(self, posed, pose, 0.0))
+        flat = rig.pose_mesh(curl).vertices[a:b]
+    moved = lambda v: float(np.linalg.norm(v - flat, axis=1).mean())        # noqa: E731
+    # how far the pleats move the sheet from the flat re-evaluation: far less when taut
     assert moved(taut) < 0.5 * moved(ruched), (moved(taut), moved(ruched))
     # ... and the stowed wing is the same either way: it is never "cupped"
     assert np.array_equal(folded, folded_again)
@@ -1231,9 +1391,9 @@ def test_the_stowed_wing_tapers_toward_its_tips():
                 np.ptp(w[(w[:, 1] > y0 + 0.4 * h) & (w[:, 1] < y0 + 0.7 * h)][:, 0]))
 
     tip, mid = widths()
-    # (0.55 before the spread plumage got slotted outer primaries, whose wider gaps widen the
-    # tip band a little; the assertion below is the one that proves the taper is doing the work)
-    assert tip < 0.62 * mid, (tip, mid)
+    # (0.55 before the slotted outer primaries and the leaned stow widened the tip band: 0.63 now;
+    # the assertion below is the one that proves the taper is doing the work)
+    assert tip < 0.66 * mid, (tip, mid)
     pw.rig.skeleton.stow_taper = 0.0
     parallel_tip, _ = widths()
     assert tip < 0.92 * parallel_tip, (tip, parallel_tip)
@@ -1288,15 +1448,22 @@ def _pose_verts(style, **kw):
     return rig.pose_mesh(rig.pose_from_controls(**kw)).vertices
 
 
+def _raw_pose_verts(style, **kw):
+    """The pose of the controls as given, NOT clamped to the wing's ranges: for tests of a
+    mechanism (the pleats) rather than of what the skin is allowed to be asked for."""
+    rig = W.make_wing_rig(style)
+    return rig.pose_mesh(rig.skeleton.controls_to_pose(PoseControls(**kw))).vertices
+
+
 @pytest.mark.parametrize("style", ["membrane", "dragon"])
 def test_the_cupped_relief_changes_a_curled_wing_and_fades_out_when_stowed(style):
     from minimaster.character import wingrig as R
     old = R.PLEAT_CUPPED
     try:
-        curled = _pose_verts(style, curl=40.0, fold=0.2)
+        curled = _raw_pose_verts(style, curl=40.0, fan=0.9)
         stowed = _pose_verts(style, fold=1.0)
         R.PLEAT_CUPPED = 0.0
-        curled0 = _pose_verts(style, curl=40.0, fold=0.2)
+        curled0 = _raw_pose_verts(style, curl=40.0, fan=0.9)
         stowed0 = _pose_verts(style, fold=1.0)
     finally:
         R.PLEAT_CUPPED = old
@@ -1320,3 +1487,371 @@ def test_the_sheet_follows_a_bent_finger_from_the_bend_threshold(style):
 def test_the_knuckles_stay_straight_until_the_start_of_the_last_quarter():
     assert W.knuckle_phase(0.70) == 0.0 and W.knuckle_phase(0.75) == 0.0
     assert 0.0 < W.knuckle_phase(0.80) < W.knuckle_phase(0.90) < W.knuckle_phase(1.0) == 1.0
+
+
+# -- the shoulder controls on a body: raise_ lifts, swing sweeps ----------------------------
+#
+# The wing frame is tilted on the back: its chord axis Z (which ``raise_`` turned about) runs
+# down-and-outward and its plane normal points almost straight ahead, so "raise" swept the span
+# back behind the body (tip elevation never above ~46 degrees, 3.9 units across the midline at
+# raise 100, a flap cycle with 3x more fore-aft than vertical travel). ``place_on_body`` re-aims
+# ``raise_`` at the body's fore-aft axis and ``swing`` at its vertical one.
+
+_BODY: dict = {}
+_ON_BODY = pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+
+
+def _body_rigs(style):
+    """``[(name, PlacedWing)]`` on the plain body (built once), and the torso's triangles."""
+    if "base" not in _BODY:
+        base, lib = mh.load()
+        v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
+        cv, cq = base.body_cage(v)
+        _BODY.update(base=base, v=v, tris=cv[np.vstack([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])])
+    if style not in _BODY:
+        _BODY[style] = A.back_wings(style).build_rigs(_BODY["base"], _BODY["v"])
+    return _BODY[style]
+
+
+def _sign(name):
+    return 1.0 if name.endswith("l") else -1.0
+
+
+def _tip_from_shoulder(pw, name, controls, joint=None):
+    """Where a joint is from the shoulder, in body space, mirrored so both wings read alike
+    (x outward, y up, z ahead)."""
+    j = pw.joint_positions(pw.rig.pose_from_controls(controls))
+    joint = joint or ("primary10_t" if "primary10_t" in j else "d3_tip")      # the longest feather / digit III
+    return (j[joint] - j["shoulder"]) * np.array([_sign(name), 1.0, 1.0])
+
+
+def _elevation(t):
+    return float(np.degrees(np.arctan2(t[1], np.hypot(t[0], t[2]))))
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_raise_lifts_a_placed_wing_and_swing_sweeps_it_back(style):
+    """On either side: the tip climbs steadily with ``raise_`` (and stays level fore-aft -- the
+    axis IS the fore-aft one), and ``swing`` turns it about the vertical: elevation unchanged,
+    azimuth growing toward the back."""
+    for name, pw in _body_rigs(style):
+        lo, hi = pw.rig.control_range("raise_")
+        elev, fore = [], []
+        for r in np.linspace(lo, hi, 7):
+            t = _tip_from_shoulder(pw, name, PoseControls(raise_=float(r)))
+            elev.append(_elevation(t))
+            fore.append(t[2])
+        assert np.all(np.diff(elev) > 3.0), (name, elev)
+        assert elev[-1] - elev[0] > 30.0, (name, elev)
+        assert np.ptp(fore) < 0.4, (name, fore)         # base: ~10 units of fore-aft sweep
+        lo, hi = pw.rig.control_range("swing")
+        azim, level = [], []
+        for s in np.linspace(lo, hi, 5):
+            t = _tip_from_shoulder(pw, name, PoseControls(swing=float(s)), "wrist")
+            azim.append(np.degrees(np.arctan2(-t[2], t[0])))
+            level.append(_elevation(t))
+        assert np.all(np.diff(azim) > 5.0), (name, azim)
+        assert np.ptp(level) < 0.5, (name, level)       # base: swing changed the elevation
+
+
+def test_a_free_wing_turns_about_the_frames_own_axes():
+    """No body, no change: ``raise_`` is still a rotation about the chord Z and ``swing`` about
+    the plane normal Y, exactly as before. (A guard: it passes on the old code by design.)"""
+    from minimaster.character.wings import _euler_from_matrix
+    from minimaster.core import math3d as m3
+    for style in STYLES:
+        sk = W.make_wing_rig(style).skeleton
+        assert not sk.on_body
+        assert np.array_equal(sk.flap_axis, [0.0, 0.0, 1.0])
+        assert np.array_equal(sk.swing_axis, [0.0, 1.0, 0.0])
+        pose = sk.controls_to_pose(PoseControls(raise_=30.0, swing=20.0, twist=-10.0))
+        want = _euler_from_matrix(m3.rot_y(-20.0) @ m3.rot_z(-30.0) @ m3.rot_x(-10.0))
+        assert pose["shoulder"] == want
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_placing_a_rig_aims_its_shoulder_at_the_body_and_only_placing_does(style):
+    (name, pw), _ = _body_rigs(style)
+    sk = pw.rig.skeleton
+    assert sk.on_body
+    R = pw.matrix[:3, :3] / np.linalg.norm(pw.matrix[:3, 0])
+    # a rotation about wing axis a is a rotation about R a in the body: fore-aft / vertical
+    assert abs(float(sk.flap_axis @ R.T @ [0, 0, 1])) == pytest.approx(1.0, abs=1e-9)
+    assert abs(float(sk.swing_axis @ R.T @ [0, 1, 0])) == pytest.approx(1.0, abs=1e-9)
+    assert np.linalg.norm(sk.flap_axis - [0, 0, 1]) > 0.5          # the old axis is not it
+    # the bare constructor leaves a rig's frame the world; ``placed`` is what places it
+    fresh = W.make_wing_rig(style)
+    PlacedWing(fresh, pw.matrix)
+    assert not fresh.skeleton.on_body
+    fresh.placed(pw.matrix)
+    assert fresh.skeleton.on_body and np.allclose(fresh.skeleton.flap_axis, sk.flap_axis)
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_placing_leaves_the_stowed_and_half_folded_poses_alone(style):
+    """The fold, the stowed lift and the twist keep their meaning: with raise_ and swing at zero
+    a placed rig poses exactly as it would with its frame the world."""
+    (_, pw), _ = _body_rigs(style)
+    sk = pw.rig.skeleton
+    for kw in ({"fold": 0.3}, {"fold": 0.7, "twist": 10.0}, {"fold": 1.0}, {"fold": 1.0, "twist": -8.0}):
+        placed = sk.controls_to_pose(PoseControls(**kw))
+        sk.on_body = False
+        try:
+            free = sk.controls_to_pose(PoseControls(**kw))
+        finally:
+            sk.on_body = True
+        assert placed == free, kw
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_a_posed_placed_pair_is_still_an_exact_mirror_image(style):
+    (_, left), (_, right) = _body_rigs(style)
+    c = PoseControls(raise_=15.0, swing=10.0, twist=8.0, fold=0.3, wrist_flex=-10.0, curl=12.0)
+    L, R = left.pose(c).vertices, right.pose(c).vertices
+    assert np.abs(L @ np.diag([-1.0, 1.0, 1.0]).T - R).max() < 1e-9
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_every_preset_and_flap_phase_keeps_the_wings_off_the_midline(style):
+    """The wing rests ~50 degrees above horizontal, so a raise that ignored the spine drove the two
+    wings through each other: the old 'upstroke' had 15% of the sheet past the spine (raise_ 60
+    30%, 100 76%). Every named pose and every phase of the flap, plain and sized to the wing,
+    keeps every vertex of both wings at least 0.2 units to its own side."""
+    rigs = _body_rigs(style)
+    poses = [("preset " + k, k) for k in PRESETS]
+    for ph in range(0, 360, 30):
+        poses.append((f"flap {ph}", PoseControls.flap(float(ph))))
+    for name, pw in rigs:
+        for label, ctrl in poses + [(f"sized flap {ph}", pw.flap(float(ph))) for ph in range(0, 360, 30)]:
+            x = _sign(name) * pw.pose(ctrl).vertices[:, 0]
+            # a pure fold ('half_fold', 'folded') is the fold's own business (the half-folded angel's
+            # inner edge is 0.19 from the spine with no control touched; the stowed-pair tests bound
+            # it at 0.1): the bound here is for what the shoulder controls add to it
+            pure_fold = label in ("preset half_fold", "preset folded")
+            assert x.min() > (0.1 if pure_fold else 0.2), (name, label, float(x.min()))
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+@pytest.mark.parametrize("fold", [0.0, 0.3, 0.6, 0.8, 1.0])
+def test_the_ends_of_every_shoulder_range_stay_on_their_own_side_of_the_spine(style, fold):
+    (name, pw), _ = _body_rigs(style)
+    for ctl in ("raise_", "swing", "twist"):
+        for x in pw.rig.control_range(ctl, fold):
+            v = pw.pose(PoseControls(fold=fold, **{ctl: x})).vertices
+            assert v[:, 0].min() > 0.1, (style, fold, ctl, x, float(v[:, 0].min()))
+
+
+def _across_and_inside(pw, name, ctrl, tris, step):
+    from tests.test_wings import _inside_body
+    v = pw.pose(ctrl).vertices
+    return (float((_sign(name) * v[:, 0] < -0.1).mean()),
+            float(_inside_body(v[::step], tris).mean()))
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_combined_extremes_of_the_shoulder_controls_stay_off_the_spine_and_out_of_the_torso(style):
+    """Every corner of the legal raise_ x swing x twist box, spread, half folded and stowed: a
+    sliver at most past the midline (the stowed pair test allows 2%) and no more of the wing inside
+    the torso than the pose without them plus a margin (the old ranges put 38% of a stowed bat and
+    16% of an angel there by pressing the negative side of a stowed wing into the back)."""
+    (name, pw), _ = _body_rigs(style)
+    tris = _BODY["tris"]
+    step = 160 if style == "feathered" else 32
+    margin = {"membrane": 0.08, "dragon": 0.08, "feathered": 0.12}[style]
+    for fold in (0.0, 0.5, 1.0):
+        _, base_in = _across_and_inside(pw, name, PoseControls(fold=fold), tris, step)
+        rg = {k: pw.rig.control_range(k, fold) for k in ("raise_", "swing", "twist")}
+        for r in rg["raise_"]:
+            for s in rg["swing"]:
+                for t in rg["twist"]:
+                    across, inside = _across_and_inside(
+                        pw, name, PoseControls(fold=fold, raise_=r, swing=s, twist=t), tris, step)
+                    where = (style, fold, r, s, t)
+                    assert across <= 0.025, (where, across)
+                    assert inside <= base_in + margin, (where, inside, base_in)
+
+
+@pytest.mark.parametrize("style", STYLES)
+def test_the_placed_ranges_are_not_the_free_ones(style):
+    """``placed_limits`` replace the entry of the same control: a wing on a body rises less and
+    drops more than a free one (50 degrees above horizontal at rest)."""
+    free = W.make_wing_rig(style)
+    placed = W.make_wing_rig(style)
+    M = np.eye(4)
+    M[:3, :3] = np.array([[0.562, 0.473, 0.678], [0.787, -0.056, -0.614], [-0.253, 0.879, -0.404]])
+    placed.placed(M)
+    lo_f, hi_f = free.control_range("raise_")
+    lo_p, hi_p = placed.control_range("raise_")
+    assert hi_p < 0.8 * hi_f and hi_p < 45.0
+    assert lo_p > lo_f
+    assert placed.control_range("fan") == free.control_range("fan")
+
+
+def test_a_flap_cycle_can_be_sized_to_a_lopsided_range():
+    """``flap`` is unchanged by default; ``up_reach`` / ``down_reach`` size the halves apart, and
+    ``WingRig.flap`` fills them in from the wing's own range."""
+    import numpy as np
+    c = PoseControls.flap(90.0)
+    assert c.raise_ == 45.0 * float(np.sin(np.radians(90.0)))
+    assert PoseControls.flap(90.0, up_reach=20.0).raise_ == pytest.approx(20.0)
+    assert PoseControls.flap(270.0, up_reach=20.0).raise_ == pytest.approx(-45.0)
+    assert PoseControls.flap(270.0, down_reach=30.0).raise_ == pytest.approx(-30.0)
+    # the other controls do not follow the reach
+    assert PoseControls.flap(90.0, up_reach=20.0).wrist_flex == PoseControls.flap(90.0).wrist_flex
+    rig = W.make_wing_rig("membrane")
+    rig.skeleton.limits = {"raise_": (-10.0, 25.0)}
+    top, bottom = rig.flap(90.0), rig.flap(270.0)
+    lo, hi = rig.control_range("raise_", top.fold)
+    assert top.raise_ == pytest.approx(min(45.0, hi))
+    assert bottom.raise_ == pytest.approx(-10.0)
+    assert rig.flap(90.0, amp=15.0).raise_ == pytest.approx(15.0)
+
+
+@_ON_BODY
+@pytest.mark.parametrize("style", STYLES)
+def test_a_placed_flap_visibly_goes_up_and_down(style):
+    """Sized to the wing, the cycle lifts the wrist (which leads the stroke) well above and drops it
+    well below where it rests (the old cycle moved the angel's tip 9.9 units fore-aft and only 3.6
+    up and down, and its top of stroke was the LOWEST point), and the top of the stroke is the top:
+    the wrist is highest at phase 90-135 and lowest at 225-315."""
+    for name, pw in _body_rigs(style):
+        elev = {ph: _elevation(_tip_from_shoulder(pw, name, pw.flap(float(ph)), "wrist"))
+                for ph in range(0, 360, 45)}
+        rest = _elevation(_tip_from_shoulder(pw, name, PoseControls(), "wrist"))
+        assert max(elev.values()) > rest + 8.0, (name, elev, rest)
+        assert min(elev.values()) < rest - 12.0, (name, elev, rest)
+        assert max(elev, key=elev.get) in (90, 135), (name, elev)
+        assert min(elev, key=elev.get) in (225, 270, 315), (name, elev)
+
+
+@_ON_BODY
+def test_a_raised_angels_hand_lags_in_the_plane_of_the_flap():
+    """The feathered wing arches (the hand lags the wrist). On the body that lag is a turn about
+    the same fore-aft axis -- the hand drops in the vertical plane of the flap -- not the
+    out-of-plane flex of a free wing, which tipped the hand forward and sideways."""
+    (name, pw), _ = _body_rigs("feathered")
+    sk = pw.rig.skeleton
+    c = PoseControls(raise_=30.0)
+
+    def hand(arch):
+        old, sk.raise_arch = sk.raise_arch, arch
+        try:
+            return (_tip_from_shoulder(pw, name, c, "primary10_t")
+                    - _tip_from_shoulder(pw, name, c, "wrist"))
+        finally:
+            sk.raise_arch = old
+
+    arched, stiff = hand(sk.raise_arch), hand(0.0)
+    dip = _elevation(stiff) - _elevation(arched)
+    assert dip == pytest.approx(sk.raise_arch * 30.0, abs=3.0), dip       # 9 degrees of lag ...
+    assert abs(arched[2] - stiff[2]) < 0.05, (arched, stiff)              # ... in the plane: no fore-aft
+
+
+# -- stretch: the ranges, not the limiter, keep the sheet inside what skin can do ----------------
+
+def _grid_stretch(rig, mesh, min_rest=0.15):
+    """``(p99, edges over 1.3x)`` of the membrane's mid-surface grid against rest, edges with rest
+    length over 0.15 (the critics' metric)."""
+    piece = next(p for p in rig.pieces if p.membrane and p.pleat)
+    a, b = rig.ranges[piece.name]
+    n1, m1 = piece.pleat["shape"]
+    nv = n1 * m1
+    R, V = rig.rest_mesh.vertices[a:b], mesh.vertices[a:b]
+    rest = (0.5 * (R[:nv] + R[nv:2 * nv])).reshape(n1, m1, 3)
+    pos = (0.5 * (V[:nv] + V[nv:2 * nv])).reshape(n1, m1, 3)
+    s = np.concatenate([
+        (np.linalg.norm(np.diff(pos, axis=ax), axis=2) / np.maximum(r, 1e-12))[r > min_rest]
+        for ax in (0, 1) for r in [np.linalg.norm(np.diff(rest, axis=ax), axis=2)]])
+    return float(np.percentile(s, 99)), int((s > 1.3).sum())
+
+
+STRETCH_P99, STRETCH_EDGES = 1.27, 10      # the bound: p99 ~1.25 and a handful of edges over 1.3x
+_MEMBRANE_RIGS: dict = {}
+
+
+def _membrane_rig(style, mode):
+    """A free rig, or the left wing placed on the body (a fresh rig each: placing re-aims it)."""
+    key = (style, mode)
+    if key not in _MEMBRANE_RIGS:
+        if mode == "free":
+            _MEMBRANE_RIGS[key] = W.make_wing_rig(style)
+        else:
+            _MEMBRANE_RIGS[key] = _body_rigs(style)[0][1].rig
+    return _MEMBRANE_RIGS[key]
+
+
+def _mode_params():
+    return [pytest.param(m, marks=_ON_BODY if m == "placed" else ()) for m in ("free", "placed")]
+
+
+@pytest.mark.parametrize("mode", _mode_params())
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_presets_and_flap_phases_keep_the_sheet_inside_the_stretch_bound(style, mode):
+    """Named 'upstroke' once had 374 of 1872 grid edges over 1.15x and 64 over 1.3x, the flap's
+    top of stroke 56 over 1.3x. (The stowed 'folded' pose has stretch of its own: pleats and
+    gathers, not a control; it is not in this bound.)"""
+    rig = _membrane_rig(style, mode)
+    worst = []
+    for name in sorted(PRESETS):
+        if PRESETS[name].get("fold", 0.0) <= 0.5:
+            worst.append((name, _grid_stretch(rig, rig.pose(name))))
+    for ph in range(0, 360, 30):
+        worst.append((f"flap {ph}", _grid_stretch(rig, rig.pose(rig.flap(float(ph))))))
+        worst.append((f"flap {ph} (45 deg)", _grid_stretch(rig, rig.pose(PoseControls.flap(float(ph))))))
+    for label, (p99, over) in worst:
+        assert p99 <= STRETCH_P99 and over <= STRETCH_EDGES, (style, mode, label, p99, over)
+
+
+def _extremes():
+    """Every control at the far ends of the ANATOMICAL range (``LIMITS``), which is what a caller
+    can ask for; the wing clamps to what its skin takes."""
+    return [(f"{ctl}={x:g}", {ctl: x}) for ctl, (lo, hi) in LIMITS.items() if ctl != "fold"
+            for x in (lo, hi)]
+
+
+@pytest.mark.parametrize("mode", _mode_params())
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_asking_for_any_extreme_control_keeps_the_sheet_inside_the_stretch_bound(style, mode):
+    """fan 0.55 (a legal membrane value) stretched the sheet 2.15x (191 edges over 1.3x), raise_ 100
+    150 edges, twist 45 119, swing -30 193, curl 100 50. The ranges per skeleton now hold the
+    sheet to a p99 of ~1.25 and a handful of edges over 1.3x, spread and half way to folded."""
+    rig = _membrane_rig(style, mode)
+    for fold in (0.0, 0.3):
+        for label, kw in _extremes():
+            p99, over = _grid_stretch(rig, rig.pose(fold=fold, **kw))
+            assert p99 <= STRETCH_P99 and over <= STRETCH_EDGES, (style, mode, fold, label, p99, over)
+
+
+@pytest.mark.parametrize("mode", _mode_params())
+@pytest.mark.parametrize("style", ["membrane", "dragon"])
+def test_the_stretch_limiter_is_still_needed_at_the_edge_of_the_ranges(style, mode, monkeypatch):
+    """The ranges are cut where the limiter can still win. Switch it off and the same extremes
+    break the bound -- so the previous test fails if the limiter is disabled (or stops pulling edges
+    back: MAX_STRETCH raised to 1.6), which none of the older tests noticed."""
+    from minimaster.character import wingrig as R
+    rig = _membrane_rig(style, mode)
+    on = [_grid_stretch(rig, rig.pose(fold=0.0, **kw)) for _, kw in _extremes()]
+    monkeypatch.setattr(R.WingRig, "_limit_stretch", staticmethod(lambda mid, rest_mid, pinned, *a, **k: mid))
+    off = [_grid_stretch(rig, rig.pose(fold=0.0, **kw)) for _, kw in _extremes()]
+    broken = [label for (label, _), (p99, over) in zip(_extremes(), off) if p99 > 1.3 or over > 10]
+    # (3 or more before the interior was re-evaluated at every pose: the chord strains each row
+    # evenly now, so it is only the raise extremes that still need the limiter)
+    assert len(broken) >= 1, broken
+    assert all(p99 <= STRETCH_P99 and over <= STRETCH_EDGES for p99, over in on)
+
+
+def test_a_looser_limiter_ceiling_lets_the_extremes_through(monkeypatch):
+    """The same guard against the other mutation: MAX_STRETCH 1.15 -> 1.60 (no pull at all in
+    practice) breaks the bound too."""
+    from minimaster.character import wingrig as R
+    rig = W.make_wing_rig("membrane")
+    monkeypatch.setattr(R, "MAX_STRETCH", 1.60)
+    p99, over = _grid_stretch(rig, rig.pose(raise_=-70.0))
+    assert p99 > STRETCH_P99 or over > STRETCH_EDGES, (p99, over)

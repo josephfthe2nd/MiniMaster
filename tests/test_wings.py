@@ -272,6 +272,85 @@ def test_the_humerus_tapers_into_the_shoulder_instead_of_ending_like_a_bolt(spre
     assert r[-1] < r[elbow]
 
 
+def test_the_humerus_swells_into_a_fillet_where_it_leaves_the_back(spread):
+    """The taper stopped it ending like a bolt but it still entered the back as a bare rod, a
+    constant 0.2-unit tube. Where it leaves the scapula (0.33-0.43 of its length from the
+    shoulder, on every body morph) it swells into a pad of ~1.4 x the rod, and the swelling is a
+    fairing, not a lump: never more than 1.5 x the bone, back to the rod by mid-humerus."""
+    style, rig = spread
+    r = _ring_radii(rig, "arm", 9)
+    elbow = len(r) // 2
+    t = np.linspace(0.0, 1.0, elbow + 1)
+    h = r[:elbow + 1]
+    assert h[(t > 0.25) & (t < 0.5)].max() > 1.25 * r[elbow], "the humerus is still a bare rod where it leaves the back"
+    assert h.max() <= 1.5 * r[elbow] + 1e-9, "the fillet is a lump, not a fairing"
+    assert h[(t > 0.65) & (t < 0.9)].max() < 1.05 * r[elbow], "the swelling runs on down the whole humerus"
+    # the bolt fix is intact: the buried end is no thicker than the free arm
+    assert r[0] < 0.88 * r[elbow]
+
+
+def test_the_elbow_and_wrist_knobs_swell_the_bone_instead_of_standing_out_of_it(spread):
+    """The joint balls were 1.25-1.3 x the bone's own radius, twice its diameter at figure scale:
+    a rivet on a rod from above, a pendant at the hem when stowed. They are a swelling now."""
+    style, rig = spread
+    r = _ring_radii(rig, "arm", 9)
+    for knob, ring in (("elbow_knob", r[len(r) // 2]), ("wrist_knob", r[-1])):
+        a, b = rig.ranges[knob]
+        v = rig.rest_mesh.vertices[a:b]
+        radius = float(np.linalg.norm(v - v.mean(axis=0), axis=1).mean())
+        assert 1.0 < radius / ring <= 1.2, (style, knob, radius / ring)
+
+
+def test_the_dragon_is_more_than_a_bat_with_deeper_scallops():
+    """Same skeleton and rig, but a dragon keeps what dragon art keeps and what survives at
+    figure scale: a thorn at the wrist, a thumb ending in a claw nearly twice a bat's, and
+    longer finger spikes."""
+    bat = W.make_wing_rig("membrane", root=BODY_ROOT)
+    drg = W.make_wing_rig("dragon", root=BODY_ROOT)
+    assert "wrist_spur" not in bat.ranges and "wrist_spur" in drg.ranges
+
+    def claw_len(rig):
+        a, b = rig.ranges["claw"]
+        v = rig.rest_mesh.vertices[a:b]
+        return float(np.linalg.norm(v[-1] - v[-2])) / rig.skeleton.scale        # in forearms
+
+    def spike_len(rig):
+        # how far the digit's tube reaches past its tip joint, along the last phalanx
+        a, b = rig.ranges["digit_III"]
+        v = rig.rest_mesh.vertices[a:b]
+        J = rig.skeleton.joints
+        d = J["d3_tip"] - J["d3_ip"]
+        d = d / np.linalg.norm(d)
+        return float(((v - J["d3_tip"]) @ d).max()) / rig.skeleton.scale
+
+    assert claw_len(drg) > 1.6 * claw_len(bat), (claw_len(drg), claw_len(bat))
+    assert spike_len(drg) > 1.6 * spike_len(bat), (spike_len(drg), spike_len(bat))
+    # the thorn stands out of the wrist, up out of the wing plane, and is a real spike, not a bump
+    a, b = drg.ranges["wrist_spur"]
+    v = drg.rest_mesh.vertices[a:b]
+    wrist = drg.skeleton.joints["wrist"]
+    reach = v[np.argmax(np.linalg.norm(v - wrist, axis=1))] - wrist
+    assert np.linalg.norm(reach) > 0.15 * drg.skeleton.scale
+    assert -reach[1] > 0.3 * np.linalg.norm(reach), "the spur lies in the wing plane instead of standing up out of it"
+    # the spur is a rigid part of the forearm, like the knobs
+    assert drg.dominant_bone("wrist_spur") == "wrist"
+
+
+def test_the_free_edge_meets_the_body_above_the_waist_joint():
+    """A full-width panel ending in a corner at the hip hangs as a flat rectangular tab beside
+    the buttock at half fold. The plagiopatagium's free edge now stops short on the root line, so
+    its lowest corner is a taper coming up into the flank."""
+    for style in ("membrane", "dragon"):
+        rig = W.make_wing_rig(style, root=BODY_ROOT)
+        piece, g = _grid(rig)
+        c1 = piece.pleat["sectors"][3][1]                    # the last trailing-edge column
+        corner = g[-1, c1][[0, 2]]
+        root = rig.skeleton.joints["root"][[0, 2]]
+        shoulder = rig.skeleton.joints["shoulder"][[0, 2]]
+        up = float((corner - root) @ (shoulder - root)) / float(np.linalg.norm(shoulder - root))
+        assert up > 0.15 * float(np.linalg.norm(shoulder - root)), (style, up)
+
+
 def test_the_thumb_claw_is_a_blunt_peg_exempt_from_the_bone_floor(spread):
     """A needle thinner than the sheet cannot print; a peg of 0.5-0.6 of its base radius,
     ending flat, can -- and it is deliberately finer than the bones' own floor."""
@@ -294,14 +373,17 @@ def test_the_thumb_claw_is_a_blunt_peg_exempt_from_the_bone_floor(spread):
 
 def test_finger_ridges_stay_proud_of_the_sheet_to_the_last_joint(spread):
     """The ridges tapered to half their base radius, which for IV and V is below half the
-    membrane's thickness: the bone sank into the sheet and the digit read as a slit."""
+    membrane's thickness: the bone sank into the sheet and the digit read as a slit. A finger
+    is one rigid tube per phalanx now; the last joint is where the last phalanx's tube
+    starts its needle (ring ``FINGER_RINGS``)."""
     style, rig = spread
     thickness = 0.22
     for digit in ("IV", "V"):
-        n_main = 6 * (len(rig.skeleton.chains[digit]) - 2 + 1)    # samples up to the last joint
-        r = _ring_radii(rig, f"digit_{digit}", 7)
-        assert r[n_main] >= 0.5 * thickness, f"digit {digit} ridge is only {r[n_main]:.3f} thick at its last joint"
-        assert r[n_main] < r[0], "the ridge no longer tapers"
+        last = f"digit_{digit}_p{len(rig.skeleton.chains[digit]) - 2}"
+        r = _ring_radii(rig, last, 7)
+        r0 = _ring_radii(rig, f"digit_{digit}", 7)
+        assert r[W.FINGER_RINGS] >= 0.5 * thickness, f"digit {digit} ridge is only {r[W.FINGER_RINGS]:.3f} thick at its last joint"
+        assert r[W.FINGER_RINGS] < r0[0], "the ridge no longer tapers"
 
 
 def test_the_tip_of_the_wing_is_washed_out(monkeypatch):
