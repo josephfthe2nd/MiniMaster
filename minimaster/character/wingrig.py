@@ -241,11 +241,29 @@ ELASTIC = 0.90
 # How far skin may stretch (relative to its rest length) before the limiter
 # pulls it back. Compression is free -- that is what the pleats are for.
 MAX_STRETCH = 1.15
+# Skin takes up a little more closure, and buckles a little less, while the wing is only
+# cupped (the hand not yet folded back): ELASTIC_CUPPED is knocked off ELASTIC and the pleat
+# gain is cut by PLEAT_CUPPED, both fading out by the time the hand has folded PLEAT_FOLD_FULL
+# of the way back onto the forearm.
+ELASTIC_CUPPED = 0.08
+PLEAT_CUPPED = 0.5
+PLEAT_FOLD_FULL = 0.3
+# A finger's column of the sheet is laid along the finger (``WingRig._gather_fingers``)
+# once one of its knuckles is bent this many degrees (a rest finger's hooked tip is bent
+# 47, a curl of 40 degrees 67), and along the straight line between its ends once it has
+# folded up (165 degrees stowed). Below that the column keeps its skinned arc.
+BEND_FROM, BEND_SPAN = 75.0, 30.0       # sheet column follows the bent finger
+FOLD_FROM, FOLD_SPAN = 120.0, 45.0      # ... then the straight line between its ends
 # Tallest a single pleat may stand off the sheet (soft limit, wing units).
-PLEAT_CAP = 0.45
+PLEAT_CAP = 0.30
 
 # --------------------------------------------------------------------------
 # the rig
+
+
+def _smooth01(x: float) -> float:
+    t = min(max(float(x), 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
 def _plan_segment_distance(pts_xz, a_xz, b_xz):
@@ -380,10 +398,10 @@ class WingRig:
             Ra = R[bi]
             moved = np.einsum("vij,vj->vi", Ra, V[act]) + t[bi]
             out[act] += w[act, None] * moved
-        out = self._apply_pleats(out)
+        out = self._apply_pleats(out, pose)
         return Mesh(out, self.rest_mesh.faces)
 
-    def _apply_pleats(self, posed: np.ndarray, gain: float = 0.8) -> np.ndarray:
+    def _apply_pleats(self, posed: np.ndarray, pose=None, gain: float = 0.8) -> np.ndarray:
         """Re-evaluate each membrane panel between its two posed bone lines.
 
         Skinning moves the vertices that sit on a finger with that finger, but
@@ -403,6 +421,12 @@ class WingRig:
         specs = [(p, self.ranges[p.name]) for p in self.pieces if p.pleat]
         if not specs:
             return posed
+        # A wing that is cupped (curled, flapping) but not folded keeps its skin taut: the
+        # fingers lean in together, the sheet between them stretches a little more and
+        # buckles a little less, and it never gathers into the pleats of a closing wing.
+        cupped = 1.0 - _smooth01(self._hand_fold(pose) / PLEAT_FOLD_FULL) if pose else 1.0
+        elastic = ELASTIC - ELASTIC_CUPPED * cupped
+        gain = gain * (1.0 - PLEAT_CUPPED * cupped)
         for piece, (a, b) in specs:
             n1, m1 = piece.pleat["shape"]
             gains = piece.pleat.get("gains", [1.0] * len(piece.pleat["sectors"]))
@@ -417,6 +441,8 @@ class WingRig:
             mid = 0.5 * (top + bot)
             up = top - bot                                  # stable at the finger columns
             up /= np.maximum(np.linalg.norm(up, axis=2, keepdims=True), 1e-12)
+            if piece.pleat.get("fingers") and pose:
+                mid = self._gather_fingers(mid, r_mid, piece.pleat, pose)
             new_mid = mid.copy()
             touched = False
             for k, (c0, c1) in enumerate(piece.pleat["sectors"]):
@@ -424,7 +450,7 @@ class WingRig:
                 g_pose = np.linalg.norm(mid[:, c1] - mid[:, c0], axis=1)
                 # skin is elastic: it takes up a few percent of closure by itself,
                 # and only buckles beyond that (a gentle curl must not inflate)
-                g_eff = ELASTIC * g_rest
+                g_eff = elastic * g_rest
                 slack = np.maximum(g_eff ** 2 - g_pose ** 2, 0.0)
                 fade = np.clip(slack / (0.02 * g_rest ** 2 + 1e-30), 0.0, 1.0)
                 if not fade.any():
@@ -488,6 +514,84 @@ class WingRig:
             pos[:nv] = (new_mid + nrm * r_half[..., None]).reshape(-1, 3)
             pos[nv:2 * nv] = (new_mid - nrm * r_half[..., None]).reshape(-1, 3)
         return posed
+
+    def _hand_fold(self, pose) -> float:
+        """How far the hand has folded back on the forearm, 0 (rest) .. 1 (stowed), read off
+        the posed joints: the angle between the forearm and the hand's own axis (wrist to the
+        knuckle of digit III), against what it is at rest."""
+        def angle(P):
+            fore, hand = P["wrist"] - P["elbow"], P["d3_mcp"] - P["wrist"]
+            c = fore @ hand / (np.linalg.norm(fore) * np.linalg.norm(hand))
+            return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
+        rest = angle(self.skeleton.joints)
+        return float(np.clip((angle(self.armature.posed_positions(pose)) - rest)
+                             / max(170.0 - rest, 1e-6), 0.0, 1.0))
+
+    def _gather_fingers(self, mid, r_mid, pleat, pose):
+        """Lay the sheet's finger columns along their (bent) fingers, and where a finger
+        has folded right up, along the straight line between its two ends.
+
+        Skinning drops each row of a column wherever the blend of nearby bones puts it:
+        near a knuckle that cuts the corner, and once a finger is a concertina (metacarpal
+        out, first phalanx back, second out again) the column runs out, back and out
+        and the panel between two such columns doubles over itself into a crumple. The
+        skin does not do that. Past a bend a column sits on the finger, each row at the
+        distance along the bone path it had at rest; past a hairpin the skin spans the
+        finger's two ends and the column is the straight ray from the posed wrist to the
+        posed fingertip (the closed fan), each row at the fraction of the way it was at
+        rest. How far it goes is read off the finger itself, from its sharpest knuckle: a
+        gentle curl (a knuckle turned 40 degrees or so on top of the finger's own hooked
+        tip) keeps the skinned arc and a taut sheet.
+        """
+        J = self.armature.posed_positions(pose)
+        w0 = J["wrist"]
+        rest = self.skeleton.joints
+        mid = mid.copy()
+        last = 0.0
+        for (c0, _), name in zip(pleat["sectors"], pleat["fingers"]):
+            names = ["wrist"] + list(self.skeleton.chains[name][1:])
+            path = np.array([J[j] for j in names])
+            bones = np.diff(path, axis=0)
+            turn = 0.0                                  # the sharpest knuckle, degrees
+            for b0, b1 in zip(bones[:-1], bones[1:]):
+                n0, n1 = float(np.linalg.norm(b0)), float(np.linalg.norm(b1))
+                if min(n0, n1) > 1e-6:
+                    turn = max(turn, float(np.degrees(np.arccos(np.clip(b0 @ b1 / (n0 * n1), -1, 1)))))
+            bent = _smooth01((turn - BEND_FROM) / BEND_SPAN)
+            last = folded = _smooth01((turn - FOLD_FROM) / FOLD_SPAN)
+            if bent <= 0.0:
+                continue
+            # where each row sits along the finger at rest, as a distance along its bones
+            rpath = np.array([rest[j] for j in names])
+            seg = np.linalg.norm(np.diff(rpath, axis=0), axis=1)
+            cum = np.concatenate([[0.0], np.cumsum(seg)])
+            arc = np.empty(len(r_mid))
+            for i, p in enumerate(r_mid[:, c0]):
+                d = [_plan_segment_distance(p[None, [0, 2]], a[[0, 2]], b[[0, 2]])[0]
+                     for a, b in zip(rpath[:-1], rpath[1:])]
+                k = int(np.argmin(d))
+                ab = rpath[k + 1] - rpath[k]
+                u = float(np.clip((p - rpath[k]) @ ab / max(float(ab @ ab), 1e-12), 0.0, 1.0))
+                arc[i] = cum[k] + u * seg[k]
+            arc = np.maximum.accumulate(arc)
+            kk = np.clip(np.searchsorted(cum, arc, side="right") - 1, 0, len(seg) - 1)
+            u = ((arc - cum[kk]) / np.maximum(seg[kk], 1e-12))[:, None]
+            on_path = path[kk] + (path[kk + 1] - path[kk]) * u
+            reach = np.linalg.norm(r_mid[:, c0] - rest["wrist"], axis=1)
+            frac = (reach / max(reach[-1], 1e-12))[:, None]
+            chord = w0 + (path[-1] - path[0]) * frac
+            ideal = (1.0 - folded) * on_path + folded * chord
+            mid[:, c0] = (1.0 - bent) * mid[:, c0] + bent * ideal
+        # the column that closes the last panel (the sheet behind the last finger, from
+        # the arm out to the body) is straightened with that finger: its ends are
+        # already where the arm and the body put them, only the run between crumples
+        c1 = pleat["sectors"][-1][1]
+        if last > 0.0:
+            reach = np.linalg.norm(r_mid[:, c1] - r_mid[0, c1], axis=1)
+            frac = (reach / max(reach[-1], 1e-12))[:, None]
+            line = mid[0, c1] + (mid[-1, c1] - mid[0, c1]) * frac
+            mid[:, c1] = (1.0 - last) * mid[:, c1] + last * line
+        return mid
 
     @staticmethod
     def _limit_stretch(mid, rest_mid, pinned, iters: int = 16):

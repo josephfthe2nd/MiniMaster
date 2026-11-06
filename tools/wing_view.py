@@ -78,12 +78,19 @@ def albedo(rig, style, mesh=None):
 # Where the membrane root lands on the body, in wing units (plan x, z): what
 # back_wings() produces on the default body. Isolated renders use it so the
 # planform matches the one on the figure instead of the standalone default.
-BODY_ROOT = {"membrane": (-3.3, 2.3), "dragon": (-3.3, 2.3), "feathered": None}
+BODY_ROOT = {"membrane": (-3.3, 2.3), "dragon": (-3.3, 2.3), "feathered": (-2.2063, 2.9923)}
+# ... and where the back is in the wing's own frame (out of the back, down the spine, away
+# from the spine): a stowed feathered wing lies against it, exactly as on the figure
+BODY_BACK = {"feathered": ((0.253, -0.7761, 0.5776), (-0.7873, 0.1818, 0.5892),
+                           (0.5623, 0.6038, 0.565))}
 
 
 def make_rig(style, **kw):
     root = BODY_ROOT.get(style)
-    return W.make_wing_rig(style, **({"root": root} if root else {}), **kw)
+    rig = W.make_wing_rig(style, **({"root": root} if root else {}), **kw)
+    if style in BODY_BACK:
+        rig.skeleton.stow_against(*BODY_BACK[style])
+    return rig
 
 
 # name -> (azimuth, elevation)

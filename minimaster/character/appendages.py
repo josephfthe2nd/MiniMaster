@@ -438,6 +438,15 @@ WING_OFFSET = -0.9
 WING_ROOT = (1.20, 0.40, -0.60)
 
 
+# Per-style placement overrides. A feathered wing has no membrane to glue to the waist, so
+# its root only aims the stowed wing, and it is the pivot the wing stows about. A folded wing
+# is a plank that has to clear the shoulder blades and the buttocks, so the pivot sits
+# OUTSIDE the back surface; and it is given RELATIVE to the anchor (down the back from the
+# scapula, 0.27 behind its surface), so the wing stows the same distance off a slim back and
+# a heavy one and its orientation stays independent of the body's sliders.
+WING_PLACEMENT = {"feathered": {"root_point": (0.60, -3.50, -0.27), "root_relative": True}}
+
+
 def back_wings(style: str = "membrane", scale: float = 1.0,
                mirror: bool = True, **params) -> "Appendage":
     """A mirrored pair of wings sitting on the shoulder blades.
@@ -446,10 +455,11 @@ def back_wings(style: str = "membrane", scale: float = 1.0,
     orientation, which is the difference between wings that are attached and
     wings that float behind the back.
     """
+    place = dict(root_point=WING_ROOT)
+    place.update(WING_PLACEMENT.get(style, {}))
     return Appendage("wing", anchor_point=WING_ANCHOR, mirror=mirror,
                      up_hint=WING_UP_HINT, roll=WING_ROLL, offset=WING_OFFSET,
-                     root_point=WING_ROOT, scale=scale,
-                     params=dict(style=style, **params))
+                     scale=scale, params=dict(style=style, **params), **place)
 
 
 @dataclass
@@ -484,6 +494,9 @@ class Appendage:
     # Body-space point where the appendage's attachment line ends (wings only).
     # Mirrored with the anchor; converted into the wing's own frame at build.
     root_point: tuple | None = None
+    # ``root_point`` as an offset from the anchor's surface point instead of a point in body
+    # space (so it follows the body's morphs). Mirrored like the point.
+    root_relative: bool = False
 
     # pose controls that may ride along in ``params`` for a wing; everything
     # else in ``params`` shapes the wing itself
@@ -533,11 +546,10 @@ class Appendage:
         # sink a fixed distance straight into the back, not along one quad's normal
         origin = pt + back * self.offset
         x = np.asarray(self.up_hint, dtype=np.float64)
-        rp = np.asarray(self.root_point, dtype=np.float64)
+        rp = self._root_world(pt, idx)
         mirrored = idx == 1
         if mirrored:
             x = x * np.array([-1.0, 1.0, 1.0])
-            rp = rp * np.array([-1.0, 1.0, 1.0])
         x = x / np.linalg.norm(x)
         z = rp - origin
         z = z - float(z @ x) * x                    # the part perpendicular to the span axis
@@ -551,6 +563,14 @@ class Appendage:
         m[:3, :3] = np.stack([x, y, z], axis=1) * float(self.scale)
         m[:3, 3] = origin
         return m
+
+    def _root_world(self, surface_pt, idx) -> np.ndarray:
+        """The root target in body space for side ``idx``; ``surface_pt`` is the anchor's
+        surface point on that side (before the sink)."""
+        rp = np.asarray(self.root_point, dtype=np.float64)
+        if idx == 1:
+            rp = rp * np.array([-1.0, 1.0, 1.0])
+        return np.asarray(surface_pt, dtype=np.float64) + rp if self.root_relative else rp
 
     def _roll_toward_root(self, anchor, body_v, idx) -> float:
         """Roll (degrees about the span axis) that puts the attachment line in
@@ -604,12 +624,16 @@ class Appendage:
             M = self._anchor_frame(body_v, body_q, idx, pt)
             kw = dict(shape)
             if self.root_point is not None and "root" not in kw:
-                rp = np.asarray(self.root_point, dtype=np.float64)
-                if idx == 1:
-                    rp = rp * np.array([-1.0, 1.0, 1.0])
+                surface = M[:3, 3] + np.array([0.0, 0.0, self.offset])      # before the sink
+                rp = self._root_world(surface, idx)
                 local = np.linalg.inv(M) @ np.append(rp, 1.0)      # into wing units
                 kw["root"] = (float(local[0]), float(local[2]))
             rig = make_wing_rig(style, **kw)
+            # where the back is, in the wing's own frame: a stowed wing lies against it
+            Rm = M[:3, :3] / float(self.scale)
+            axes = Rm.T @ np.array([[0.0, 0.0, -1.0], [0.0, -1.0, 0.0],
+                                    [-1.0 if idx == 1 else 1.0, 0.0, 0.0]]).T
+            rig.skeleton.stow_against(axes[:, 0], axes[:, 1], axes[:, 2])
             side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
             out.append((f"wing{side}", rig.placed(M)))
         return out
