@@ -804,9 +804,11 @@ def test_tails_and_horns_follow_the_body(world):
 def test_a_harvested_limb_is_placed_on_its_quad_and_sunk_along_its_axis(world, limb):
     base, _, v0 = world
     chain = K.LIMB_CHAINS[limb]
-    # the harvested pose (controls={}: no preset pose) and the limb as cut (neck 1: untapered)
+    # the harvested pose (controls={}: no preset pose) and the limb as cut (neck 1: untapered). The
+    # first version's placement is what the legacy presets keep (the girdle presets place the limb
+    # on a second girdle instead, tests/test_limb_girdle.py): ``shoulder_socket`` / ``hip_socket``
     spec = K.new_spec("harvest", params={"limb": limb, "neck": 1.0}, side="left", base=base,
-                      controls={})
+                      controls={}, preset={"arm": "shoulder_socket", "leg": "hip_socket"}[limb])
 
     def build(v, offset):
         spec.placement["offset"] = offset
@@ -849,10 +851,10 @@ def test_a_harvested_limb_scales_about_its_shoulder_and_has_no_roll_or_up_hint(w
     roll and up_hint have no meaning for a limb (the twist control is its roll, the pose is
     its direction) and stay dead, and are not offered."""
     base, _, v0 = world
-    plain = K.new_spec("harvest", side="left", controls={})
-    odd = K.new_spec("harvest", side="left", controls={})
+    plain = K.new_spec("harvest", side="left", controls={}, preset="shoulder_socket")   # the first version's placement
+    odd = K.new_spec("harvest", side="left", controls={}, preset="shoulder_socket")
     odd.placement.update(roll=77.0, up_hint=[0.3, 0.3, 0.9])
-    big = K.new_spec("harvest", side="left", controls={})
+    big = K.new_spec("harvest", side="left", controls={}, preset="shoulder_socket")
     big.placement["scale"] = 1.5
     a, o, b = (K.instantiate_all([sp], base, v0)[0] for sp in (plain, odd, big))
     assert np.array_equal(a.mesh().vertices, o.mesh().vertices)         # dead fields stay dead

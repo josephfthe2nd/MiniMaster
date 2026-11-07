@@ -130,9 +130,13 @@ class LimbGeometry:
     hinge: np.ndarray            # unit axis the forearm flexes about (positive = more bent)
     rest_flex: float             # degrees the forearm is already bent at the harvested pose
     rest_abduction: float        # degrees the upper bone is out from straight down
+    limits: tuple = ()           # ((key, value), ...) overrides of ``_LIMITS`` for this limb: a
+                                 # second girdle is held to the range it can move in without
+                                 # tenting the trunk or hitting the original limb
 
     @classmethod
-    def from_joints(cls, shoulder, elbow, hand, limb: str = "arm", mirrored: bool = False):
+    def from_joints(cls, shoulder, elbow, hand, limb: str = "arm", mirrored: bool = False,
+                    limits: dict | None = None):
         s, e, h = (np.asarray(p, dtype=np.float64) for p in (shoulder, elbow, hand))
         if mirrored:
             s, e, h = (MIRROR @ p for p in (s, e, h))
@@ -146,7 +150,15 @@ class LimbGeometry:
         rest_flex = math.degrees(math.atan2(float(hinge @ np.cross(upper, in_plane)),
                                             float(upper @ in_plane)))
         rest_abduction = math.degrees(math.atan2(float(upper[0]), float(-upper[1])))
-        return cls(limb, upper, hinge, rest_flex, rest_abduction)
+        return cls(limb, upper, hinge, rest_flex, rest_abduction,
+                   tuple(sorted((limits or {}).items())))
+
+    @property
+    def lim(self) -> dict:
+        """The anatomical limits: the defaults of the limb with this geometry's overrides."""
+        out = dict(_LIMITS[self.limb])
+        out.update(dict(self.limits))
+        return out
 
     # -- ranges -----------------------------------------------------------------------
 
@@ -156,7 +168,7 @@ class LimbGeometry:
         name = ALIASES.get(name, name)
         if name not in CONTROLS:
             return None
-        lim = _LIMITS[self.limb]
+        lim = self.lim
         state = state or {}
         if name == "raise_":
             return (-(self.rest_abduction + lim["adduct"]), lim["abduct"] - self.rest_abduction)
@@ -223,14 +235,19 @@ class LimbRig:
     """
 
     def __init__(self, mesh: Mesh, shoulder, elbow, hand, *, limb: str = "arm",
-                 mirrored: bool = False, root_loop=None, root_pole=None):
+                 mirrored: bool = False, root_loop=None, root_pole=None,
+                 limits: dict | None = None, pin_fraction: float = PIN_FRACTION,
+                 blend_fraction: float = BLEND_FRACTION, girdle=None):
         self.mesh = mesh
+        self.pin_fraction = float(pin_fraction)
+        self.blend_fraction = float(blend_fraction)
+        self.girdle = girdle                       # a limbgirdle.Girdle (left frame) or None
         self.limb = limb
         self.mirrored = bool(mirrored)
         self.joints_rest = {"shoulder": np.asarray(shoulder, dtype=np.float64),
                             "elbow": np.asarray(elbow, dtype=np.float64),
                             "hand": np.asarray(hand, dtype=np.float64)}
-        self.geometry = LimbGeometry.from_joints(shoulder, elbow, hand, limb, mirrored)
+        self.geometry = LimbGeometry.from_joints(shoulder, elbow, hand, limb, mirrored, limits)
         self.root_vertices = np.unique(np.concatenate([
             np.asarray(root_loop if root_loop is not None else [], dtype=np.int64),
             np.asarray([] if root_pole is None else [root_pole], dtype=np.int64)]))
@@ -269,8 +286,8 @@ class LimbRig:
             s_rim = float(s[self.root_vertices].max())
         else:
             s_rim = float(s.min())
-        start = s_rim + PIN_FRACTION * upper_len
-        pin = 1.0 - _smoothstep((s - start) / (BLEND_FRACTION * upper_len))   # 1 at the rim
+        start = s_rim + self.pin_fraction * upper_len
+        pin = 1.0 - _smoothstep((s - start) / (self.blend_fraction * upper_len))   # 1 at the rim
         full = np.hstack([w * (1.0 - pin)[:, None], pin[:, None]])
         return names + ["shoulder"], full                       # key "shoulder": root -> shoulder
 

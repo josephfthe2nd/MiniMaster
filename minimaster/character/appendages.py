@@ -845,6 +845,15 @@ class Appendage:
     # ``center`` / ``left`` / ``right`` / ``both``. ``right`` is the exact mirror of the
     # left-hand definition, so a lone right wing equals the right wing of a pair.
     side: str | None = None
+    # ---- a harvested limb on a second girdle (limbgirdle.py): the name of the site (``lower_arms``,
+    # ``upper_arms``, ``extra_legs``) or ``None`` for the first version's limb sunk along its own
+    # axis. ``girdle_out`` moves the pivot further out of the skin (in limb radii), ``girdle_free``
+    # says the anchor quad is the user's own (not the site's landmark rule), ``girdle_dome`` is the
+    # radius of the shoulder dome in limb radii.
+    girdle: str | None = None
+    girdle_out: float = 0.0
+    girdle_free: bool = False
+    girdle_dome: float | None = None
 
     # pose controls that may ride along in ``params`` for a wing; everything
     # else in ``params`` shapes the wing itself
@@ -1108,6 +1117,9 @@ class Appendage:
         """
         if self.kind != "harvest" or self.anchor_face is None:
             raise ValueError("place_limbs needs a harvest bound to a body quad (anchor_face)")
+        if self.girdle:
+            from . import limbgirdle
+            return limbgirdle.place_limbs(self, base, verts)
         from .limbrig import LimbRig
         v = base.verts if verts is None else verts
         body_v, body_q = base.body_cage(v)

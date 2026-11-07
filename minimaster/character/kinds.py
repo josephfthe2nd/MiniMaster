@@ -164,9 +164,9 @@ PRESET_POINTS = {
     "temples": (0.85, 8.55, 0.05),           # up and out on the skull
     "shoulder_socket": (2.0, 4.2, 0.15),     # the side of the chest, under the shoulder
     "hip_socket": (1.5, 0.4, 0.15),          # the outer hip
-    "lower_arms": (1.239, 2.97, 0.884),      # the front of the flank at the waist, below the arm
-    "upper_arms": (1.441, 4.364, 0.906),     # the upper chest, in front of the shoulder
-    "extra_legs": (1.268, 3.063, 0.216),     # the flank at the waist (legs are too wide for the hip)
+    "lower_arms": (1.305, 3.09, 0.443),      # the lateral flank over the lower ribs, 0.85 upper-arm lengths below the shoulder
+    "upper_arms": (1.499, 5.356, -0.485),    # the back of the shoulder over the scapular spine (a fan pair shares the primary shoulder)
+    "extra_legs": (1.138, 1.95, -0.132),     # the posterolateral pelvis at the iliac crest (a second hip girdle)
 }
 PRESET_FACES = {
     "shoulder_blades": 10296,
@@ -175,10 +175,14 @@ PRESET_FACES = {
     "temples": 12116,
     "shoulder_socket": 7954,
     "hip_socket": 10647,
-    "lower_arms": 10411,
-    "upper_arms": 7974,
-    "extra_legs": 10349,
+    "lower_arms": 10351,
+    "upper_arms": 10747,
+    "extra_legs": 10524,
 }
+# the quads and the sinks the first versions of the extra-limb presets stored (a quad on the front of
+# the flank, the limb sunk 1.8-2.6 units along its own axis): a record that still has them is read
+# as the girdle placement (limbgirdle.py), the document is not rewritten
+LEGACY_HARVEST = {"lower_arms": (10411, -2.0), "upper_arms": (7974, -1.8), "extra_legs": (10349, -2.6)}
 # WING_ROOT minus the centroid of the "waist" quad on the neutral body: the end of a
 # membrane wing's attachment line is "the waist quad plus a little way into the back"
 WING_ROOT_OFFSET = (0.04479999999999995, -0.076125, 0.12734999999999996)
@@ -211,6 +215,7 @@ WING_FILLET, WING_FILLET_HEIGHT = 2.0, 0.3        # in elbow radii of the arm (t
 # pillow 1.7 units wide on any body: the folded wing's 'lobes' and a child's boxy shoulders
 WING_MOUND_RADIUS, WING_MOUND_HEIGHT = 0.5, 0.055
 HARVEST_FILLET, HARVEST_FILLET_HEIGHT = 1.0, 0.7
+GIRDLE_FILLET_HEIGHT = 0.30       # a girdle limb: the dome is a visible form, the skin climbs it only a third of the fillet width
 # the radius of the neutral body's own limb along its bones, as a fraction of the upper bone:
 # (positions along the upper bone, radii there, positions along the forearm from the elbow,
 # radii there), measured on the base mesh (the median distance of the surface to the bone).
@@ -1434,29 +1439,33 @@ class HarvestKind(_NumericControls, Kind):
         ParamSpec("limb", "Limb", "choice", "arm", choices=("arm", "leg"), essential=True,
                   help="copy the character's arm or leg"),
         ParamSpec("radius", "Reach around the bones", "float", 1.15, 0.9, 2.5, 0.05,
-                  when=("limb", ("arm",))),
+                  when=("limb", ("arm",)),
+                  help="the first version's cut (the legacy presets); a girdle preset cuts across the bone"),
         ParamSpec("radius", "Reach around the bones", "float", 1.5, 0.9, 2.5, 0.05,
-                  when=("limb", ("leg",))),
-        ParamSpec("trim", "Trim at the root", "float", HARVEST_TRIM, 0.0, 2.0, 0.05),
+                  when=("limb", ("leg",)),
+                  help="the first version's cut (the legacy presets); a girdle preset cuts across the bone"),
+        ParamSpec("trim", "Trim at the root", "float", HARVEST_TRIM, 0.0, 2.0, 0.05,
+                  help="the first version's cut (the legacy presets); a girdle preset cuts across the bone"),
         ParamSpec("neck", "Root thickness", "float", HARVEST_NECK, 0.2, 1.0, 0.05,
                   help="how much of its width the cut end keeps (1 = the limb as cut): "
-                       "a narrow root fits inside the torso"),
+                       "a narrow root fits inside the torso (the legacy presets: a girdle preset ends "
+                       "in the shoulder dome instead)"),
         fillet_param(HARVEST_FILLET),
     )
     fillet_default = HARVEST_FILLET
     presets = {
-        "lower_arms": {"label": "Lower arms (a second pair below the original)",
-                       "face": "lower_arms", "offset": -2.0, "side": "both",
+        "lower_arms": {"label": "Lower arms (a second shoulder girdle on the lower ribs)",
+                       "face": "lower_arms", "offset": 0.0, "girdle_scale": 0.9, "side": "both",
                        "params": {"limb": "arm"},
-                       "controls": {"raise_": 10.0, "swing": 10.0, "elbow": 10.0}},
-        "upper_arms": {"label": "Upper arms (a second pair raised above the original)",
-                       "face": "upper_arms", "offset": -1.8, "side": "both",
+                       "controls": {"raise_": -7.0, "swing": 8.0, "elbow": 20.0}},
+        "upper_arms": {"label": "Upper arms (a second pair fanned from the shoulder, raised and back)",
+                       "face": "upper_arms", "offset": 0.0, "girdle_scale": 0.85, "side": "both",
                        "params": {"limb": "arm"},
-                       "controls": {"raise_": 65.0, "swing": -5.0, "elbow": -15.0}},
-        "extra_legs": {"label": "Extra legs (a second pair splayed out from the waist)",
-                       "face": "extra_legs", "offset": -2.6, "side": "both",
+                       "controls": {"raise_": 68.0, "swing": -30.0, "elbow": -10.0}},
+        "extra_legs": {"label": "Extra legs (a second hip girdle on the iliac wing)",
+                       "face": "extra_legs", "offset": 0.0, "girdle_scale": 0.7, "side": "both",
                        "params": {"limb": "leg"},
-                       "controls": {"raise_": 45.0, "swing": -10.0, "knee": 20.0}},
+                       "controls": {"raise_": 49.0, "swing": 5.0, "knee": 25.0}},
         # the first version's presets: a straight copy at the original's own shoulder
         # (it overlaps the original arm); kept so older documents still build
         "shoulder_socket": {"label": "Shoulder socket (legacy: overlaps the original arm)",
@@ -1468,16 +1477,49 @@ class HarvestKind(_NumericControls, Kind):
     def default_preset(self, values):
         return "extra_legs" if values.get("limb") == "leg" else "lower_arms"
 
+    def resolve_placement(self, spec, values, ctx):
+        """The placement of an extra limb. A girdle preset (``lower_arms``, ``extra_legs``) is
+        found on the body by its landmark rule (limbgirdle.py): the quad the record stores is the
+        handle, and the quad and the sink the FIRST versions of the preset stored (a quad on the
+        front of the flank and a sink of 2 units along the limb's own axis) are read as that rule
+        without rewriting the document. A quad the person chose instead is built on (``free``); a
+        legacy preset (``shoulder_socket``, ``hip_socket``) builds the first version's limb."""
+        pl = super().resolve_placement(spec, values, ctx)
+        name = spec.placement.get("preset") if isinstance(spec.placement.get("preset"), str) else None
+        if name not in self.presets:                  # a record without a preset (or an unknown one) is read as the default
+            name = self.default_preset(values)
+        site = None
+        if name in LEGACY_HARVEST:
+            from . import limbgirdle as LG
+            if name in LG.SITES and LG.SITES[name].limb == values.get("limb"):
+                site = name
+        pl["girdle"], pl["free"] = site, False
+        if site:
+            legacy_face, legacy_offset = LEGACY_HARVEST[site]
+            if pl["face"] in (legacy_face, PRESET_FACES[site]):
+                pl["face"] = PRESET_FACES[site]
+            else:
+                pl["free"] = True
+            if abs(pl["offset"] - legacy_offset) < 1e-9:
+                pl["offset"] = 0.0
+            pl["offset"] = min(max(pl["offset"], -0.6), 0.6)      # R beyond the site's own distance out of the skin
+            if not isinstance(spec.placement.get("scale"), (int, float)):   # the site's second limb is smaller
+                pl["scale"] = float(self.presets[site]["girdle_scale"])
+        return pl
+
     def junction(self, placed, controls=None):
-        """The limb (from the pivot inside the torso, through the elbow, a little into the
-        forearm, in the pose it is in) as the tube the flank's skin flows into. The radii
-        are the character's own limb's, as fractions of its upper bone (measured on the
-        neutral body: ``LIMB_RADII``), narrowed like the cut end is (``neck``): never fatter
-        than the mesh, so the skin that "is inside the tube" really is hidden by it."""
+        """The skin around the root. A girdle limb: the muscle masses of its girdle (the skirt, the
+        pectoral fold, the scapular and latissimus mass) and the limb (dome and arm, in the pose
+        it is in) as the tube the skin flows into, with the original limb protected
+        (:meth:`limbgirdle.LimbModel.junction`). A first-version limb: the limb (from the pivot
+        inside the torso, through the elbow, a little into the forearm) as the tube, with the
+        radii of the character's own limb (``LIMB_RADII``) narrowed like the cut end is."""
         fillet = float(placed.params.get("fillet", self.fillet_default))
         if fillet <= 0.0:
             return None
         ctl = dict(placed.controls if controls is None else controls)
+        if placed.model is not None:
+            return placed.model.junction(ctl, fillet, GIRDLE_FILLET_HEIGHT)
         j = placed.limb.joints(ctl)
         sh, el, ha = (np.asarray(j[k]) for k in ("shoulder", "elbow", "hand"))
         upper = float(np.linalg.norm(el - sh))
@@ -1496,6 +1538,13 @@ class HarvestKind(_NumericControls, Kind):
         return J.JunctionSpec(placed.name, pts, radii, width=fillet, base_radius=base_r,
                               height=HARVEST_FILLET_HEIGHT, owner="trunk")
 
+    def layers(self, placed, controls=None):
+        """bone, muscle and skin of a girdle limb (:meth:`limbgirdle.LimbModel.layers`); the
+        first version's limb has the skin only."""
+        if placed.model is None:
+            return Kind.layers(self, placed, controls)
+        return placed.model.layers(placed.mesh(controls), placed.controls if controls is None else controls)
+
     def material(self, params):
         return material_named("skin")
 
@@ -1513,7 +1562,8 @@ class HarvestKind(_NumericControls, Kind):
             raise SpecError(f"scale = {pl['scale']:g} must be positive")
         chain = LIMB_CHAINS[values["limb"]]
         params = {k: build_values[k] for k in ("radius", "trim", "neck")}
-        app = self._engine(side, pl, chain=chain, params=params)
+        extra = dict(girdle=pl["girdle"], girdle_out=pl["offset"], girdle_free=pl["free"]) if pl["girdle"] else {}
+        app = self._engine(side, pl, chain=chain, params=params, **extra)
         names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
         out = []
         try:
@@ -1539,10 +1589,14 @@ class HarvestKind(_NumericControls, Kind):
                                      f"{min(max(canon[key], lo), hi):.0f}")
             for note in notes:
                 ctx.warn(note)
+            model = None
+            if rig.girdle is not None:
+                from . import limbgirdle as LG
+                model = LG.LimbModel(rig, rig.girdle)
             out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
                               anchor=self._surface(ctx, app, idx), matrix=None,
                               params=dict(values), controls=ctrl, limb=rig,
-                              static=rig.pose(ctrl)))
+                              static=rig.pose(ctrl), model=model))
         return out
 
     @staticmethod

@@ -320,9 +320,13 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   The membrane wing's attachment line aims at a waist quad, so it runs to the waist on
   every body. Tails and horns are sunk into the body by default (tail ~20%, horn ~51% of
   their volume embedded, instead of a hairline weld).
-* **Extra arms and legs are the character's own limb, rotated and welded.** `--add harvest`
-  copies the arm (or `limb=leg`), binds it to a body quad and sinks its narrowed cut end
-  into the torso, so it prints attached and sits clear of the original (presets
+* **Extra arms and legs are the character's own limb, on a second girdle.** `--add harvest`
+  copies the arm (or `limb=leg`) and hangs it from a girdle found on the body from its own landmarks
+  (a second shoulder on the lower ribs, a fan pair on the first shoulder, a second hip on the iliac
+  wing): the limb is cut across its bone and closed with a shoulder dome, the trunk's skin gathers
+  over the girdle's muscle masses and flows into it, and `Placed.layers()` gives its bone, muscle and
+  skin (`tools/limb_view.py --layers bone,muscle,skin`; docs/anatomy_limb.md). It prints attached and
+  sits clear of the original (presets
   `lower_arms`, `upper_arms`, `extra_legs`; ids `arm-1`, `leg-1`). It is rigged: `swing`,
   `raise_`, `twist` and `elbow` (`knee`) pose it about the shoulder with anatomical ranges
   (`placed.control_range("swing")`), the weld never moves, both bones keep their length, and the

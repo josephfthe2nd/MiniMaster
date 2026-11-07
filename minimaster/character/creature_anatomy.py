@@ -158,16 +158,21 @@ CONSEQUENCES: dict[str, AnatomyEffect] = {
                "loads the neck (girth grows with the horn's mass and lever arm) and "
                "raises the frontal bone it grows from",
     ),
-    "harvest": AnatomyEffect(   # an extra limb pair
+    "harvest": AnatomyEffect(   # an extra ARM pair: a second shoulder girdle on the lower ribs
         sliders={
-            "measure.measure_shoulder_dist": 0.60,
-            "torso.torso_muscle_dorsi": 0.55,
-            "torso.torso_muscle_pectoral": 0.40,
-            "measure.measure_bust_circ": 0.45,
-            "neck.neck_scale_horiz": 0.25,
+            # the sliders that reach the flank where the second girdle sits (measured on the base
+            # mesh, docs/anatomy_limb.md): the lateral ribs widen, the back deepens, the latissimus
+            # and the serratus thicken; the primary girdle only gets a little (it is unchanged)
+            "torso.torso_scale_horiz": 0.45,
+            "measure.measure_bust_circ": 0.30,
+            "torso.torso_muscle_dorsi": 0.40,
+            "measure.measure_waist_circ": 0.20,
+            "torso.torso_scale_depth": 0.15,
+            "measure.measure_shoulder_dist": 0.25,
+            "torso.torso_muscle_pectoral": 0.20,
         },
-        reason="a second limb pair needs a second girdle to hang from: "
-               "broader shoulders, thicker traps and lats",
+        reason="a second limb pair needs a second girdle to hang from: the lower ribs widen and "
+               "deepen and the latissimus and serratus thicken under the second shoulders",
     ),
 }
 
@@ -179,6 +184,30 @@ CONSEQUENCES: dict[str, AnatomyEffect] = {
 # looking exactly like a 9 m one.
 PAIRED_KINDS = frozenset({"wing", "horn", "harvest"})
 PAIR_FACTOR = 1.45      # a pair costs more than one, but not double
+
+
+# an extra LEG pair hangs from a second HIP girdle on the iliac wing, not a second shoulder girdle:
+# the effect of a ``harvest`` record with ``limb = leg`` (``CONSEQUENCES["harvest"]`` is the arm pair's)
+LEG_EFFECT = AnatomyEffect(
+    sliders={
+        "hip.hip_scale_horiz": 0.35,
+        "measure.measure_hips_circ": 0.25,
+        "buttocks.buttocks_volume": 0.40,
+    },
+    reason="a second leg pair needs a second hip girdle: the iliac wings broaden and the gluteal "
+           "mass thickens under the second hip joints",
+)
+
+
+def effect_key(app) -> str:
+    """Which table an appendage's consequences come from: its kind, or ``"harvest:leg"`` for an extra
+    LEG (a harvested limb with ``limb = leg``: its girdle is the pelvis, not the shoulder)."""
+    kind = app.kind
+    limb = (getattr(app, "params", None) or {}).get("limb")
+    chain = getattr(app, "chain", None) or ()
+    if kind == "harvest" and (limb == "leg" or (limb is None and chain and "leg" in str(chain[0]))):
+        return "harvest:leg"
+    return kind
 
 
 def _registered_kind(app):
@@ -249,7 +278,8 @@ def consequences(appendages, cap: float = 1.0):
     for app in appendages:
         if getattr(app, "enabled", True) is False:       # a switched-off record costs nothing
             continue
-        eff = CONSEQUENCES.get(app.kind)
+        key = effect_key(app)
+        eff = LEG_EFFECT if key == "harvest:leg" else CONSEQUENCES.get(key)
         if eff is None:
             continue
         load = appendage_load(app)

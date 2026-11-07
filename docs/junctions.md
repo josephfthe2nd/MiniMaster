@@ -143,7 +143,7 @@ The profile (2) is what makes the fillet; the remap (1) is what makes the cage r
 | tail | superseded by the tail's own anatomy spec (`tailrig.junction_spec`, [anatomy_tail.md](anatomy_tail.md)): the flared skin tube from the stem to 2 R beyond the skin point, a sacral rise, two cheek mounds, a keep along the cleft | 1.5 | 1.0 | ridge up the back + cheeks, cleft kept |
 | horn | the sheath's first part (hornrig: the radius law with the ellipse's minor axis, to the foot's top) | 1.0 | 0.6 | the tent: radius 2.2 R, height max(0.35 R, 0.10), along the horn's axis; Keep on the ear and the eye ([anatomy_horn.md](anatomy_horn.md)) |
 | wing | shoulder -> elbow of the posed arm, radius = the arm bone's | 3.0 | 0.4 | scapular mass at the anchor: **radius 0.5, height 0.055 of the body's trunk radius** (`Mound(scale="trunk")`: 0.78 x 0.086 units on the neutral body, 0.47 x 0.05 on the child; S1: 1.74 x 0.22 units on everyone) |
-| extra limb | pivot -> elbow -> into the forearm, posed; radii = the neutral body's own limb profile (`kinds.LIMB_RADII`, fractions of the upper bone) narrowed like the cut end (`neck`), then **capped by the radius of the placed limb's own mesh** (`fit_radii_to_mesh`) | 1.0 | 0.7 | none |
+| extra limb (legacy presets; the girdle presets have their own anatomy: [anatomy_limb.md](anatomy_limb.md)) | pivot -> elbow -> into the forearm, posed; radii = the neutral body's own limb profile (`kinds.LIMB_RADII`, fractions of the upper bone) narrowed like the cut end (`neck`) | 1.0 | 0.7 | none |
 
 Owners (S1b): tail, wing and extra limbs `trunk`, horn `head` (`Kind.junction_owner`, `JunctionSpec.owner`).
 

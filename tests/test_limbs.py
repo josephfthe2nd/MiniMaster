@@ -491,23 +491,33 @@ def test_a_harvest_scale_that_is_not_positive_is_skipped_not_inverted(world, bad
 @assets
 @pytest.mark.parametrize("preset", ["lower_arms", "upper_arms", "extra_legs"])
 def test_every_preset_buries_its_cut_end_in_the_torso_on_every_body(world, bodies, preset):
-    """The cut end of the copy (its rim, a ragged ring) lies INSIDE the body, so what a
-    slicer unions is a limb growing out of the torso and not a flat cut stuck on its side;
-    and the share of the limb inside the body passes the printability rule (>= 8%: no
-    root-weld finding) on the neutral, tall, short, child and heavy bodies."""
+    """What a slicer unions is a limb growing out of the torso and not a flat cut stuck on its
+    side: the first version's copy (``upper_arms``, still the first version's placement) buries
+    its cut ring in the torso; a girdle limb (``lower_arms``, ``extra_legs``) has no cut end at
+    all (its root is closed by the dome, tests/test_limb_girdle.py) and is buried through the
+    dome and the deep mass, so there the dome's pole (the end of the root) is in the torso. Both
+    pass the printability rule (>= 8%: no root-weld finding) on the neutral, tall, short, child
+    and heavy bodies."""
     base, _, _ = world
     limb = LIMB_OF[preset]
     for name, v in bodies.items():
         solid = _body_solid(base, v)
         for p in _harvest(base, v, preset)[:2]:
             m = p.mesh()
-            rim = m.vertices[p.limb.root_vertices]
-            assert solid.contains(rim).mean() >= 0.95, (preset, name, p.name)
+            if p.model is None:
+                rim = m.vertices[p.limb.root_vertices]
+                assert solid.contains(rim).mean() >= 0.95, (preset, name, p.name)
+            else:
+                pole = m.vertices[[p.limb.girdle.info["pole"]]]
+                assert solid.contains(pole).all(), (preset, name, p.name)
             embedded = pr.embedded_volume_share(m, solid, 8192)
             assert 0.12 <= embedded <= 0.45, (preset, name, p.name, embedded)
             # the weld is into the TORSO: the copy does not count the original limb it sits next to
             overlap = pr.embedded_volume_share(m, _original_limb(base, v, limb), 8192)
-            assert overlap <= (0.22 if preset == "upper_arms" else 0.03), (preset, name, overlap)
+            # (a second hip girdle sits on the pelvis a radius and a half above the first hip, inside the
+            # region the first leg is cut from: 7% on the neutral body, 13% on a child, and the fan pair shares the shoulder)
+            limit = {"upper_arms": 0.22, "extra_legs": 0.15}.get(preset, 0.03)
+            assert overlap <= limit, (preset, name, overlap)
 
 
 @assets
@@ -515,7 +525,7 @@ def test_the_old_placement_was_welded_to_the_original_limb_not_to_the_torso(worl
     """What this replaces: the first version moved the copy only ~1 unit, so it lay beside the
     original arm; the 8-13% it 'embedded' was mostly that arm (the weld to the TORSO was
     ~1.5%), and its cut end hung outside the body. The lower arms touch the original arm
-    nowhere and are 20% buried in the torso with the cut end inside."""
+    nowhere and are 20% buried in the torso, closed by a dome whose pole is inside."""
     base, _, v0 = world
     spec = K.new_spec("harvest", preset="shoulder_socket", side="left", base=base, controls={},
                       params={"neck": 1.0})
@@ -530,7 +540,7 @@ def test_the_old_placement_was_welded_to_the_original_limb_not_to_the_torso(worl
     body_new = pr.embedded_volume_share(new.mesh(), solid, 16384)
     arm_new = pr.embedded_volume_share(new.mesh(), arm, 16384)
     assert arm_new < 0.01 and body_new - arm_new > 0.15                        # welded to the torso
-    assert solid.contains(new.mesh().vertices[new.limb.root_vertices]).mean() == 1.0
+    assert solid.contains(new.mesh().vertices[[new.limb.girdle.info["pole"]]]).all()       # the dome closes inside the trunk
 
 
 @assets
