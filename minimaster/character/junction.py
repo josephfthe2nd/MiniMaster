@@ -250,6 +250,12 @@ class JunctionSpec:
     skin of that part (and the fillet is capped by its size). ``None``: the part the tube comes
     out of the skin in, which is right unless the appendage is rooted where another part's skin
     is (an extra limb that starts at the original shoulder).
+
+    ``tight_gap`` / ``smooth`` override :func:`apply_junctions`' own for this spec alone
+    (``None``: the call's; ``tight_gap=0``: this spec does not leave skin that nearly touches
+    skin where it is, because the spec holds the cleft itself with a ``keep``; ``smooth=0``: the
+    tube displacement is not diffused over the cage). The spec that knows its own anatomy may
+    use them, the generic ones do not.
     """
 
     name: str
@@ -266,6 +272,8 @@ class JunctionSpec:
     max_move: float | None = None
     lead: float = DEFAULT_LEAD
     owner: str | None = None
+    tight_gap: float | None = None
+    smooth: int | None = None
 
     def __post_init__(self):
         pts = tuple(_vec(p) for p in self.points)
@@ -289,6 +297,14 @@ class JunctionSpec:
             object.__setattr__(self, name, float(v))
         if self.owner is not None and not (isinstance(self.owner, str) and self.owner):
             raise ValueError(f"owner must be a part name or None, got {self.owner!r}")
+        if self.tight_gap is not None and not (
+                isinstance(self.tight_gap, numbers.Real) and not isinstance(self.tight_gap, bool)
+                and math.isfinite(self.tight_gap) and self.tight_gap >= 0):
+            raise ValueError(f"tight_gap must be None or a finite number >= 0, got {self.tight_gap!r}")
+        if self.smooth is not None and not (
+                isinstance(self.smooth, numbers.Integral) and not isinstance(self.smooth, bool)
+                and self.smooth >= 0):
+            raise ValueError(f"smooth must be None or an integer >= 0, got {self.smooth!r}")
         if self.sharpness < 1.0:
             raise ValueError("sharpness must be >= 1")
         if self.pull > 1.0:
@@ -975,25 +991,29 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
     total = np.zeros_like(cage_v)
     limit = 0.0
     cols = np.ascontiguousarray(cage_v.T)
-    tight_w = None
-    if tight_gap and tight_gap > 0:
+    gaps = [tight_gap if s.tight_gap is None else s.tight_gap for s in specs]
+    tight_ws = {}
+    for gap in sorted({g for g in gaps if g and g > 0}):
         # where two sheets of skin touch (the closed cleft: 0.02 apart) the subdivided surface
         # crosses itself at the slightest move of the cage around it, though the cage does not:
         # the skin within two rings of such a place is left where it is (and fades back in)
         region = np.zeros(len(cage_v), dtype=bool)
-        for spec in specs:
-            region[_candidates(spec, cols)] = True
+        for spec, g in zip(specs, gaps):
+            if g == gap:
+                region[_candidates(spec, cols)] = True
         rows = np.nonzero(region)[0]
-        tv, tu, _td = facing_pairs(cage_v, cage_q, normals, rows, tight_gap)
+        tv, tu, _td = facing_pairs(cage_v, cage_q, normals, rows, gap)
         if len(tv):
             tight = np.zeros(len(cage_v), dtype=bool)
             tight[tv] = True
             tight[tu] = True
-            tight_w = _smoothstep((JC.ring_distance(cage_q, tight, 4) - 2.0) / 2.0)
-    for spec in specs:
+            tight_ws[gap] = _smoothstep((JC.ring_distance(cage_q, tight, 4) - 2.0) / 2.0)
+    for spec, gap in zip(specs, gaps):
         idx, d = junction_displacement(spec, cage_v, normals, _candidates(spec, cols), frame,
-                                       quads=cage_q, smooth=smooth)
+                                       quads=cage_q,
+                                       smooth=smooth if spec.smooth is None else spec.smooth)
         if len(idx):
+            tight_w = tight_ws.get(gap) if gap else None
             total[idx] += d if tight_w is None else d * tight_w[idx][:, None]
             limit = max(limit, spec.move_limit())
     mag = np.linalg.norm(total, axis=1)
