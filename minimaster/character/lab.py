@@ -370,6 +370,7 @@ class Scene:
     lo: np.ndarray
     hi: np.ndarray
     notes: list = field(default_factory=list)
+    body: "BodyState | None" = None    # the body the first shell was drawn from (skin moulded)
 
 
 @dataclass
@@ -665,8 +666,10 @@ class LabDocument:
         return self._edit(Change("body", None, "reset"), apply)
 
     def set_anatomy(self, enabled: bool | None = None, cap: float | None = None,
-                    clamp: bool = False) -> None:
-        """The body-adaptation switch and its cap (the layer itself is derived, never saved)."""
+                    clamp: bool = False, junction: bool | None = None) -> None:
+        """The body-adaptation switch and its cap (the layer itself is derived, never saved),
+        and ``junction``: does the skin mould around the appendages' roots (``junction.py``;
+        saved only when switched off)."""
         if cap is not None:
             cap = _number("anatomy cap", cap, 0.0, 2.0, clamp)
 
@@ -675,6 +678,11 @@ class LabDocument:
                 self.character.anatomy["enabled"] = bool(enabled)
             if cap is not None:
                 self.character.anatomy["cap"] = cap
+            if junction is not None:
+                if junction:
+                    self.character.anatomy.pop("junction", None)
+                else:
+                    self.character.anatomy["junction"] = False
 
         self._edit(Change("body", None, "anatomy"), apply, ("anatomy",))
 
@@ -1110,6 +1118,7 @@ class Engine:
         # (spec key, body key, mode) -> Built; an angel's full pair is ~25 MB, so bound the bytes
         self._built = Cache(48, BUILT_CACHE_BYTES, lambda b: b.nbytes())
         self._shells = Cache(4)                 # body key -> full-detail body shells
+        self._shaped = Cache(6)                 # (body key, junction digest) -> BodyState (skin moulded)
         self._last_draft: dict = {}             # spec key -> (BodyState, Built): for the re-place
         self._lock = threading.Lock()
 
@@ -1141,6 +1150,44 @@ class Engine:
         body = self._bodies.get_or_build(key, morph)
         state = BodyState(body.key, body.verts, list(notes))
         return self._states.put(inputs, state)
+
+    def shaped_state(self, character: Character, body: BodyState, items) -> BodyState:
+        """The body as it is meshed, drawn and printed: ``body`` with the skin moulded around
+        the appendages' roots (``junction.py``). ``items`` are ``(spec, built, mirror, rest)``
+        for the appendages on this body (``mirror``: only the left side was built and the right
+        is its mirror image; ``rest``: take the junction of the rest pose, the draft of a pose
+        drag). The appendages were PLACED on ``body.verts`` and stay
+        there (the anchor must not chase its own displacement); this is a second body, cached
+        by content (the body and the junction specs), so a pose drag that does not move the
+        junction reuses it and an unchanged character costs nothing."""
+        from . import junction as J
+        if not character.junction_enabled:
+            return body
+        specs = []
+        for spec, built, mirror, rest in items:
+            for placed in built.placed[:1] if mirror else built.placed:
+                try:
+                    # ``rest``: a pose drag keeps the skin of the rest pose (it would be reshaped
+                    # on every frame otherwise); the final render, 150 ms later, follows the pose
+                    j = placed.junction({} if rest else self.side_controls(spec, placed))
+                except (ValueError, KeyError, IndexError, TypeError, np.linalg.LinAlgError):
+                    j = None             # the skin is left as it is: the picture still comes out
+                if j is None:
+                    continue
+                specs.append(j)
+                if mirror:                       # the right side is the left one's mirror image
+                    specs.append(j.mirrored())
+        if not specs:
+            return body
+        key = (body.key, J.specs_digest(specs))
+
+        def shape():
+            self.stats["junction"] += 1
+            return BodyState(f"{body.key}+{key[1]}", J.apply_junctions(self.resources.base,
+                                                                      body.verts, specs),
+                             body.notes)
+
+        return self._shaped.get_or_build(key, shape)
 
     # -- appendages --------------------------------------------------------------------------
 
@@ -1250,9 +1297,10 @@ class Engine:
         from .portrait import Shell
         body = self.body_state(character)
         proxy = self.resources.body_proxy
-        shells = [Shell(proxy.mesh(body.verts), sh.SKIN)]
+        shells = [None]                          # the body: drawn from the shaped skin, below
         owners = [(None, "")]
         notes: list = []
+        items: list = []
         flip = np.array([-1.0, 1.0, 1.0])
         for spec in self.buildable(character, notes):
             shift = None
@@ -1274,6 +1322,7 @@ class Engine:
             mirror = built.mirrored or (mode in ("pose", "shape") and spec.id == edited
                                         and self.half_ok(spec) and len(built.placed) == 2
                                         and built.placed[0].side == "l")
+            items.append((spec, built, mirror, mode == "pose" and spec.id == edited))
             for i, placed in enumerate(built.placed[:1] if mirror else built.placed):
                 mesh = built.posed(i, self.side_controls(spec, placed), self.stats)
                 verts = mesh.vertices if shift is None else mesh.vertices + shift[i]
@@ -1288,7 +1337,15 @@ class Engine:
                     shells.append(Shell(Mesh(mesh.vertices * flip, mesh.faces[:, ::-1]),
                                         placed.material))
                     owners.append((spec.id, "r"))
-        return _scene(shells, owners, notes)
+        # A body-slider or shape drag redraws the skin on every frame and the 4k-triangle proxy
+        # averages a fillet away anyway: the draft of those keeps the unshaped skin (the final
+        # render, 150 ms after the last change, has the fillet). A pose drag keeps the cached
+        # skin of the rest pose; everything else (orbit, add, remove) is cached or built once.
+        shaped = body if mode in ("body", "shape") else self.shaped_state(character, body, items)
+        shells[0] = Shell(proxy.mesh(shaped.verts), sh.SKIN)
+        scene = _scene(shells, owners, notes)
+        scene.body = shaped
+        return scene
 
     @staticmethod
     def side_letters(spec: AppendageSpec) -> list:
@@ -1355,13 +1412,18 @@ class Engine:
         from .portrait import Shell
         body = self.body_state(character)
         eye = str(character.materials.get("eye_color", "#5b7c8d"))
-        shells = list(self.body_shells(body, eye, levels))
-        owners = [(None, "")] * len(shells)
         notes: list = []
+        builts = []
         for spec in self.buildable(character, notes):
             if check:
                 check()
-            built = self.built(spec, body, False)
+            builts.append((spec, self.built(spec, body, False)))
+        # the skin moulded around the roots; the appendages were placed on ``body.verts``
+        shaped = self.shaped_state(
+            character, body, [(s_, b_, False, False) for s_, b_ in builts])
+        shells = list(self.body_shells(shaped, eye, levels))
+        owners = [(None, "")] * len(shells)
+        for spec, built in builts:
             notes += built.notes
             for i, placed in enumerate(built.placed):
                 if check:
@@ -1415,13 +1477,15 @@ class Engine:
         from . import portrait
         from .portrait import MH_TO_Z_UP
         res = self.resources
-        body = self.body_state(character)
+        # the id buffer is the skin the user SEES (moulded around the roots); the quad ids are
+        # the same on every body, and the appendages were placed on the unshaped one
+        scene = self.draft_scene(character)
+        body = scene.body if scene.body is not None else self.body_state(character)
         body_shell = self._shells.get_or_build(
             (body.key, "pick", 0),
             lambda: portrait.character_shells(res.base, body.verts, with_eyes=False)[0])
         shells, owners = [body_shell], [(None, "")]
         if not body_only:
-            scene = self.draft_scene(character)
             shells += scene.shells[1:]
             owners += scene.owners[1:]
         vb = portrait.visibility_buffer(shells, tuple(size), view.azimuth, view.elevation,
@@ -1459,11 +1523,14 @@ class Engine:
         res = self.resources
         body = self.body_state(character)
         verts = body.verts
-        shells = printprep.character_print_shells(res.base, verts, levels=levels)
+        builts = [(spec, self.built(spec, body, False)) for spec in self.buildable(character)]
+        # the STL is the skin moulded around the roots (the appendages were placed on ``verts``)
+        shaped = self.shaped_state(
+            character, body, [(s_, b_, False, False) for s_, b_ in builts])
+        shells = printprep.character_print_shells(res.base, shaped.verts, levels=levels)
         figure = list(shells)
         app_shells = []
-        for spec in self.buildable(character):
-            built = self.built(spec, body, False)
+        for spec, built in builts:
             for placed in built.placed:
                 if check:
                     check()
@@ -1491,7 +1558,7 @@ class Engine:
                                                  reference=printprep.FIGURE_SHELLS)
             prep = print_report.appendage_report(
                 app_shells, res.base, verts, mm_per_unit, levels=levels, figure_shells=figure,
-                assembly=rep, cache=self.report_cache)
+                assembly=rep, cache=self.report_cache, body_verts=shaped.verts)
             report_text = prep.as_text()
             blocked = bool(prep.blocking)
         result = ExportResult(Path(path) if path else None, False, blocked, report_text,

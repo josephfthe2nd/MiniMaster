@@ -335,6 +335,10 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   instead of a point 0.04-0.07 mm across, so the printability report no longer warns about it
   (`tip_radius=0` is the old point). See the T3 section of
   [docs/appendages_system_design.md](docs/appendages_system_design.md).
+* **The skin flows into the roots.** Where an appendage enters the body the skin is moulded around it
+  (a fillet that rises up the root, a scapular mass behind a wing's arm ...) instead of the shell simply
+  overlapping the skin: `junction.py`, on by default, off with `--no-junction`. See
+  [docs/junctions.md](docs/junctions.md). Tails and horns now have 16 facets (they had 10 and 8-12).
 * **Body adaptation is derived, never saved.** The adapted body (broader chest for
   wings, ...) is `your sliders + what the enabled appendages ask for`, recomputed every
   time (`Character.effective()`); the document stores only the switch and the cap

@@ -80,6 +80,17 @@ def _cc_once(verts: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarr
     return new_verts, np.concatenate(quads, axis=0).astype(np.int64)
 
 
+def cage_is_closed(faces) -> bool:
+    """Is every edge of the quad mesh shared by exactly two quads (a closed 2-manifold, which
+    :func:`subdivide_quads` requires)? Cheap: one sort of the 4F directed edges."""
+    f = np.asarray(faces, dtype=np.int64).reshape(-1, 4)
+    if not len(f):
+        return False
+    und = np.sort(np.stack([f.ravel(), np.roll(f, -1, axis=1).ravel()], axis=1), axis=1)
+    _, counts = np.unique(und, axis=0, return_counts=True)
+    return bool(np.all(counts == 2))
+
+
 def subdivide_quads(verts, faces, levels: int = 1) -> tuple[np.ndarray, np.ndarray]:
     """``levels`` rounds of Catmull-Clark on a closed quad cage."""
     verts = np.asarray(verts, dtype=np.float64).reshape(-1, 3)

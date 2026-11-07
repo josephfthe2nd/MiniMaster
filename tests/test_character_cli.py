@@ -199,7 +199,10 @@ def test_an_stl_with_appendages_is_scaled_by_the_body_and_carries_a_report(tmp_p
 @needs_assets
 def test_a_blocking_report_stops_the_export_unless_forced(tmp_path, capsys):
     stl = tmp_path / "hairline.stl"
-    argv = ["character", "--add", "tail:offset=0", "-o", str(stl), "--size", "medium"]
+    # ``--no-junction``: with it the skin rises around even a tail that only touches it and the
+    # weld is real (tests/test_junction.py), so the hairline needs the skin left as it is
+    argv = ["character", "--add", "tail:offset=0", "--no-junction", "-o", str(stl),
+            "--size", "medium"]
     assert main(argv) == 3
     err = capsys.readouterr().err
     assert "blocks this export" in err and "BLOCKED" in err and "tail-1" in err and not stl.exists()

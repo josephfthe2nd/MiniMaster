@@ -442,6 +442,20 @@ class Character:
         self.appendages = keep
         return removed
 
+    @property
+    def junction_enabled(self) -> bool:
+        """Does the body's skin mould around the appendages (``junction.py``)? On unless the
+        document says ``anatomy["junction"] = false`` (written only then)."""
+        return bool(self.anatomy.get("junction", True))
+
+    def shaped_body(self, base, verts, placed, info: dict | None = None):
+        """The body vertices the character is meshed, rendered and printed with: ``verts``
+        (the UNDEFORMED morphed vertices the appendages were placed on) with the skin moulded
+        around ``placed`` (``junction.shaped_body``); ``verts`` itself when the junction is off or
+        there is nothing to shape."""
+        from . import junction
+        return junction.shaped_body(base, verts, placed, enabled=self.junction_enabled, info=info)
+
     def instantiate_appendages(self, base, verts, lib=None):
         """The character's enabled appendages built on a morphed body: a list of
         :class:`~minimaster.character.kinds.Placed`, each with its name, its side and its

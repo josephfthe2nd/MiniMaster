@@ -544,8 +544,18 @@ def _round_tip(rings, pos, direction, basis, radius, minor, ring_verts) -> None:
                            radius * np.cos(phi), radius * minor * np.cos(phi), basis, ring_verts))
 
 
+def root_flare(t: float, flare: float, flare_length: float) -> float:
+    """The radius multiplier of a flared tube root at the fraction ``t`` of its length:
+    ``1 + flare`` at the base, falling to 1 at ``flare_length`` (a smooth ``(1 - t/L)^2``,
+    C1 where it ends), so the base is broad where it enters the skin."""
+    if not flare or t >= flare_length:
+        return 1.0
+    return 1.0 + float(flare) * (1.0 - t / flare_length) ** 2
+
+
 def make_tail(length=6.0, base_radius=0.45, segments=12, ring_verts=10,
-              curl=0.55, droop=0.9, *, tip_radius=None, lift=0.0, sway=0.0) -> Mesh:
+              curl=0.55, droop=0.9, *, tip_radius=None, lift=0.0, sway=0.0,
+              flare=0.0, flare_length=0.25) -> Mesh:
     """A tapered, curling tail. +Z is outward from the attachment point.
 
     ``curl`` bends the path about the local Y axis and ``droop`` about the local X axis,
@@ -562,6 +572,10 @@ def make_tail(length=6.0, base_radius=0.45, segments=12, ring_verts=10,
     ``lift`` (up) and ``sway`` (toward +X) are degrees of total bend, spread evenly along
     the length, in the vertical and the lateral plane: raise or swing the whole tail from
     its base. Zero (the default) is bit-for-bit the first version.
+
+    ``flare`` broadens the root: the radius is multiplied by ``1 + flare`` at the base,
+    easing back to 1 over the first ``flare_length`` of the length (see :func:`root_flare`);
+    0 (the default) leaves every vertex exactly where it was.
     """
     basis = np.eye(3)
     rings = []
@@ -576,6 +590,8 @@ def make_tail(length=6.0, base_radius=0.45, segments=12, ring_verts=10,
             r = base_radius * (1.0 - t) ** 0.85 + 0.02
         else:
             r = tip_radius + (base_radius - tip_radius) * (1.0 - t) ** 0.85
+        if flare:
+            r *= root_flare(t, flare, flare_length)
         # bend progressively: droop away from the body and curl sideways
         ang = np.array([droop * t * 0.9, curl * t * 0.7, 0.0]) * step
         if lift or sway:
@@ -595,7 +611,8 @@ def make_tail(length=6.0, base_radius=0.45, segments=12, ring_verts=10,
 
 
 def make_horn(length=2.2, base_radius=0.42, segments=8, ring_verts=8,
-              curve=1.1, twist=0.0, *, tip_radius=None, turns=0.0) -> Mesh:
+              curve=1.1, twist=0.0, *, tip_radius=None, turns=0.0,
+              flare=0.0, flare_length=0.25) -> Mesh:
     """A tapered horn. ``curve`` bends it progressively (a spiral when large) and ``twist``
     bends it the other way. ``turns`` (default 0: the bend grows toward the tip) makes it a
     helix instead: the bend is constant along the horn and its plane turns about the horn's
@@ -603,7 +620,9 @@ def make_horn(length=2.2, base_radius=0.42, segments=8, ring_verts=8,
     ``tip_radius`` is the radius at the end (``None``: the first version's point,
     ``base_radius * (1 - t) ** 1.25 + 0.012``; a number: ``tip_radius + (base_radius -
     tip_radius) * (1 - t) ** 1.25`` closed by a rounded cap, with the rings carried along the
-    path by parallel transport; ``None`` keeps the first version's ring frames)."""
+    path by parallel transport; ``None`` keeps the first version's ring frames).
+
+    ``flare`` broadens the root like a tail's (:func:`root_flare`); 0 changes nothing."""
     basis = np.eye(3)
     rings = []
     pos = np.zeros(3)
@@ -616,6 +635,8 @@ def make_horn(length=2.2, base_radius=0.42, segments=8, ring_verts=8,
             r = base_radius * (1.0 - t) ** 1.25 + 0.012
         else:
             r = tip_radius + (base_radius - tip_radius) * (1.0 - t) ** 1.25
+        if flare:
+            r *= root_flare(t, flare, flare_length)
         if turns:
             # a helix: the bend is the same all along, and its plane turns with the length
             phi = 2.0 * np.pi * turns * t

@@ -729,7 +729,8 @@ def test_the_tail_controls_re_evaluate_the_loft_where_the_tail_is_placed(world):
     assert tip(p.mesh({"droop": 0.5}))[1] < base_tip[1] - 0.3          # droop pulls the end down
     assert tip(p.mesh({"curl": 0.5}))[1] > base_tip[1] + 0.1           # curl rolls it up
     # the base stays where it is bound: only the end moves
-    base_ring = lambda m: m.vertices[:10].mean(axis=0)                  # noqa: E731
+    n_ring = p.params["ring_verts"]
+    base_ring = lambda m: m.vertices[:n_ring].mean(axis=0)              # noqa: E731
     assert np.allclose(base_ring(p.mesh({"lift": 60.0, "sway": -60.0})), base_ring(rest), atol=1e-9)
     # the controls come with the record
     spec.controls = {"lift": 30.0}

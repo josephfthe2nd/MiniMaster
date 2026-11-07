@@ -33,15 +33,17 @@ from __future__ import annotations
 
 import copy
 import difflib
+import json
 import math
 import warnings
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from ..core.mesh import Mesh
 from . import appendages as A
+from . import junction as J
 from .appendage_spec import SIDES, AppendageSpec, next_id, valid_id
 
 
@@ -188,6 +190,27 @@ TAIL_TIP = 0.09          # radius at the end of a tail (the first version's was 
 HORN_TIP = 0.08          # and of a horn (0.012)
 HARVEST_TRIM = 0.6       # shaves the root of the copy (units of the neutral limb)
 HARVEST_NECK = 0.5       # the cut end keeps this much of the limb's width (limbrig.taper_root)
+# the skin around a root (junction.py): how wide the fillet is, in root radii, and how much the
+# root flares, per kind. A generic default: the anatomy of each kind is a later track's.
+# Facets around a tube: 16 (it was 10 / 8-12). The skin meets a tube along a seam, and a seam
+# against a 10-gon is a zigzag between its facets that no displacement of the body can hide
+# (24 sides: a clean curve), so the junction wants round roots.
+TAIL_RING_VERTS = 16
+HORN_RING_VERTS = 16
+TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.0, 0.8
+HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
+WING_FILLET, WING_FILLET_HEIGHT = 3.0, 0.4        # the arm is a thin rod: a broad, low boss
+WING_MOUND_RADIUS, WING_MOUND_HEIGHT = 0.55, 0.07     # the scapular mass, in arm lengths
+HARVEST_FILLET, HARVEST_FILLET_HEIGHT = 1.0, 0.7
+# the radius of the neutral body's own limb along its bones, as a fraction of the upper bone:
+# (positions along the upper bone, radii there, positions along the forearm from the elbow,
+# radii there), measured on the base mesh (the median distance of the surface to the bone).
+LIMB_RADII = {
+    "arm": ((0.0, 0.25, 0.5, 0.75, 1.0), (0.242, 0.217, 0.190, 0.180, 0.182),
+            (0.25, 0.5), (0.162, 0.136)),
+    "leg": ((0.0, 0.25, 0.5, 0.75, 1.0), (0.284, 0.270, 0.213, 0.144, 0.130),
+            (0.25, 0.5), (0.133, 0.115)),
+}
 
 
 # --------------------------------------------------------------------------
@@ -273,6 +296,9 @@ class Placed:
     static: Mesh | None = None     # the mesh under the spec's own controls (loft kinds, limbs)
     limb: object = None            # a limbrig.LimbRig for a harvested arm or leg
     repose: object = None          # controls -> Mesh: a kind that re-evaluates its loft
+    root_depth: float = 0.0        # how far the root is sunk below the skin (units): the junction
+                                   # takes the centreline from there to a few fillet widths out
+    _junctions: dict = field(default_factory=dict, repr=False, compare=False)   # controls -> spec
 
     def mesh(self, controls: dict | None = None) -> Mesh:
         """The mesh under ``controls`` (default: the spec's own for this side)."""
@@ -287,6 +313,20 @@ class Placed:
         c = dict(self.controls if controls is None else controls)
         preset = c.pop("preset", None)
         return self.rig.pose(preset, **c) if (c or preset) else self.rig.mesh()
+
+    def junction(self, controls: dict | None = None):
+        """The :class:`~.junction.JunctionSpec` of this appendage's root (how the body's skin
+        should mould around it), under ``controls`` (default: the spec's own), or ``None`` for
+        an appendage without one (its kind has none, or the spec's ``fillet`` is 0). In the
+        MakeHuman frame; the spec comes from the placed geometry, never from the body, so it
+        is the same on every body the appendage is placed on."""
+        ctl = self.controls if controls is None else controls
+        key = json.dumps(ctl, sort_keys=True, default=str)
+        if key not in self._junctions:
+            if len(self._junctions) >= 24:               # a pose drag asks for a new one per frame
+                self._junctions.pop(next(iter(self._junctions)))
+            self._junctions[key] = self.kind.junction(self, ctl)
+        return self._junctions[key]
 
     @property
     def joint_prefix(self) -> str:
@@ -319,6 +359,22 @@ class Placed:
     @property
     def material(self):
         return self.kind.material(self.params)
+
+
+# --------------------------------------------------------------------------
+# the skin around a root: the parameter every kind with a junction carries
+
+
+def fillet_param(default: float = 1.0) -> "ParamSpec":
+    return ParamSpec("fillet", "Skin fillet", "float", default, 0.0, 4.0, 0.05,
+                     help="how far the skin flows into the root, in root radii "
+                          "(junction.py); 0 = the skin is left as it is")
+
+
+def flare_param(default: float = 0.0) -> "ParamSpec":
+    return ParamSpec("flare", "Root flare", "float", default, 0.0, 2.0, 0.05,
+                     help="broadens the first quarter of the length (1 = twice as wide at "
+                          "the base) so the root is broad where it enters the skin")
 
 
 # --------------------------------------------------------------------------
@@ -355,6 +411,8 @@ class Kind:
     placement_keys = ("anchor", "scale", "roll", "offset", "up_hint")   # what it honours
     anatomy_key = ""                   # creature_anatomy.CONSEQUENCES key (default: id)
     paired = False                     # is a symmetric pair its typical installation?
+    fillet_default = 1.0               # the ``fillet`` parameter's default (width, in root radii)
+    fillet_height = 0.6                # how high the skin climbs the root, over the fillet width
 
     # -- parameters ---------------------------------------------------------------------
 
@@ -425,6 +483,13 @@ class Kind:
         for key in controls:
             notes.append(f"{owner}unknown control {key!r} is kept in the file but ignored")
         return {}, notes
+
+    # -- the skin around the root (junction.py) ------------------------------------------------
+
+    def junction(self, placed, controls: dict | None = None):
+        """The junction spec of one placed appendage of this kind (``None``: none). A kind
+        with a root the skin should mould around overrides this."""
+        return None
 
     # -- anatomy ------------------------------------------------------------------------
 
@@ -633,8 +698,26 @@ class _LoftKind(_NumericControls, Kind):
             out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
                               anchor=self._surface(ctx, app, idx), matrix=frame,
                               params=dict(values), controls=ctrl, static=repose(ctrl),
-                              repose=repose))
+                              repose=repose, root_depth=abs(float(min(pl["offset"], 0.0)))))
         return out
+
+    def junction(self, placed, controls=None):
+        """The skin flows into the first part of the tube: its rings from the sunk base to a
+        few fillet widths beyond the skin, the radius of the inscribed circle (a facet's
+        middle), so the seam with the skin is clean."""
+        fillet = float(placed.params.get("fillet", self.fillet_default))
+        if fillet <= 0.0:
+            return None
+        mesh = placed.mesh(controls)
+        n = int(placed.params["ring_verts"])
+        rings = int(placed.params["segments"]) + 1
+        centres, radii = J.ring_tube(mesh.vertices, n, rings)
+        base_r = float(placed.params["base_radius"])
+        scale = float(np.cbrt(abs(np.linalg.det(placed.matrix[:3, :3]))))
+        reach = 1.5 * placed.root_depth + 1.5 * fillet * base_r * scale
+        k = J.rings_for_length(centres, reach)
+        return J.JunctionSpec(placed.name, centres[:k], radii[:k], width=fillet,
+                              base_radius=base_r * scale, height=self.fillet_height)
 
 
 class TailKind(_LoftKind):
@@ -651,6 +734,8 @@ class TailKind(_LoftKind):
     label = "Tail"
     default_side = "center"
     paired = False
+    fillet_default = TAIL_FILLET
+    fillet_height = TAIL_FILLET_HEIGHT
     controls = (ControlSpec("curl", "Curl (added to the shape)", 0.0),
                 ControlSpec("droop", "Droop (added to the shape)", 0.0),
                 ControlSpec("lift", "Lift (degrees, up)", 0.0),
@@ -659,12 +744,14 @@ class TailKind(_LoftKind):
         ParamSpec("length", "Length", "float", 6.0, 1.0, 20.0, 0.1),
         ParamSpec("base_radius", "Base radius", "float", 0.45, 0.1, 2.0, 0.01),
         ParamSpec("segments", "Segments", "int", 12, 4, 40, 1),
-        ParamSpec("ring_verts", "Ring vertices", "int", 10, 6, 24, 1),
+        ParamSpec("ring_verts", "Ring vertices", "int", TAIL_RING_VERTS, 6, 24, 1),
         ParamSpec("curl", "Curl", "float", 0.55, -2.0, 2.0, 0.01),
         ParamSpec("droop", "Droop", "float", 0.9, -2.0, 2.0, 0.01),
         ParamSpec("tip_radius", "Tip radius", "float", TAIL_TIP, 0.0, 0.4, 0.005,
                   help="radius at the end of the taper, which is rounded; 0 = the first "
                        "version's point (0.07 mm across at 32 mm: below what a printer makes)"),
+        flare_param(TAIL_FLARE),
+        fillet_param(TAIL_FILLET),
     )
     presets = {"tail_base": {"label": "Tail base (below the sacrum)", "face": "tail_base",
                              "up_hint": (0.0, 1.0, 0.0), "offset": TAIL_SINK,
@@ -686,7 +773,8 @@ class TailKind(_LoftKind):
         return dict(length=build_values["length"], base_radius=build_values["base_radius"],
                     segments=build_values["segments"], ring_verts=build_values["ring_verts"],
                     curl=build_values["curl"] + c["curl"], droop=build_values["droop"] + c["droop"],
-                    tip_radius=_tip(build_values), lift=c["lift"], sway=c["sway"])
+                    tip_radius=_tip(build_values), lift=c["lift"], sway=c["sway"],
+                    flare=float(build_values.get("flare", 0.0)))
 
     def control_range(self, name, state=None, params=None):
         params = params or {}
@@ -704,10 +792,10 @@ class TailKind(_LoftKind):
 # Every variant is make_horn with other numbers; ``turns`` makes it a helix.
 HORN_SHAPES = {
     #            length base_r  curve  twist  turns  segments ring_verts
-    "curved":   (2.2,   0.42,   1.1,   0.0,   0.0,   8,       8),     # short, curved: the default
-    "ram":      (4.2,   0.55,   2.1,   0.6,   0.0,  16,      12),     # thick, curling back
-    "spiral":   (4.5,   0.34,   1.2,   0.0,   3.0,  36,      12),     # a slender corkscrew
-    "antelope": (5.2,   0.28,   0.7,   0.0,   1.0,  28,      12),     # long, slim, a lyre
+    "curved":   (2.2,   0.42,   1.1,   0.0,   0.0,   8,       HORN_RING_VERTS),   # short, curved: the default
+    "ram":      (4.2,   0.55,   2.1,   0.6,   0.0,  16,      HORN_RING_VERTS),   # thick, curling back
+    "spiral":   (4.5,   0.34,   1.2,   0.0,   3.0,  36,      HORN_RING_VERTS),   # a slender corkscrew
+    "antelope": (5.2,   0.28,   0.7,   0.0,   1.0,  28,      HORN_RING_VERTS),   # long, slim, a lyre
 }
 
 
@@ -727,6 +815,8 @@ def _horn_param_specs() -> tuple:
     out.append(ParamSpec("tip_radius", "Tip radius", "float", HORN_TIP, 0.0, 0.3, 0.005,
                          help="radius at the end, which is rounded; 0 = the first version's "
                               "point (0.04 mm across at 32 mm)"))
+    out.append(flare_param(HORN_FLARE))
+    out.append(fillet_param(HORN_FILLET))
     return tuple(out)
 
 
@@ -739,6 +829,8 @@ class HornKind(_LoftKind):
     label = "Horn"
     default_side = "both"
     paired = True
+    fillet_default = HORN_FILLET
+    fillet_height = HORN_FILLET_HEIGHT
     params = _horn_param_specs()
     presets = {"temples": {"label": "Temples (up and out on the skull)", "face": "temples",
                            "up_hint": (0.0, 1.0, 0.0), "offset": HORN_SINK, "side": "both"}}
@@ -753,7 +845,8 @@ class HornKind(_LoftKind):
         return dict(length=build_values["length"], base_radius=build_values["base_radius"],
                     segments=build_values["segments"], ring_verts=build_values["ring_verts"],
                     curve=build_values["curve"], twist=build_values["twist"],
-                    turns=build_values["turns"], tip_radius=_tip(build_values))
+                    turns=build_values["turns"], tip_radius=_tip(build_values),
+                    flare=float(build_values.get("flare", 0.0)))
 
 
 # -- the wing ----------------------------------------------------------------------------
@@ -765,6 +858,20 @@ _WING_POSE_LABELS = (
     ("fold", "Fold", 0.0), ("raise_", "Raise", 0.0), ("swing", "Swing", 0.0),
     ("twist", "Twist", 0.0), ("fan", "Fan", 1.0), ("curl", "Curl", 0.0),
     ("wrist_flex", "Wrist flex", 0.0), ("hand_twist", "Hand twist", 0.0))
+
+
+def _wing_arm_radius(placed_wing) -> float:
+    """The radius of the wing's arm bone in the wing's own units (the median distance of the
+    ``arm`` piece's vertices to the shoulder-elbow axis; 0.2 if the style has no such piece)."""
+    rig = placed_wing.rig
+    piece = next((q for q in rig.pieces if q.name == "arm"), None)
+    if piece is None:
+        return 0.2
+    j = rig.posed_joints(None)
+    a, b = np.asarray(j["shoulder"]), np.asarray(j["elbow"])
+    ab = b - a
+    t = np.clip(((piece.mesh.vertices - a) @ ab) / max(float(ab @ ab), 1e-12), 0.0, 1.0)
+    return float(np.median(np.linalg.norm(piece.mesh.vertices - (a + t[:, None] * ab), axis=1)))
 
 
 class WingKind(Kind):
@@ -815,7 +922,9 @@ class WingKind(Kind):
         ParamSpec("coverts", "Coverts", "bool", True, when=("style", ("feathered",))),
         ParamSpec("underwing", "Underwing coverts", "bool", True, when=("style", ("feathered",))),
         ParamSpec("bones", "Show the arm bones", "bool", True),
+        fillet_param(WING_FILLET),
     )
+    fillet_default = WING_FILLET
     presets = {"shoulder_blades": {
         "label": "Shoulder blades", "face": "shoulder_blades", "up_hint": A.WING_UP_HINT,
         "roll": A.WING_ROLL, "offset": A.WING_OFFSET, "side": "both"}}
@@ -824,6 +933,28 @@ class WingKind(Kind):
     def load(self, params):
         from .wings import DEFAULT_SPAN
         return float(params.get("span", DEFAULT_SPAN)) / DEFAULT_SPAN
+
+    def junction(self, placed, controls=None):
+        """The wing arm (shoulder -> elbow, in the pose it is in) as the tube the back's skin
+        flows into, and the scapular mass behind it as a mound. Generic: where the wing's
+        girdle really sits and how much muscle it carries is the wing anatomy track's."""
+        fillet = float(placed.params.get("fillet", self.fillet_default))
+        if fillet <= 0.0:
+            return None
+        ctl = dict(placed.controls if controls is None else controls)
+        preset = ctl.pop("preset", None)
+        pw = placed.rig
+        pose = pw.rig.pose_from_controls(preset, **ctl) if (ctl or preset) else None
+        joints = pw.joint_positions(pose)
+        sh, el = np.asarray(joints["shoulder"]), np.asarray(joints["elbow"])
+        scale = float(np.cbrt(abs(np.linalg.det(placed.matrix[:3, :3]))))
+        r = _wing_arm_radius(pw) * scale
+        arm = float(np.linalg.norm(el - sh))
+        pts = [sh, sh + 0.5 * (el - sh), el]
+        mound = J.Mound(tuple(placed.anchor), radius=WING_MOUND_RADIUS * arm,
+                        height=WING_MOUND_HEIGHT * arm)
+        return J.JunctionSpec(placed.name, pts, [r * J.HUG] * 3, width=fillet, base_radius=r,
+                              height=WING_FILLET_HEIGHT, mounds=(mound,))
 
     def draft_params(self, values):
         if values.get("style") == "feathered":
@@ -892,7 +1023,8 @@ class WingKind(Kind):
 
     def build(self, spec, side, values, build_values, pl, ctx):
         controls_raw = spec.controls
-        app = self._engine(side, pl, params=dict(build_values),
+        shape = {k: v for k, v in build_values.items() if k != "fillet"}   # not a builder keyword
+        app = self._engine(side, pl, params=shape,
                            **self._aim(values["style"], pl["aim"], ctx))
         names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
         out = []
@@ -953,7 +1085,9 @@ class HarvestKind(_NumericControls, Kind):
         ParamSpec("neck", "Root thickness", "float", HARVEST_NECK, 0.2, 1.0, 0.05,
                   help="how much of its width the cut end keeps (1 = the limb as cut): "
                        "a narrow root fits inside the torso"),
+        fillet_param(HARVEST_FILLET),
     )
+    fillet_default = HARVEST_FILLET
     presets = {
         "lower_arms": {"label": "Lower arms (a second pair below the original)",
                        "face": "lower_arms", "offset": -2.0, "side": "both",
@@ -977,6 +1111,31 @@ class HarvestKind(_NumericControls, Kind):
 
     def default_preset(self, values):
         return "extra_legs" if values.get("limb") == "leg" else "lower_arms"
+
+    def junction(self, placed, controls=None):
+        """The limb (from the pivot inside the torso, through the elbow, a little into the
+        forearm, in the pose it is in) as the tube the flank's skin flows into. The radii
+        are the character's own limb's, as fractions of its upper bone (measured on the
+        neutral body: ``LIMB_RADII``), narrowed like the cut end is (``neck``): never fatter
+        than the mesh, so the skin that "is inside the tube" really is hidden by it."""
+        fillet = float(placed.params.get("fillet", self.fillet_default))
+        if fillet <= 0.0:
+            return None
+        ctl = dict(placed.controls if controls is None else controls)
+        j = placed.limb.joints(ctl)
+        sh, el, ha = (np.asarray(j[k]) for k in ("shoulder", "elbow", "hand"))
+        upper = float(np.linalg.norm(el - sh))
+        prof = LIMB_RADII[placed.params.get("limb", "arm")]
+        s_up, r_up, s_lo, r_lo = prof
+        pts = [sh + t * (el - sh) for t in s_up] + [el + t * (ha - el) for t in s_lo]
+        radii = np.array(list(r_up) + list(r_lo)) * upper
+        neck = float(placed.params.get("neck", HARVEST_NECK))
+        along = np.array(list(s_up) + [1.0] * len(s_lo))
+        t = np.clip(along * upper / max(A.NECK_LENGTH * upper, 1e-9), 0.0, 1.0)
+        radii = radii * (neck + (1.0 - neck) * t * t * (3.0 - 2.0 * t)) * J.HUG
+        return J.JunctionSpec(placed.name, pts, radii, width=fillet,
+                              base_radius=float(radii[-len(s_lo) - 1]) / J.HUG,
+                              height=HARVEST_FILLET_HEIGHT)
 
     def material(self, params):
         return material_named("skin")

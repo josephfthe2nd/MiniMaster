@@ -184,6 +184,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument("--anatomy-cap", type=float, metavar="X",
                         help="largest body adaptation any slider may take from the "
                              "appendages (default 1.0); saved with --save-character")
+    p_char.add_argument("--no-junction", action="store_true",
+                        help="leave the skin as it is around the appendages (by default it "
+                             "flows into their roots: fillet, mounds); saved with "
+                             "--save-character")
+    p_char.add_argument("--junction", action="store_true",
+                        help="switch the skin junction back on in a loaded character that "
+                             "has it off; saved with --save-character")
 
     # -- Blender backend (optional) --------------------------------------
 
@@ -468,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {val!r} is not a number", file=sys.stderr)
                 return 2
         if args.remove or args.add or args.pose or args.no_anatomy \
-                or args.anatomy_cap is not None:
+                or args.anatomy_cap is not None or args.no_junction or args.junction:
             from .character import kinds
             try:
                 for spec_id in args.remove:
@@ -488,6 +495,10 @@ def main(argv: list[str] | None = None) -> int:
                 doc.anatomy["enabled"] = False
             if args.anatomy_cap is not None:
                 doc.anatomy["cap"] = args.anatomy_cap
+            if args.no_junction:
+                doc.anatomy["junction"] = False
+            elif args.junction:
+                doc.anatomy.pop("junction", None)
         if args.save_character:
             doc.save(args.save_character)
             print(f"wrote {args.save_character}")
@@ -528,9 +539,13 @@ def main(argv: list[str] | None = None) -> int:
             for w in caught:
                 print(f"warning: {w.message}", file=sys.stderr)
             print("appendages: " + (", ".join(p.name for p in placed) or "none built"))
+        # the skin moulds around the appendages' roots (junction.py): the appendages were
+        # placed on the undeformed ``verts``; everything that MESHES the body (the picture, the
+        # STL, the printability report) uses ``body_verts``
+        body_verts = doc.shaped_body(base, verts, placed)
         if out.suffix.lower() == ".png":
             shells = portrait.character_shells(
-                base, verts, eye_color=args.eye_color, levels=args.subdivide)
+                base, body_verts, eye_color=args.eye_color, levels=args.subdivide)
             # appendages come out in the MakeHuman frame (Y up); the renderer is Z up
             shells += [portrait.Shell(p.mesh().transform(portrait.MH_TO_Z_UP), p.material)
                        for p in placed]
@@ -554,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             shells = printprep.character_print_shells(
-                base, verts, levels=args.subdivide)
+                base, body_verts, levels=args.subdivide)
             figure = list(shells)
             app_shells = []
             if placed:
@@ -585,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
                 shells, size=args.size, height=args.height,
                 reference=printprep.FIGURE_SHELLS)
             prep = print_report.appendage_report(
-                app_shells, base, verts, mm_per_unit, levels=args.subdivide,
+                app_shells, base, body_verts, mm_per_unit, levels=args.subdivide,
                 figure_shells=figure, assembly=rep)
             report_text = prep.as_text()
             blocked = bool(prep.blocking)

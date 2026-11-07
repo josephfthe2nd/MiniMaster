@@ -298,6 +298,12 @@ def assemble_character(shells, size=None, height=None, with_base=True,
     return merged, report
 
 
+def is_closed_cage(quads) -> bool:
+    """Is every edge of the quad mesh shared by exactly two quads (what Catmull-Clark needs)?"""
+    from ..core.subdiv import cage_is_closed
+    return cage_is_closed(quads)
+
+
 def character_print_shells(base, verts=None, levels: int = 0,
                            with_eyes: bool = True, with_teeth: bool = True):
     """Named closed shells for printing, in Z-up scene units.
@@ -322,7 +328,13 @@ def character_print_shells(base, verts=None, levels: int = 0,
     for name in names:
         if name not in base.groups:
             continue
-        mesh = build(*base.helper_group(name, verts))
+        hv, hq = base.helper_group(name, verts)
+        # an open island (the teeth: 38 boundary edges) is no printable solid, and
+        # Catmull-Clark of a cage that is not a closed 2-manifold raises: leave it out BEFORE
+        # subdividing (it used to die with "cage is not a closed 2-manifold" at levels >= 1)
+        if not is_closed_cage(hq):
+            continue
+        mesh = build(hv, hq)
         if mesh.integrity_report()["watertight"]:
             out.append((name.replace("helper-", ""), mesh))
     return out

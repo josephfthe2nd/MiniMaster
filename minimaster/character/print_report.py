@@ -793,8 +793,12 @@ def _measure(app, base, verts, body_solid: Solid, bkey: str, rules: PrintRules,
 def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0, *,
                      body=None, levels: int = 0, figure_shells=None,
                      rules: PrintRules | None = None, cache: dict | None = None,
-                     min_thickness_mm=None, assembly=None) -> PrintabilityReport:
+                     min_thickness_mm=None, assembly=None, body_verts=None) -> PrintabilityReport:
     """The printability report of ``appendages`` on the body ``verts``, at ``mm_per_unit``.
+
+    ``body_verts`` (default ``verts``) are the vertices the printed body is MESHED from: the
+    skin moulded around the appendages (``junction.shaped_body``) -- the root weld is measured
+    against the body that prints. ``verts`` stays the body the appendages are PLACED on.
 
     ``appendages`` are what :func:`printprep.appendage_print_shells` takes. ``body`` is the
     PRINTED body shell (Z-up, scene units); by default the cage, or the cage subdivided
@@ -817,7 +821,8 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
     if min_thickness_mm is not None:
         apps, adjustments = pp.apply_thickness_floor(apps, mm_per_unit, min_thickness_mm)
     if body is None:
-        body = pp.character_print_shells(base, verts, levels=levels, with_eyes=False,
+        body = pp.character_print_shells(base, verts if body_verts is None else body_verts,
+                                         levels=levels, with_eyes=False,
                                          with_teeth=False)[0][1]
     bkey = _verts_key(body.vertices)
     body_solid = _memo(cache, ("solid", bkey), lambda: Solid(body))

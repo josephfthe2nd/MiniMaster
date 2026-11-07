@@ -450,6 +450,10 @@ class CharacterPanel(ttk.Frame):
         self.adapt_var = BooleanVar(value=True)
         ttk.Checkbutton(lf, text="Adapt the body to the appendages",
                         variable=self.adapt_var, command=self._adapt_toggled).pack(anchor="w")
+        self.junction_var = BooleanVar(value=True)
+        ttk.Checkbutton(lf, text="Skin flows into the appendages (fillet)",
+                        variable=self.junction_var,
+                        command=self._junction_toggled).pack(anchor="w")
         self.cap_row = SliderRow(lf, "Cap", 0.0, 2.0, 1.0, step=0.05,
                                  on_change=lambda v: self._edit(self.lab.doc.set_anatomy,
                                                                 cap=v, clamp=True),
@@ -802,6 +806,9 @@ class CharacterPanel(ttk.Frame):
     def _adapt_toggled(self) -> None:
         self._edit(self.lab.doc.set_anatomy, enabled=self.adapt_var.get())
 
+    def _junction_toggled(self) -> None:
+        self._edit(self.lab.doc.set_anatomy, junction=self.junction_var.get())
+
     def _tree_selected(self, _e=None) -> None:
         if self._syncing:
             return
@@ -1038,6 +1045,7 @@ class CharacterPanel(ttk.Frame):
             else:
                 row.set(doc.character.sliders.get(key, 0.0))
         self.adapt_var.set(bool(doc.character.anatomy.get("enabled", True)))
+        self.junction_var.set(doc.character.junction_enabled)
         self.cap_row.set(float(doc.character.anatomy.get("cap", 1.0)))
 
     def _sync_buttons(self) -> None:

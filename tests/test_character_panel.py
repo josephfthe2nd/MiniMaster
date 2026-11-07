@@ -523,6 +523,21 @@ class TestPanel:
         panel.undo()
         assert panel.adapt_var.get() is True
 
+    def test_the_skin_fillet_switch_follows_the_document_and_undo(self, panel):
+        doc = panel.lab.doc
+        panel.add(kind="tail")
+        settled(panel, panel)
+        assert panel.junction_var.get() is True and doc.character.junction_enabled
+        before = panel.lab.engine.stats["junction"]
+        panel.junction_var.set(False)
+        panel._junction_toggled()
+        assert doc.character.anatomy["junction"] is False and not doc.character.junction_enabled
+        settled(panel, panel)
+        panel.undo()
+        assert panel.junction_var.get() is True and "junction" not in doc.character.anatomy
+        settled(panel, panel)
+        assert panel.lab.engine.stats["junction"] >= before
+
     def test_the_view_buttons_and_the_poll_deliver_frames(self, panel):
         panel.add(kind="tail")
         settled(panel, panel)

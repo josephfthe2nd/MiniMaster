@@ -72,8 +72,8 @@ def test_wing_defaults_are_what_the_builders_really_use(style):
     if style == "dragon":
         real.update({k: v for k, v in W.DRAGON.items() if k in real})
     for key, value in values.items():
-        if key == "style":
-            continue
+        if key in ("style", "fillet"):      # the style is not a builder argument; the fillet is
+            continue                        # how the BODY'S SKIN meets the wing (junction.py)
         assert key in real, f"{key} is not a {style} builder argument"
         assert value == pytest.approx(real[key]), (style, key)
 
@@ -85,12 +85,16 @@ def test_loft_defaults_are_what_the_builders_really_use(kind_id, fn):
     # the registry adds the horn's ``shape``; the builders' own ``tip_radius`` stays None =
     # the first version's point (a legacy Appendage is untouched) while the registry's
     # default is rounded; the tail's ``lift`` / ``sway`` are pose controls, not parameters
-    registry_only = {"tail": set(), "horn": {"shape"}}[kind_id]
-    builder_only = {"tail": {"lift", "sway"}, "horn": set()}[kind_id]
+    # (``fillet`` is how the body's skin meets the root, junction.py; ``flare_length`` stays the
+    # builders' own; ``ring_verts`` and ``flare`` have registry defaults that are rounder and
+    # broader than the builders': 16 facets, so the skin's seam with the tube is a clean curve)
+    registry_only = {"tail": {"fillet"}, "horn": {"shape", "fillet"}}[kind_id]
+    builder_only = {"tail": {"lift", "sway", "flare_length"}, "horn": {"flare_length"}}[kind_id]
     assert set(kind.defaults()) - registry_only == set(real) - builder_only
     for key, value in kind.defaults().items():
-        if key in real and key != "tip_radius":
+        if key in real and key not in ("tip_radius", "ring_verts", "flare"):
             assert value == pytest.approx(real[key]), key
+    assert kind.defaults()["ring_verts"] == 16 and real["ring_verts"] in (8, 10)
     assert real["tip_radius"] is None and kind.defaults()["tip_radius"] > 0     # blunt by default
 
 
@@ -731,11 +735,13 @@ def test_tails_and_horns_are_sunk_into_the_body(world):
 def test_tail_and_horn_presets_equal_the_legacy_placement_plus_the_sink(world):
     base, _, v0 = world
     # (tip_radius 0 is the first version's pointed shape; the default is rounded)
-    tail = K.instantiate_all([K.new_spec("tail", params={"tip_radius": 0.0})], base, v0)[0]
+    tail = K.instantiate_all([K.new_spec("tail", params={"tip_radius": 0.0, "ring_verts": 10,
+                                                         "flare": 0.0})], base, v0)[0]
     old = A.Appendage("tail", anchor_point=K.PRESET_POINTS["tail_base"],
                       offset=K.TAIL_SINK).build(base, v0)[0][1]
     assert np.array_equal(tail.mesh().vertices, old.vertices)
-    horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0})], base, v0)
+    horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0, "ring_verts": 8,
+                                                          "flare": 0.0})], base, v0)
     olds = A.Appendage("horn", anchor_point=K.PRESET_POINTS["temples"], mirror=True,
                        offset=K.HORN_SINK).build(base, v0)
     assert [p.name for p in horns] == ["horn-1.l", "horn-1.r"]

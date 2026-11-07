@@ -23,6 +23,7 @@ so and the rest of the studio is unaffected. Nothing is loaded until the tab is 
 | switch it off | the **on** check box: an appendage that is off is neither drawn nor printed nor does it adapt the body, and stays in the file |
 | undo / redo | **Ctrl+Z / Ctrl+Y** (while this tab is selected), or the buttons. A slider drag is one step, however many values it passed through |
 | the body | macro sliders (gender, age, muscle, weight, height, ethnicity), ten common shape sliders, "Reset body" |
+| skin fillet | the check box "Skin flows into the appendages": the body's skin is moulded around the roots ([junctions.md](junctions.md)); a body-slider or shape drag draws the unshaped skin and the final render (150 ms later) has the fillet; the document stores it only when it is off |
 | body adaptation | the check box (and the cap): the wings broaden the chest, the tail the pelvis ... as a derived layer, never saved; the notes say what it did |
 | save / open | **Save / Save as / Open** write and read `.mmchar` (the same file `minimaster character` reads); Ctrl+S / Ctrl+O follow the tab |
 | print | pick a size, **Check printability** (measures, writes nothing) or **Export STL**. The report appears in the panel: **blocking** findings in red stop the export until **Export anyway**, warnings in amber, the assumptions dim. It is the report `minimaster character -o x.stl` prints and the STL is byte for byte the CLI's |

@@ -1,6 +1,6 @@
 # Dynamic appendages — design (v2, after independent review)
 
-Status: **T1a (document, placement, anatomy layer, kind registry, CLI), T1b (print integration, printability report), T2 (renderer, see `docs/renderer.md`), T3 (the remaining kinds: harvested limbs, tail and horn controls) and T4 (the Character tab, see `docs/character_tab.md`) are implemented** — see sections 6, 6c and 6d. Goal: the user adds, removes
+Status: **T1a (document, placement, anatomy layer, kind registry, CLI), T1b (print integration, printability report), T2 (renderer, see `docs/renderer.md`), T3 (the remaining kinds: harvested limbs, tail and horn controls), T4 (the Character tab, see `docs/character_tab.md`) and S1 (the skin-conforming junction core, see `docs/junctions.md`) are implemented** — see sections 6, 6c, 6d and 6e. Goal: the user adds, removes
 and tunes appendages (wings, tails, horns, extra arms, anything later) on a realistic character in
 the running app, sees the result, and prints it.
 
@@ -287,3 +287,21 @@ the exact build on every frame; `tk.Variable.__del__` can run on the preview wor
 (deferred to the UI thread in the panel). Open: a checkpoint inside `kind.instantiate` / the wing builders (T3's
 files) would close the cancel gap; HiDPI and native Windows / macOS Tk are untested; a click places the anchor but
 not the orientation.
+
+## 6e. S1 status: the skin-conforming junction (implemented)
+
+Files: `junction.py` (new), `kinds.py` (`Placed.junction`, `Kind.junction`, `fillet` / `flare` parameters, per-kind
+defaults), `appendages.py` (`make_tail` / `make_horn` `flare=`), `sliders.py` (`Character.shaped_body`,
+`junction_enabled`), `__main__.py` (`--no-junction` / `--junction`), `lab.py` (`Engine.shaped_state`),
+`printprep.py` / `print_report.py` (`body_verts=`), `core/subdiv.py` (`cage_is_closed`), tests `test_junction.py`,
+tools `junction_view.py` and `junction_report.py`, and `docs/junctions.md` (the API, the mechanism, the numbers).
+
+| Item | State |
+| --- | --- |
+| **The problem** | The appendages overlapped the skin: a hard intersection curve, no skin rising to meet the root ("slapped over the skin"). The body cannot get vertices (1,280 morph targets address it by index) but its vertices can be moved after the morphs. |
+| **Mechanism** | `junction.apply_junctions(base, verts, specs)`: for each body vertex outside an appendage root by less than the fillet width W, remaining distance `W f(delta/W)`, `f(u) = 2u^2 - u^3`, climbing a profile tangent to the tube wall and to the skin (C2 at W for `sharpness` 3), only where the tube is exposed; plus mounds, hollows, ridges and keep spheres. Pure, deterministic, topology-preserving, returns its input when there is nothing to do; per-vertex and per-spec caps; a pass backs off any cage quad that would flip or collapse. 4-12 ms. |
+| **Placement does not chase it** | Placement (`SurfaceAnchor`, mirror-face map, `kinds.instantiate_all`, `Engine.anchor_points`) uses the UNDEFORMED morphed vertices; everything that meshes the body (CLI picture and STL, the lab's draft / final / pick / export, the printability report's root weld) uses `shaped_body(...)`. Off with `anatomy["junction"] = false` (`--no-junction`), written only then. |
+| **Per kind** | Tail, horn, wing (the posed arm, plus a scapular mound) and extra limbs (the neutral limb's radius profile, posed) have a generic `Placed.junction()`; the `fillet` parameter (0 = off) and, for tail and horn, `flare` are in the registry. The anatomy of each is the next tracks'. |
+| **The seam is the tube** | A 10-gon against the skin is a zigzag no body displacement can hide; the tail and horn `ring_verts` default is now 16 (changes the mesh of every existing tail and horn). |
+| **Subdivided prints** | Fixed: `--subdivide 1 -o x.stl` died with "cage is not a closed 2-manifold: 38 edges" even without appendages: the open teeth islands were subdivided before the watertight check. |
+| **Numbers** | No flipped quad, smallest area ratio 0.23; skin-wall angle 91 -> 53-66 degrees (tail), 93-102 -> 56-81 (bat), 71-83 -> 56-74 (angel), 56 -> 32-41 (horn); root weld 21 -> 33% (tail), 52 -> 66% (horn); the 99th-percentile crease the junction adds is 3-11 degrees at level 2. The skin is not tangent to the root and the curvature step across the fillet boundary is not smaller after than before for the tail and arms: see `docs/junctions.md` for the table and what it does not show. |
