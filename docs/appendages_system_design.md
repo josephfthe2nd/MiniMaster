@@ -1,6 +1,6 @@
 # Dynamic appendages — design (v2, after independent review)
 
-Status: **T1a (document, placement, anatomy layer, kind registry, CLI), T1b (print integration, printability report), T2 (renderer, see `docs/renderer.md`), T3 (the remaining kinds: harvested limbs, tail and horn controls), T4 (the Character tab, see `docs/character_tab.md`) and S1 (the skin-conforming junction core, see `docs/junctions.md`) are implemented** — see sections 6, 6c, 6d and 6e. Goal: the user adds, removes
+Status: **T1a (document, placement, anatomy layer, kind registry, CLI), T1b (print integration, printability report), T2 (renderer, see `docs/renderer.md`), T3 (the remaining kinds: harvested limbs, tail and horn controls), T4 (the Character tab, see `docs/character_tab.md`) and S1 (the skin-conforming junction core, see `docs/junctions.md`) are implemented**, and the tail has its own anatomy (a midline anchor, bone / muscle / skin layers: `docs/anatomy_tail.md`) — see sections 6, 6c, 6d and 6e. Goal: the user adds, removes
 and tunes appendages (wings, tails, horns, extra arms, anything later) on a realistic character in
 the running app, sees the result, and prints it.
 

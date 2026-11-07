@@ -2,6 +2,7 @@
 
     python tools/junction_view.py OUT.png "tail;horn" FOCUS [az,el ...] [--macro k=v,...]
         [--levels 1] [--r 2.2] [--size 420x420] [--before] [--skin-only] [--pair]
+        [--layers bone,muscle,skin [--cut]]
 
 ``specs`` is a ``;``-separated list of ``--add`` texts (``tail``, ``wing:style=feathered``,
 ``harvest:preset=upper_arms`` ...); FOCUS is the kind (tail, horn, wing, arm, leg) or ``all``
@@ -9,7 +10,9 @@
 side by side. ``--before`` renders the body WITHOUT the junction (the skin as it was),
 ``--pair`` renders before (top) and after (bottom), ``--skin-only`` hides the appendages
 (the shaped skin alone: shows what the junction does to the body and whether any of it
-is left sticking out of the appendage).
+is left sticking out of the appendage). ``--layers`` draws the anatomical layers of the
+appendages that have them (a tail's caudal vertebrae, muscle sleeve and skin); ``--cut`` cuts
+the figure and the outer layers along the sagittal plane (look from azimuth 90).
 
 Needs the CC0 assets like every character command. Run from the repository root.
 """
@@ -50,10 +53,14 @@ def build(specs, macro, base, lib, cat):
     return c, verts, placed, shaped, info
 
 
-def render(base, body_verts, placed, focus, views, size, rad, levels, skin_only=False):
+def render(base, body_verts, placed, focus, views, size, rad, levels, skin_only=False,
+           layers=None, cut=False):
     body = po.character_shells(base, body_verts, levels=levels, with_eyes=True)
     shells = list(body)
-    if not skin_only:
+    if layers:                      # the anatomical layers (ecorche.py) instead of the skin shell
+        from minimaster.character import ecorche
+        shells = ecorche.layer_shells(base, body_verts, placed, layers, cut=cut, levels=levels)
+    elif not skin_only:
         shells += [po.Shell(p.mesh().transform(po.MH_TO_Z_UP), p.material) for p in placed]
     sel = [p for p in placed if focus == "all" or p.name.startswith(focus)]
     if sel:
@@ -74,7 +81,8 @@ def main(argv) -> int:
         return 2
     out, specs, focus = args[0], [s for s in args[1].split(";") if s], args[2]
     views, macro, size, rad, levels = [], BODIES["neutral"], (420, 420), 2.2, 1
-    before = pair = skin_only = False
+    before = pair = skin_only = cut = False
+    layers = None
     i = 3
     while i < len(args):
         a = args[i]
@@ -98,6 +106,10 @@ def main(argv) -> int:
             pair, i = True, i + 1
         elif a == "--skin-only":
             skin_only, i = True, i + 1
+        elif a == "--layers":
+            layers, i = args[i + 1], i + 2
+        elif a == "--cut":
+            cut, i = True, i + 1
         else:
             views.append(tuple(float(x) for x in a.split(",")))
             i += 1
@@ -107,9 +119,9 @@ def main(argv) -> int:
     _, verts, placed, shaped, info = build(specs, macro, base, lib, cat)
     rows = []
     if pair or before:
-        rows.append(render(base, verts, placed, focus, views, size, rad, levels, skin_only))
+        rows.append(render(base, verts, placed, focus, views, size, rad, levels, skin_only, layers, cut))
     if pair or not before:
-        rows.append(render(base, shaped, placed, focus, views, size, rad, levels, skin_only))
+        rows.append(render(base, shaped, placed, focus, views, size, rad, levels, skin_only, layers, cut))
     po.write_png(out, np.concatenate(rows, axis=0))
     print("wrote", out, [p.name for p in placed], info)
     return 0

@@ -44,6 +44,7 @@ import numpy as np
 from ..core.mesh import Mesh
 from . import appendages as A
 from . import junction as J
+from . import tailrig as T
 from .appendage_spec import SIDES, AppendageSpec, next_id, valid_id
 
 
@@ -156,7 +157,7 @@ class ControlSpec:
 PRESET_POINTS = {
     "shoulder_blades": A.WING_ANCHOR,        # the rearmost point of the scapula
     "waist": A.WING_ROOT,                    # where a bat wing's attachment line ends
-    "tail_base": (0.0, 1.6, -1.15),          # below the sacrum
+    "tail_base": (0.02, 1.02, -0.69),        # the sacrococcygeal midline, 1 R above the gluteal apex
     "temples": (0.85, 8.55, 0.05),           # up and out on the skull
     "shoulder_socket": (2.0, 4.2, 0.15),     # the side of the chest, under the shoulder
     "hip_socket": (1.5, 0.4, 0.15),          # the outer hip
@@ -167,7 +168,7 @@ PRESET_POINTS = {
 PRESET_FACES = {
     "shoulder_blades": 10296,
     "waist": 10593,
-    "tail_base": 3921,
+    "tail_base": 10562,           # the +x quad of the two around the midline edge 4215-4205
     "temples": 12116,
     "shoulder_socket": 7954,
     "hip_socket": 10647,
@@ -183,7 +184,9 @@ WING_ROOT_OFFSET = (0.04479999999999995, -0.076125, 0.12734999999999996)
 # tail is tangent to the skin (0.5% of its volume inside, a hairline weld) and a horn
 # touches it at a point; the sink is measured: tail ~25% / horn ~65% of the volume embedded
 # (tests/test_kinds.py), which is a weld a 32 mm print survives.
-TAIL_SINK = -0.6
+TAIL_SINK = 0.0          # a tail's sink is its bone root (tailrig.STEM_R x R below the skin along its axis), not an offset
+LEGACY_TAIL_SINK = -0.6  # what the first tail preset stored in ``placement.offset`` (read as the new default)
+LEGACY_TAIL_BASE_FACE = 3921    # the first tail_base quad: 0.36 R off the midline, on the side of a buttock
 HORN_SINK = -0.55
 HARVEST_SINK = -0.5      # along the limb axis: a harvested limb has no surface normal
 TAIL_TIP = 0.09          # radius at the end of a tail (the first version's was 0.02: a point)
@@ -197,7 +200,7 @@ HARVEST_NECK = 0.5       # the cut end keeps this much of the limb's width (limb
 # (24 sides: a clean curve), so the junction wants round roots.
 TAIL_RING_VERTS = 16
 HORN_RING_VERTS = 16
-TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.0, 0.8
+TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.35, 1.0
 HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
 WING_FILLET, WING_FILLET_HEIGHT = 3.0, 0.4        # the arm is a thin rod: a broad, low boss
 # the scapular mass, as FRACTIONS of the trunk's radius (junction.Mound(scale="trunk"): the core
@@ -301,6 +304,7 @@ class Placed:
     repose: object = None          # controls -> Mesh: a kind that re-evaluates its loft
     root_depth: float = 0.0        # how far the root is sunk below the skin (units): the junction
                                    # takes the centreline from there to a few fillet widths out
+    model: object = None           # a kind's own anatomy (a tailrig.PlacedTail for a tail)
     _junctions: dict = field(default_factory=dict, repr=False, compare=False)   # controls -> spec
 
     def mesh(self, controls: dict | None = None) -> Mesh:
@@ -316,6 +320,13 @@ class Placed:
         c = dict(self.controls if controls is None else controls)
         preset = c.pop("preset", None)
         return self.rig.pose(preset, **c) if (c or preset) else self.rig.mesh()
+
+    def layers(self, controls: dict | None = None) -> dict:
+        """The anatomical layers of this appendage under ``controls`` (default: the spec's own)
+        as named meshes in the MakeHuman frame: ``"bone"`` (the internal chain, hidden),
+        ``"muscle"`` (the masses that shape the surface) and ``"skin"`` (the shell that is
+        printed and rendered: ``mesh()``). A kind without an anatomy yet has the skin only."""
+        return self.kind.layers(self, self.controls if controls is None else controls)
 
     def junction(self, controls: dict | None = None):
         """The :class:`~.junction.JunctionSpec` of this appendage's root (how the body's skin
@@ -495,6 +506,16 @@ class Kind:
         with a root the skin should mould around overrides this."""
         return None
 
+    def layers(self, placed, controls: dict | None = None) -> dict:
+        """``{layer name: Mesh}`` of one placed appendage (see :meth:`Placed.layers`); the base
+        class only has the skin."""
+        return {"skin": placed.mesh(controls)}
+
+    def layer_colors(self, placed, name: str, controls: dict | None = None):
+        """Per-vertex colour weights of layer ``name`` for an ecorche view (``ecorche.py``): ``None``
+        (one colour) or an array in 0..1 per vertex of that layer's mesh, 1 = the layer's own colour."""
+        return None
+
     # -- anatomy ------------------------------------------------------------------------
 
     def load(self, params: dict) -> float:
@@ -531,6 +552,7 @@ class Kind:
             "up_hint": _vec(pl.get("up_hint"), preset.get("up_hint", (0.0, 1.0, 0.0))),
             "aim": pl.get("aim"),
             "weights": None,
+            "midline": False,
         }
         anchor = pl.get("anchor")
         n_quads = len(ctx.cage[1])
@@ -596,7 +618,7 @@ class Kind:
     def _engine(self, side: str, pl: dict, **over) -> A.Appendage:
         kw = dict(scale=pl["scale"], up_hint=tuple(pl["up_hint"]), roll=pl["roll"],
                   offset=pl["offset"], anchor_face=pl["face"], anchor_weights=pl["weights"],
-                  side=side)
+                  side=side, anchor_midline=bool(pl.get("midline", False)))
         kw.update(over)
         return A.Appendage(self.id, **kw)
 
@@ -726,14 +748,20 @@ class _LoftKind(_NumericControls, Kind):
 
 
 class TailKind(_LoftKind):
-    """A tail: a tapered tube with a rounded tip, bound to the quad below the sacrum.
+    """A tail: the continuation of the spine, as an anatomy (``tailrig.py``): a caudal vertebra
+    chain, the muscle sleeve around it and the skin over both, rooted on the MIDLINE of the
+    sacrum (the anchor is the cage quad over the sacrococcygeal level paired with its mirror
+    image, so the tail leaves exactly on the sagittal plane and its axis is the sacral surface
+    normal clamped to 5-18 degrees above horizontal), sunk into the body by its hidden bone root
+    (the stem), and sized by the body (``length`` and ``base_radius`` are the values on the
+    neutral body; a taller body has a proportionally longer, thicker tail).
 
-    Pose controls re-evaluate the loft: ``curl`` and ``droop`` ADD to the parameters of the
-    same name (same units, so 0 is the tail as built; the sum stays inside the parameter's
-    range), ``lift`` (up) and ``sway`` (toward +X) bend the whole tail from its base, in
-    degrees. ``tip_radius`` is the radius at the end: the first version's tail ended in a
-    point 0.07 mm across at 32 mm, below what a printer resolves; the default is a rounded
-    end 0.3 mm across."""
+    Pose controls re-evaluate the chain: ``curl`` and ``droop`` ADD to the parameters of the same
+    name (same units, so 0 is the tail as built; the sum stays inside the parameter's range) and
+    are both SAGITTAL (``droop`` bends the tail down by gravity after a stiff root, ``curl`` curls
+    the distal part up); ``lift`` raises the whole tail about the sacrococcygeal joint and ``sway``
+    flexes it sideways (toward +X), in degrees. ``tip_radius`` is the radius at the end: a rounded
+    end 0.3 mm across by default."""
 
     id = "tail"
     label = "Tail"
@@ -742,37 +770,157 @@ class TailKind(_LoftKind):
     fillet_default = TAIL_FILLET
     fillet_height = TAIL_FILLET_HEIGHT
     junction_owner = "trunk"
+    pitch_clamp = (5.0, 18.0)          # the axis' elevation above horizontal, midline tails (degrees)
     controls = (ControlSpec("curl", "Curl (added to the shape)", 0.0),
                 ControlSpec("droop", "Droop (added to the shape)", 0.0),
                 ControlSpec("lift", "Lift (degrees, up)", 0.0),
                 ControlSpec("sway", "Sway (degrees, toward +X)", 0.0))
     params = (
-        ParamSpec("length", "Length", "float", 6.0, 1.0, 20.0, 0.1),
-        ParamSpec("base_radius", "Base radius", "float", 0.45, 0.1, 2.0, 0.01),
+        ParamSpec("length", "Length", "float", 6.0, 1.0, 20.0, 0.1,
+                  help="on the neutral body; scaled with the body's height"),
+        ParamSpec("base_radius", "Base radius", "float", 0.45, 0.1, 2.0, 0.01,
+                  help="on the neutral body; scaled with the body's height"),
         ParamSpec("segments", "Segments", "int", 12, 4, 40, 1),
         ParamSpec("ring_verts", "Ring vertices", "int", TAIL_RING_VERTS, 6, 24, 1),
-        ParamSpec("curl", "Curl", "float", 0.55, -2.0, 2.0, 0.01),
-        ParamSpec("droop", "Droop", "float", 0.9, -2.0, 2.0, 0.01),
+        ParamSpec("curl", "Curl", "float", 0.55, -2.0, 2.0, 0.01,
+                  help="curls the distal 45% of the tail up (sagittal)"),
+        ParamSpec("droop", "Droop", "float", 0.9, -2.0, 2.0, 0.01,
+                  help="how far gravity bends the tail down after its stiff root (sagittal)"),
         ParamSpec("tip_radius", "Tip radius", "float", TAIL_TIP, 0.0, 0.4, 0.005,
-                  help="radius at the end of the taper, which is rounded; 0 = the first "
-                       "version's point (0.07 mm across at 32 mm: below what a printer makes)"),
-        flare_param(TAIL_FLARE),
+                  help="radius at the end of the taper, which is rounded; 0 = the finest tip "
+                       "the skin allows (0.03 units)"),
+        ParamSpec("flare", "Root flare", "float", TAIL_FLARE, 0.0, 2.0, 0.05,
+                  help="the trumpet where the caudal muscles spread onto the sacrum: the radius at the "
+                       "skin is 1 + flare times the base radius, easing out over about two radii "
+                       "(0 = a straight tube)"),
         fillet_param(TAIL_FILLET),
+        ParamSpec("vertebrae", "Caudal vertebrae", "int", 0, 0, 60, 1,
+                  help="0 = by the length (round(48 L / H): 17 on the default tail)"),
+        ParamSpec("crest", "Dorsal ridge", "float", 0.0, 0.0, 1.5, 0.05,
+                  help="a dorsal ridge along the first 60% of the tail, in base radii (a "
+                       "lizard's); 0 = a mammal's smooth back"),
     )
-    presets = {"tail_base": {"label": "Tail base (below the sacrum)", "face": "tail_base",
+    presets = {"tail_base": {"label": "Tail base (sacrococcygeal midline)", "face": "tail_base",
                              "up_hint": (0.0, 1.0, 0.0), "offset": TAIL_SINK,
                              "side": "center"}}
 
     def load(self, params):
-        return float(params.get("length", 6.0)) / 6.0
+        # the pelvis pays for the tail's size: its length and its thickness (the base radius), over
+        # their values on the neutral body (creature_anatomy.TailEffect)
+        return (float(params.get("length", 6.0)) / 6.0) * (float(params.get("base_radius", 0.45)) / 0.45)
 
     def material(self, params):
         return material_named("skin")
 
+    def resolve_placement(self, spec, values, ctx):
+        """The placement of a tail: the stored preset's quad, but
+
+        * the FIRST ``tail_base`` quad (3921, on the side of a buttock, which every document
+          written by the first tails stores) is read as the new one on the midline, and the
+          first preset's sink (-0.6 along the normal) as the new default (0): the sink is the
+          tail's own bone root now. The document is not rewritten;
+        * a ``center`` tail on a quad that has an edge on the midline is bound to that quad AND
+          its mirror image (``anchor.midline = false`` in the record switches it off), so it is
+          placed on the sagittal plane. A tail clicked onto the side of the body stays there."""
+        pl = super().resolve_placement(spec, values, ctx)
+        anchor = spec.placement.get("anchor")
+        if pl["face"] == LEGACY_TAIL_BASE_FACE and pl["weights"] is None:
+            pl["face"] = PRESET_FACES["tail_base"]
+        if abs(pl["offset"] - LEGACY_TAIL_SINK) < 1e-9:
+            pl["offset"] = TAIL_SINK
+        want = anchor.get("midline") if isinstance(anchor, dict) else None
+        if want is None:
+            want = spec.side == "center" and A.is_midline_face(ctx.base, pl["face"])
+        pl["midline"] = bool(want) and spec.side == "center"
+        return pl
+
+    def body_scale(self, ctx) -> float:
+        """The body's height over the neutral body's: what ``length`` and ``base_radius`` scale by."""
+        h = float(np.ptp(ctx.cage[0][:, 1]))
+        h0 = float(np.ptp(ctx.neutral_cage()[0][:, 1]))
+        return h / h0 if h0 > 0 else 1.0
+
+    def tail_params(self, build_values) -> "T.TailParams":
+        v = build_values
+        return T.TailParams(
+            length=float(v["length"]), base_radius=float(v["base_radius"]),
+            tip_radius=float(v["tip_radius"]), curl=float(v["curl"]), droop=float(v["droop"]),
+            flare=float(v.get("flare", TAIL_FLARE)), segments=int(v["segments"]),
+            ring_verts=int(v["ring_verts"]), vertebrae=int(v.get("vertebrae", 0)),
+            crest=float(v.get("crest", 0.0)))
+
+    def build(self, spec, side, values, build_values, pl, ctx):
+        app = self._engine(side, pl, params={})
+        body_v, body_q = ctx.cage
+        k_body = self.body_scale(ctx)
+        tparams = self.tail_params(build_values)
+        names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
+        out = []
+        for idx in app._indices():
+            name, letter = names[idx]
+            frame = app._anchor_frame(body_v, body_q, idx, app._point(idx), ctx.base)
+            frame = self._root_frame(frame, pl, k_body, app, body_v, body_q, idx, ctx)
+            ctrl = {}
+            ctrl, notes = self.clean_controls(side_controls(spec.controls, letter),
+                                              f"appendage {spec.id!r}: ")
+            for note in notes:
+                ctx.warn(note)
+
+            def clamp(c, build_values=build_values):
+                return {k: min(max(x, self.control_range(k, None, build_values)[0]),
+                                self.control_range(k, None, build_values)[1])
+                        for k, x in c.items()}
+
+            pt = T.PlacedTail(tparams, frame, clamp)
+            out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
+                              anchor=self._surface(ctx, app, idx), matrix=frame,
+                              params=dict(values), controls=ctrl, static=pt.skin(ctrl),
+                              repose=pt.skin, model=pt,
+                              root_depth=tparams.stem * pt.scale))
+        return out
+
+    def _root_frame(self, frame, pl, k_body, app, body_v, body_q, idx, ctx):
+        """The tail's frame: the engine's, scaled by the body and, on the midline, the axis tilted
+        to the sacral surface's elevation clamped to ``pitch_clamp`` degrees (the first part of a
+        tail is the continuation of the sacrum's axis, not of whatever way the cage faces)."""
+        m = np.array(frame, dtype=np.float64)
+        scale = pl["scale"]
+        if pl.get("midline"):
+            z = m[:3, 2] / scale
+            e = math.degrees(math.asin(max(-1.0, min(1.0, float(z[1])))))
+            lo, hi = self.pitch_clamp
+            d = math.radians(min(max(e, lo), hi) - e)
+            if d:
+                c, s_ = math.cos(d), math.sin(d)
+                rot = np.array([[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]])
+                m[:3, :3] = m[:3, :3] @ rot
+                surface = m[:3, 3] - z * pl["offset"]
+                m[:3, 3] = surface + (m[:3, 2] / scale) * pl["offset"]
+        m[:3, :3] *= k_body
+        return m
+
+    def junction(self, placed, controls=None):
+        """The skin around the root: see :func:`tailrig.junction_spec` (the sacral rise, the
+        cleft kept, the cheeks wrapped onto the tail's flanks)."""
+        fillet = float(placed.params.get("fillet", self.fillet_default))
+        if fillet <= 0.0 or placed.model is None:
+            return None
+        return T.junction_spec(placed.name, placed.model.model(controls), placed.model.frame,
+                               fillet, self.fillet_height)
+
+    def layers(self, placed, controls=None):
+        return placed.model.layers(controls)
+
+    def layer_colors(self, placed, name, controls=None):
+        """The muscle sleeve is muscle belly on the proximal part and tendon beyond (1 -> 0)."""
+        return placed.model.model(controls).muscle_belly() if name == "muscle" else None
+
     def builder_args(self, build_values, controls):
+        """The arguments of the LEGACY tube builder (``appendages.make_tail``) for these parameters and
+        controls: the registry tail is built by :class:`tailrig.TailModel` instead (``tail_params``), this
+        stays for the API (a legacy ``Appendage('tail')`` and the print report's analytic law use that
+        builder)."""
         c = {k: float(controls.get(k, 0.0)) for k in ("curl", "droop", "lift", "sway")}
-        # a tail outside its ranges facets into a zigzag that overlaps itself (watertight, so the
-        # gate never sees it): the document and CLI path clamp as the panel does
         for k in c:
             lo, hi = self.control_range(k, None, build_values)
             c[k] = min(max(c[k], lo), hi)

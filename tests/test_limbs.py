@@ -837,7 +837,7 @@ def test_the_rounded_tip_removes_the_tube_tip_warning_at_medium(world, bodies):
             legacy_params.pop("tip_radius", None)
         face = K.PRESET_FACES["tail_base" if kind == "tail" else "temples"]
         app = A.Appendage(kind, anchor_face=face, up_hint=(0.0, 1.0, 0.0), params=legacy_params,
-                          offset=K.TAIL_SINK if kind == "tail" else K.HORN_SINK,
+                          offset=K.LEGACY_TAIL_SINK if kind == "tail" else K.HORN_SINK,   # the legacy engine needs the legacy sink
                           side="center" if kind == "tail" else "both")
         shells = pp.character_print_shells(base, v)
         mm = pp.figure_scale(shells + pp.appendage_print_shells([app], base, v), size="medium",

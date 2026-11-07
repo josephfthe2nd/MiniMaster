@@ -496,18 +496,23 @@ def _placed(world, *texts, **macro):
 
 @assets
 def test_each_kind_supplies_a_generic_junction_built_from_its_own_geometry(world):
+    from minimaster.character import kinds as kinds_mod
     c, v, placed = _placed(world, "tail", "horn", "wing", "harvest:preset=upper_arms")
     specs = {p.name: p.junction() for p in placed}
     assert all(s is not None and s.active for s in specs.values())
     tail = specs["tail-1"]
-    assert len(tail.points) >= 3 and np.all(np.diff(tail.radii) < 0)       # it tapers
-    # read off the tail's own rings: the first ring is where the loft starts (the frame's origin,
-    # sunk into the body) and its radius is the builder's law at t = 0 -- the minor axis of the
-    # ellipse (0.92 of the base radius) times the inscribed-circle factor of 16 facets and the hug
+    assert len(tail.points) >= 3 and np.all(np.diff(tail.radii) <= 1e-12)   # it tapers (the stem is constant)
+    assert tail.radii[-1] < tail.radii[0]
+    # read off the tail's own anatomy (tailrig.py): the chain starts at the buried end of the skin shell
+    # (the hidden stem, 1.75 R below the skin point, on the tail's own axis) and its radius is the skin's
+    # at the root: the flared semi-axis (1 + F = 1.35 R) times the inscribed-circle factor of 16 facets and
+    # the hug
     tail_placed = next(p for p in placed if p.name == "tail-1")
-    assert np.allclose(tail.points[0], tail_placed.matrix[:3, 3], atol=1e-9)
-    assert tail.radii[0] == pytest.approx(0.45 * 0.92 * np.cos(np.pi / 16) * J.HUG, rel=1e-6)
-    assert tail.base_radius == pytest.approx(0.45) and tail.width == pytest.approx(1.5)
+    stem = np.array([0.0, 0.0, -1.75 * 0.45, 1.0])      # in the tail's local frame (the matrix scales it)
+    assert np.allclose(tail.points[0], (tail_placed.matrix @ stem)[:3], atol=1e-9)
+    k0 = tail_placed.model.scale              # the body's height over the neutral body's: the tail follows it
+    assert tail.radii[0] == pytest.approx(0.45 * 1.35 * np.cos(np.pi / 16) * J.HUG * k0, rel=1e-6)
+    assert tail.base_radius == pytest.approx(0.45 * k0) and tail.width == pytest.approx(kinds_mod.TAIL_FILLET)
     # a tube is described from the sunk base outward: the first point is inside the body, the
     # last is clear of the skin
     base = world[0]
@@ -522,13 +527,16 @@ def test_each_kind_supplies_a_generic_junction_built_from_its_own_geometry(world
     assert np.allclose(np.asarray(l.points) * [-1, 1, 1], np.asarray(r.points), atol=1e-9)
     assert l.radii == pytest.approx(r.radii)
     assert np.allclose(np.asarray(l.mirrored().points), np.asarray(r.points), atol=1e-9)
-    assert specs["wing-1.l"].mounds and not specs["tail-1"].mounds          # the scapular mass
+    assert specs["wing-1.l"].mounds and specs["tail-1"].mounds and specs["tail-1"].keep   # scapular mass; sacral rise, cleft
     arm = specs["arm-1.l"]
     assert 0.1 < min(arm.radii) and max(arm.radii) < 0.5 * 2.6              # a limb, not the torso
-    # the spec comes from the geometry, not from the body: a taller body moves it, not reshapes it
+    # the spec comes from the geometry, not from the body: a taller body moves it, and a tail is sized by the
+    # body (``TailKind.body_scale``: the height over the neutral body's), so it scales it, not reshapes it
     c2, v2, placed2 = _placed(world, "tail", height=1.0)
     s2 = placed2[0].junction()
-    assert s2.radii == pytest.approx(tail.radii) and not np.allclose(s2.points, tail.points)
+    k = placed2[0].model.scale / k0
+    assert k > 1.3 and s2.radii == pytest.approx(np.asarray(tail.radii) * k)
+    assert not np.allclose(s2.points, tail.points)
 
 
 @assets
@@ -758,12 +766,12 @@ def test_cli_saves_and_restores_the_junction_switch(tmp_path):
 
 @assets
 def test_a_tail_that_only_touches_the_skin_is_welded_by_the_junction(tmp_path):
-    """With offset 0 a tail is tangent to the skin: a hairline weld and a blocked export
-    (``--no-junction``: tests/test_character_cli.py). The skin that flows up around its root
+    """A tail slid out of its stem (offset +1.0) is tangent to the skin: a hairline weld and a blocked
+    export (``--no-junction``: tests/test_character_cli.py). The skin that flows up around its root
     encloses part of it, so the weld is real."""
     from minimaster.__main__ import main
     out = tmp_path / "o.stl"
-    assert main(["character", "--add", "tail:offset=0", "-o", str(out), "--size", "medium"]) == 0
+    assert main(["character", "--add", "tail:offset=1.0", "-o", str(out), "--size", "medium"]) == 0
 
 
 @assets

@@ -138,7 +138,7 @@ The profile (2) is what makes the fillet; the remap (1) is what makes the cage r
 
 | kind | tube | `fillet` (W in root radii) | height | mound |
 | --- | --- | --- | --- | --- |
-| tail | the first rings of the loft from the sunk base to `1.5 x sink + 1.5 W`, the inscribed circle of each ring times 0.97 | 1.5 | 0.8 | none |
+| tail | superseded by the tail's own anatomy spec (`tailrig.junction_spec`, [anatomy_tail.md](anatomy_tail.md)): the flared skin tube from the stem to 2 R beyond the skin point, a sacral rise, two cheek mounds, a keep along the cleft | 1.5 | 1.0 | ridge up the back + cheeks, cleft kept |
 | horn | the same | 1.0 | 0.6 | none |
 | wing | shoulder -> elbow of the posed arm, radius = the arm bone's | 3.0 | 0.4 | scapular mass at the anchor: **radius 0.5, height 0.055 of the body's trunk radius** (`Mound(scale="trunk")`: 0.78 x 0.086 units on the neutral body, 0.47 x 0.05 on the child; S1: 1.74 x 0.22 units on everyone) |
 | extra limb | pivot -> elbow -> into the forearm, posed; radii = the neutral body's own limb profile (`kinds.LIMB_RADII`, fractions of the upper bone) narrowed like the cut end (`neck`), then **capped by the radius of the placed limb's own mesh** (`fit_radii_to_mesh`) | 1.0 | 0.7 | none |
@@ -473,6 +473,19 @@ check AFTER building; `printprep.character_print_shells` now leaves them out BEF
 skin with itself on the subdivided body too (`junction_quality(..., levels=(1, 2))`): a cage that does not cross
 itself can still make a subdivided body that does where two sheets of skin touch (the closed gluteal cleft), which is
 what `tight_gap` holds.
+
+## A kind that knows its anatomy: the tail
+
+The tail is the first kind to replace the generic default (`Kind.junction` returns its own spec, nothing else
+changes): [anatomy_tail.md](anatomy_tail.md). Its root is on the midline of the sacrum (a midline anchor: the bound
+quad paired with its mirror image), its shell is the envelope of a caudal vertebra chain and a muscle sleeve
+(`Placed.layers()`: `bone`, `muscle`, `skin`; `ecorche.py` draws them), and its spec is the tail's flared skin tube, a
+low sacral rise up the back, two cheek mounds and a row of `Keep` spheres down the gluteal cleft, which is what stops
+the two cleft walls from being pushed through each other (the generic spec added 12 self-intersecting pairs there).
+The spec uses only what is documented above (`mounds`, `keep`, `width`, `height`): a kind that needs more than a sphere
+of `Keep` can chain several, as the tail does.
+
+![the tail's skin flowing into its root](images/tail_before_after.png)
 
 ## Seen from the lab, and its limits
 

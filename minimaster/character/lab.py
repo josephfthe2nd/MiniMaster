@@ -1370,6 +1370,11 @@ class Engine:
             out = []
             for letter in self.side_letters(spec):
                 face, weights = pl["face"], pl["weights"]
+                if pl.get("midline"):             # a midline anchor: the quad paired with its mirror
+                    anchor = A.face_anchor(base, cage_q, face, weights, (0.0, 1.0, 0.0),
+                                           midline=True)
+                    out.append((letter, anchor.resolve(cage_v)[0]))
+                    continue
                 if letter == "r":
                     if weights is not None:
                         weights = A.mirror_anchor_weights(base, cage_q, face, weights)

@@ -191,6 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument("--junction", action="store_true",
                         help="switch the skin junction back on in a loaded character that "
                              "has it off; saved with --save-character")
+    p_char.add_argument("--layers", metavar="bone,muscle,skin",
+                        help="PNG only: draw the anatomical layers of the appendages that have "
+                             "them (a tail: its caudal vertebrae, muscle sleeve and skin) instead "
+                             "of the skin shell; e.g. --layers bone,muscle --cut")
+    p_char.add_argument("--cut", action="store_true",
+                        help="with --layers: cut the figure and the outer layers along the "
+                             "appendage's sagittal plane (look from azimuth 90) to see inside")
 
     # -- Blender backend (optional) --------------------------------------
 
@@ -544,11 +551,21 @@ def main(argv: list[str] | None = None) -> int:
         # STL, the printability report) uses ``body_verts``
         body_verts = doc.shaped_body(base, verts, placed)
         if out.suffix.lower() == ".png":
-            shells = portrait.character_shells(
-                base, body_verts, eye_color=args.eye_color, levels=args.subdivide)
-            # appendages come out in the MakeHuman frame (Y up); the renderer is Z up
-            shells += [portrait.Shell(p.mesh().transform(portrait.MH_TO_Z_UP), p.material)
-                       for p in placed]
+            if args.layers:
+                from .character import ecorche
+                try:
+                    shells = ecorche.layer_shells(
+                        base, body_verts, placed, args.layers, cut=args.cut,
+                        levels=args.subdivide, eye_color=args.eye_color)
+                except ValueError as exc:
+                    print(f"error: --layers: {exc}", file=sys.stderr)
+                    return 2
+            else:
+                shells = portrait.character_shells(
+                    base, body_verts, eye_color=args.eye_color, levels=args.subdivide)
+                # appendages come out in the MakeHuman frame (Y up); the renderer is Z up
+                shells += [portrait.Shell(p.mesh().transform(portrait.MH_TO_Z_UP), p.material)
+                           for p in placed]
             fit = None
             if args.face:
                 import numpy as _np

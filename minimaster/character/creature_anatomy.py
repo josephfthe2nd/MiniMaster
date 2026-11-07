@@ -70,6 +70,29 @@ class AnatomyEffect:
                 {k: v * load for k, v in self.macro.items()})
 
 
+@dataclass
+class TailEffect(AnatomyEffect):
+    """What a tail asks of the pelvis, as a function of its SIZE rather than a flat coefficient.
+
+    The default tail's base radius is 0.21 of the hip-joint span, a size the existing pelvis already
+    carries, so the pelvis hardly changes for it; only a thicker or longer tail needs a broader sacrum
+    and bigger caudal / gluteal muscles. ``sliders`` is the effect AT load 1 (the default tail, small),
+    ``slope`` how much each unit of load beyond 1 adds on top, ``caps`` the largest total: the numbers of
+    docs/anatomy_tail.md ("morph coupling"). Load is ``length / 6 x base_radius / 0.45 x scale``
+    (``TailKind.load``): R and L over their values on the neutral body."""
+
+    slope: dict = field(default_factory=dict)
+    caps: dict = field(default_factory=dict)
+
+    def scaled(self, load: float) -> tuple[dict, dict]:
+        out = {}
+        for key in set(self.sliders) | set(self.slope):
+            v = self.sliders.get(key, 0.0) * min(load, 1.0) + self.slope.get(key, 0.0) * max(load - 1.0, 0.0)
+            cap = self.caps.get(key)
+            out[key] = min(v, cap) if cap is not None else v
+        return out, {k: v * load for k, v in self.macro.items()}
+
+
 # load 1.0 == an appendage of "typical" size for its kind
 CONSEQUENCES: dict[str, AnatomyEffect] = {
     "wing": AnatomyEffect(
@@ -90,16 +113,26 @@ CONSEQUENCES: dict[str, AnatomyEffect] = {
         reason="pectoralis drives the downstroke off an enlarged sternum; "
                "latissimus and scapular muscles anchor the recovery stroke",
     ),
-    "tail": AnatomyEffect(
-        sliders={
-            "hip.hip_scale_horiz": 0.45,
-            "hip.hip_scale_depth": 0.35,
-            "buttocks.buttocks_volume": 0.55,
-            "torso.torso_muscle_dorsi": 0.30,
-            "measure.measure_hips_circ": 0.35,
+    "tail": TailEffect(
+        sliders={                       # at load 1: the default tail fits the pelvis it is on
+            "hip.hip_scale_horiz": 0.10,
+            "hip.hip_scale_depth": 0.05,
+            "buttocks.buttocks_volume": 0.15,
+            "torso.torso_muscle_dorsi": 0.10,
+            "measure.measure_hips_circ": 0.10,
         },
-        reason="caudal vertebrae continue the sacrum, so the pelvis broadens "
-               "and the caudal/gluteal muscles that swing the tail thicken",
+        slope={                         # per unit of load beyond 1
+            "hip.hip_scale_horiz": 0.20,
+            "hip.hip_scale_depth": 0.15,
+            "buttocks.buttocks_volume": 0.35,
+            "torso.torso_muscle_dorsi": 0.20,
+            "measure.measure_hips_circ": 0.15,
+        },
+        caps={"hip.hip_scale_horiz": 0.6, "hip.hip_scale_depth": 0.3, "buttocks.buttocks_volume": 0.6,
+              "torso.torso_muscle_dorsi": 0.5, "measure.measure_hips_circ": 0.5},
+        reason="caudal vertebrae continue the sacrum, so a tail bigger than the pelvis already carries "
+               "(a base radius of 0.21 of the hip span) needs a broader sacrum and thicker caudal / "
+               "gluteal muscles",
     ),
     "horn": AnatomyEffect(
         sliders={

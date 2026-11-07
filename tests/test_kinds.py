@@ -88,7 +88,9 @@ def test_loft_defaults_are_what_the_builders_really_use(kind_id, fn):
     # (``fillet`` is how the body's skin meets the root, junction.py; ``flare_length`` stays the
     # builders' own; ``ring_verts`` and ``flare`` have registry defaults that are rounder and
     # broader than the builders': 16 facets, so the skin's seam with the tube is a clean curve)
-    registry_only = {"tail": {"fillet"}, "horn": {"shape", "fillet"}}[kind_id]
+    # (the registry tail is the anatomical one, tailrig.py: it adds the caudal vertebra count and a
+    # dorsal ridge to the legacy builder's parameters, and its ``flare`` is the root trumpet, 0.35)
+    registry_only = {"tail": {"fillet", "vertebrae", "crest"}, "horn": {"shape", "fillet"}}[kind_id]
     builder_only = {"tail": {"lift", "sway", "flare_length"}, "horn": {"flare_length"}}[kind_id]
     assert set(kind.defaults()) - registry_only == set(real) - builder_only
     for key, value in kind.defaults().items():
@@ -705,7 +707,9 @@ def _embedded(appendage_mesh, body_mesh, n=60000, seed=0):
 def test_tails_and_horns_are_sunk_into_the_body(world):
     """Bug 7: at offset 0 a tail is tangent to the skin (3.8% of its volume inside on the
     reviewer's body, 0.5% here) and a horn touches it at a point -- a hairline weld. The
-    presets sink them: tail 22-28%, horn 58-70% of the volume embedded."""
+    presets sink them: horn 58-70% of the volume embedded; the tail's sink is its hidden bone
+    ROOT now (``tailrig.STEM_R`` = 1.75 base radii along its own axis), so the default tail is
+    36% embedded and ``offset`` slides it along that axis (+0.9 units: only touching)."""
     base, _, v0 = world
     body = quads_to_mesh(*base.body_cage(v0))
 
@@ -714,32 +718,32 @@ def test_tails_and_horns_are_sunk_into_the_body(world):
         spec.placement.update(placement)
         return [_embedded(p.mesh(), body) for p in K.instantiate_all([spec], base, v0)]
 
-    # the first version's pointed tail and horn (tip_radius 0)
+    # the first version's pointed horn (tip_radius 0)
     point = {"tip_radius": 0.0}
-    tail, = embedded("tail", point)
     horns = embedded("horn", point)
-    assert 0.22 <= tail <= 0.28, tail
     assert all(0.58 <= h <= 0.70 for h in horns), horns
-    assert embedded("tail", point, offset=0.0)[0] < 0.02 and max(embedded("horn", point,
-                                                                       offset=0.0)) < 0.01
-    # the default has a rounded, thicker end and untwisted rings: more volume outside, so a
-    # smaller share inside (measured 19.8% / 51%); the windows still reject the neighbouring
-    # sinks (-0.5: 16.5%, -0.7: 22.9% for the tail; -0.45: 44%, -0.65: 59% for the horn)
+    assert max(embedded("horn", point, offset=0.0)) < 0.01
+    # the default tail has a rounded tip and ends in the same stem: 36% embedded; the windows reject the
+    # neighbouring slides (+0.3: 24%, +0.6: 11%, +0.9: tangent)
     tail, = embedded("tail")
+    assert 0.33 <= tail <= 0.39, tail
+    assert 0.20 <= embedded("tail", offset=0.3)[0] <= 0.27
+    assert 0.08 <= embedded("tail", offset=0.6)[0] <= 0.14
+    assert embedded("tail", offset=0.9)[0] < 0.02
+    # (and deeper: the sink grows)
+    assert embedded("tail", offset=-0.3)[0] > tail
+    # the default horn has a rounded, thicker end and untwisted rings: more volume outside, so a
+    # smaller share inside (measured 51%); the windows still reject the neighbouring sinks
+    # (-0.45: 44%, -0.65: 59% for the horn)
     horns = embedded("horn")
-    assert 0.18 <= tail <= 0.215, tail
     assert all(0.49 <= h <= 0.55 for h in horns), horns
 
 
 @assets
 def test_tail_and_horn_presets_equal_the_legacy_placement_plus_the_sink(world):
     base, _, v0 = world
-    # (tip_radius 0 is the first version's pointed shape; the default is rounded)
-    tail = K.instantiate_all([K.new_spec("tail", params={"tip_radius": 0.0, "ring_verts": 10,
-                                                         "flare": 0.0})], base, v0)[0]
-    old = A.Appendage("tail", anchor_point=K.PRESET_POINTS["tail_base"],
-                      offset=K.TAIL_SINK).build(base, v0)[0][1]
-    assert np.array_equal(tail.mesh().vertices, old.vertices)
+    # The HORN preset is still the legacy engine's placement plus the sink, vertex for vertex
+    # (tip_radius 0 is the first version's pointed shape; the default is rounded).
     horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0, "ring_verts": 8,
                                                           "flare": 0.0})], base, v0)
     olds = A.Appendage("horn", anchor_point=K.PRESET_POINTS["temples"], mirror=True,
@@ -747,6 +751,16 @@ def test_tail_and_horn_presets_equal_the_legacy_placement_plus_the_sink(world):
     assert [p.name for p in horns] == ["horn-1.l", "horn-1.r"]
     for p, (_, m) in zip(horns, olds):
         assert np.array_equal(p.mesh().vertices, m.vertices)
+    # The TAIL preset is not: its premise (one quad on the side of a buttock, sunk 0.6 along that quad's
+    # normal) is what made the tail come out of the side of a buttock (tailrig.py, test_tail_anchor.py). What
+    # stays: the legacy engine still builds a tail on the preset's own point, and that point still snaps
+    # to the preset's quad (the registry binds that quad AND its mirror image: the midline).
+    tail = K.instantiate_all([K.new_spec("tail")], base, v0)[0]
+    old = A.Appendage("tail", anchor_point=K.PRESET_POINTS["tail_base"], offset=K.TAIL_SINK)
+    frame = old._anchor_frame(*base.body_cage(v0), 0, np.asarray(old.anchor_point), base)
+    cent = base.body_cage(v0)[0][base.body_cage(v0)[1][K.PRESET_FACES["tail_base"]]].mean(axis=0)
+    assert np.allclose(frame[:3, 3], cent, atol=1e-12)
+    assert np.linalg.norm(tail.anchor - cent) < 0.1 and tail.anchor[0] == 0.0
 
 
 @assets

@@ -211,6 +211,43 @@ def mirror_anchor_weights(base, body_q, face: int, weights) -> tuple:
     return tuple(out)
 
 
+def is_midline_face(base, face: int) -> bool:
+    """Does cage quad ``face`` have an edge ON the midline (two corners that are their own
+    mirror image)? Those are the quads a midline anchor (:func:`face_anchor` with
+    ``midline=True``) can be bound to."""
+    vmap = mirror_vertex_map(base)
+    _, quads = base.body_cage(None)
+    return sum(1 for c in quads[int(face)] if int(vmap[int(c)]) == int(c)) >= 2
+
+
+def face_anchor(base, body_q, face: int, weights, hint, *, idx: int = 0,
+                midline: bool = False) -> "SurfaceAnchor":
+    """The :class:`SurfaceAnchor` of cage quad ``face`` (the stored LEFT-hand quad; ``idx`` 1
+    is its mirror image) with per-corner ``weights`` (``None``: the centre). With ``midline``
+    the quad is paired with its mirror image (see :class:`SurfaceAnchor`): the origin and the
+    normal are on the sagittal plane whichever side the quad is stored on, and ``idx`` is
+    ignored (the pair is its own mirror)."""
+    face = int(face)
+    k = len(body_q[face])
+    if midline:
+        mf = int(mirror_face_map(base)[face])
+        w = (1.0 / k,) * k if weights is None else tuple(float(x) for x in weights)
+        wm = mirror_anchor_weights(base, body_q, face, w)
+        return SurfaceAnchor(corners=tuple(int(c) for c in body_q[face]), weights=w,
+                             up_hint=hint, mirror_corners=tuple(int(c) for c in body_q[mf]),
+                             mirror_weights=wm)
+    if idx == 1:
+        if base is None:
+            raise ValueError("placing the right-hand side of a face-anchored appendage "
+                             "needs the base mesh (for its mirror-face map)")
+        mf = int(mirror_face_map(base)[face])
+        w = (1.0 / k,) * k if weights is None else mirror_anchor_weights(base, body_q, face, weights)
+        return SurfaceAnchor(corners=tuple(int(c) for c in body_q[mf]), weights=tuple(w),
+                             up_hint=hint)
+    w = (1.0 / k,) * k if weights is None else tuple(float(x) for x in weights)
+    return SurfaceAnchor(corners=tuple(int(c) for c in body_q[face]), weights=w, up_hint=hint)
+
+
 # --------------------------------------------------------------------------
 # anchoring to the body surface
 
@@ -223,6 +260,12 @@ class SurfaceAnchor:
     weights: tuple            # barycentric weights over those corners
     up_hint: tuple[float, float, float] = (0.0, 0.0, 1.0)
     offset: float = 0.0          # push out along the surface normal
+    # A MIDLINE anchor (a tail on the spine): the bound face PAIRED with its mirror image. The
+    # origin is the mean of the two weighted points and the normal the sum of the two faces'
+    # normals, so both lie exactly on the sagittal plane of a symmetric body (a single quad's
+    # normal is yawed off it by ~10 degrees, which yawed the whole tail). ``None``: one face.
+    mirror_corners: tuple | None = None
+    mirror_weights: tuple | None = None
 
     @classmethod
     def from_point(cls, verts, faces, point, up_hint=(0.0, 0.0, 1.0)):
@@ -253,6 +296,11 @@ class SurfaceAnchor:
         # order, so mirror-image faces give exactly mirror-image normals.
         nxt = np.roll(p, -1, axis=0)
         n = np.cross(p, nxt).sum(axis=0)
+        if self.mirror_corners is not None:
+            pm = v[list(self.mirror_corners)]
+            wm = np.asarray(self.mirror_weights, dtype=np.float64)
+            origin = 0.5 * (origin + (wm[:, None] * pm).sum(axis=0))
+            n = n + np.cross(pm, np.roll(pm, -1, axis=0)).sum(axis=0)
         ln = np.linalg.norm(n)
         n = n / ln if ln > 1e-12 else np.array([0.0, 0.0, 1.0])
         up = np.asarray(self.up_hint, dtype=np.float64)
@@ -784,6 +832,10 @@ class Appendage:
     # weights over the quad's corners (default: its centre).
     anchor_face: int | None = None
     anchor_weights: tuple | None = None
+    # bind the anchor to the quad AND its mirror image (``face_anchor(midline=True)``): an
+    # appendage on the spine (a tail) is placed on the sagittal plane, with a symmetric normal.
+    # ``False`` keeps the single-quad anchor exactly.
+    anchor_midline: bool = False
     # ``root_point`` bound to the body the same way: the end of the wing's attachment line is
     # the centroid of cage quad ``root_face`` (mirrored for the right side) plus
     # ``root_offset`` (mirrored in x), so the waist target moves with the waist.
@@ -816,6 +868,9 @@ class Appendage:
         return int(mirror_face_map(base)[int(face)])
 
     def _face_anchor(self, body_v, body_q, idx, hint, base) -> SurfaceAnchor:
+        if self.anchor_midline:
+            return face_anchor(base, body_q, self.anchor_face, self.anchor_weights, hint,
+                               midline=True)
         f = self._face_for(self.anchor_face, idx, base)
         corners = tuple(int(c) for c in body_q[f])
         k = len(corners)
