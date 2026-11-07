@@ -90,11 +90,16 @@ def test_loft_defaults_are_what_the_builders_really_use(kind_id, fn):
     # broader than the builders': 16 facets, so the skin's seam with the tube is a clean curve)
     # (the registry tail is the anatomical one, tailrig.py: it adds the caudal vertebra count and a
     # dorsal ridge to the legacy builder's parameters, and its ``flare`` is the root trumpet, 0.35)
-    registry_only = {"tail": {"fillet", "vertebrae", "crest"}, "horn": {"shape", "fillet"}}[kind_id]
+    # (the registry horn is the anatomical one, hornrig.py: it adds the growth rings, the tilt from the
+    # skull and the skin boss to the legacy builder's parameters, and its numbers are the research's
+    # (a 1.6 long horn of base radius 0.17 on the neutral head, radius and length scale with the head),
+    # not the first version's 2.2 / 0.42: the legacy builder keeps its own defaults, test_limbs.py)
+    registry_only = {"tail": {"fillet", "vertebrae", "crest"}, "horn": {"shape", "fillet", "rings", "tilt", "boss"}}[kind_id]
     builder_only = {"tail": {"lift", "sway", "flare_length"}, "horn": {"flare_length"}}[kind_id]
     assert set(kind.defaults()) - registry_only == set(real) - builder_only
+    anatomical = {"horn": {"length", "base_radius", "segments", "curve", "twist", "turns"}}.get(kind_id, set())
     for key, value in kind.defaults().items():
-        if key in real and key not in ("tip_radius", "ring_verts", "flare"):
+        if key in real and key not in {"tip_radius", "ring_verts", "flare"} | anatomical:
             assert value == pytest.approx(real[key]), key
     assert kind.defaults()["ring_verts"] == 16 and real["ring_verts"] in (8, 10)
     assert real["tip_radius"] is None and kind.defaults()["tip_radius"] > 0     # blunt by default
@@ -715,16 +720,11 @@ def test_tails_and_horns_are_sunk_into_the_body(world):
     base, _, v0 = world
     body = quads_to_mesh(*base.body_cage(v0))
 
-    def embedded(kind, params=None, **placement):
+    def embedded(kind, params=None, n=60000, **placement):
         spec = K.new_spec(kind, params=params)
         spec.placement.update(placement)
-        return [_embedded(p.mesh(), body) for p in K.instantiate_all([spec], base, v0)]
+        return [_embedded(p.mesh(), body, n=n) for p in K.instantiate_all([spec], base, v0)]
 
-    # the first version's pointed horn (tip_radius 0)
-    point = {"tip_radius": 0.0}
-    horns = embedded("horn", point)
-    assert all(0.58 <= h <= 0.70 for h in horns), horns
-    assert max(embedded("horn", point, offset=0.0)) < 0.01
     # the default tail has a rounded tip and ends in the same stem: 36% embedded; the windows reject the
     # neighbouring slides (+0.3: 24%, +0.6: 11%, +0.9: tangent)
     tail, = embedded("tail")
@@ -734,25 +734,39 @@ def test_tails_and_horns_are_sunk_into_the_body(world):
     assert embedded("tail", offset=0.9)[0] < 0.02
     # (and deeper: the sink grows)
     assert embedded("tail", offset=-0.3)[0] > tail
-    # the default horn has a rounded, thicker end and untwisted rings: more volume outside, so a
-    # smaller share inside (measured 51%); the windows still reject the neighbouring sinks
-    # (-0.45: 44%, -0.65: 59% for the horn)
-    horns = embedded("horn")
-    assert all(0.49 <= h <= 0.55 for h in horns), horns
+    # The registry horn is the anatomical one (hornrig.py): the first version's horn was a 0.42 radius
+    # cone sunk 0.55 along the surface normal (65% of its volume inside; at offset 0 it only touched
+    # the skin). The new one is 0.17 across (the head's size sets it), 1.6 long, and its root is the
+    # sheath's foot, which follows the skin it comes out of down to a rounded bowl: 15.7% of its
+    # volume is inside the (unmoulded) body at the default, 18.5% when it is sunk 0.1 deeper along its
+    # axis (the junction's moulded skin encloses more: the printability report's weld is 32%). A horn can
+    # no longer only touch the skin: its foot always reaches it, so a slid-out horn stands on a taller foot
+    # (a pedicle) and is as buried as before (13.5% at +0.1).
+    horns = embedded("horn", n=30000)
+    assert all(0.11 <= h <= 0.20 for h in horns), horns
+    deeper = embedded("horn", n=30000, offset=-0.1)
+    assert all(d > h + 0.01 for d, h in zip(deeper, horns)), (deeper, horns)
 
 
 @assets
 def test_tail_and_horn_presets_equal_the_legacy_placement_plus_the_sink(world):
     base, _, v0 = world
-    # The HORN preset is still the legacy engine's placement plus the sink, vertex for vertex
-    # (tip_radius 0 is the first version's pointed shape; the default is rounded).
+    # The HORN preset is no longer the legacy engine's placement plus the sink (that premise, one
+    # quad on the parietal eminence behind the ear plane and a 0.42 cone sunk 0.55 along its normal, is
+    # what made the horns come out of the back of the skull as pipes: hornrig.py, test_horn_anatomy.py).
+    # What stays: the legacy engine still builds a horn on the old preset's point, the preset (and
+    # the quad) are still known, and a record that names them is read as the shape's own site on the
+    # frontal bone.
     horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0, "ring_verts": 8,
                                                           "flare": 0.0})], base, v0)
     olds = A.Appendage("horn", anchor_point=K.PRESET_POINTS["temples"], mirror=True,
                        offset=K.HORN_SINK).build(base, v0)
-    assert [p.name for p in horns] == ["horn-1.l", "horn-1.r"]
-    for p, (_, m) in zip(horns, olds):
-        assert np.array_equal(p.mesh().vertices, m.vertices)
+    assert [p.name for p in horns] == ["horn-1.l", "horn-1.r"] and len(olds) == 2
+    assert K.PRESET_FACES["temples"] == K.LEGACY_HORN_FACE != K.PRESET_FACES["horn_crown"]
+    cage = base.body_cage(v0)
+    for p in horns:                                 # the new horns are on the frontal bone, in front of the bregma
+        assert abs(p.anchor[0]) == pytest.approx(0.473, abs=0.01) and p.anchor[2] > 0.9
+        assert K.nearest_face(cage, np.abs(p.anchor)) == K.PRESET_FACES["horn_crown"]
     # The TAIL preset is not: its premise (one quad on the side of a buttock, sunk 0.6 along that quad's
     # normal) is what made the tail come out of the side of a buttock (tailrig.py, test_tail_anchor.py). What
     # stays: the legacy engine still builds a tail on the preset's own point, and that point still snaps

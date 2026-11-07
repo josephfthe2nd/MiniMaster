@@ -1497,6 +1497,9 @@ class TestExport:
     def test_check_without_a_path_writes_nothing_and_reports(self, lab, tmp_path):
         lab.doc.add_appendage("tail")
         lab.doc.add_appendage("horn")
+        lab.doc.add_appendage("horn")     # (the first version's default pair of horns intersected each other and
+                                          # made the warning; the anatomical pair is clear of each other, a
+                                          # second pair on the same site makes it)
         r = lab.export_stl(None, size="medium")
         assert r.path is None and not r.written and not r.blocked
         assert "printability" in r.report_text and "tail-1" in r.report_text

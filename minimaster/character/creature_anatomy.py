@@ -141,14 +141,22 @@ CONSEQUENCES: dict[str, AnatomyEffect] = {
                "gluteal muscles",
     ),
     "horn": AnatomyEffect(
+        # Measured on the base mesh (docs/anatomy_horn.md): forehead_nubian only SLIDES the forehead
+        # profile (0.21 mean, 0.001 along the normal: it moves the horn's site and the hairline, it
+        # builds no bone) and forehead_temple moves the horn's site by under 0.02, so neither makes a
+        # frontal boss (the boss is geometry: hornrig.py, the junction's tent). What a horn does load
+        # is the neck (splenius and semispinalis capitis, the upper trapezius carry its mass at the
+        # lever arm of the head): at the default pair (load 1) a little, and the frontal height
+        # (forehead_scale_vert, +0.07 along the normal) for the bone it grows from. The coefficients
+        # are for load 1 (``HornKind.load``: length x radius^2 over the default horn's, at most 2.5).
         sliders={
-            "neck.neck_scale_horiz": 0.55,
-            "neck.neck_scale_depth": 0.40,
-            "forehead.forehead_nubian": 0.35,
-            "forehead.forehead_temple": 0.30,
+            "neck.neck_scale_horiz": 0.15,
+            "neck.neck_scale_depth": 0.10,
+            "forehead.forehead_scale_vert": 0.10,
         },
         reason="a horn is a cornual process of the frontal bone; carrying it "
-               "loads the neck and thickens the brow it grows from",
+               "loads the neck (girth grows with the horn's mass and lever arm) and "
+               "raises the frontal bone it grows from",
     ),
     "harvest": AnatomyEffect(   # an extra limb pair
         sliders={

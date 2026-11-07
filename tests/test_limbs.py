@@ -17,6 +17,7 @@ import pytest
 
 from minimaster.__main__ import main
 from minimaster.character import appendages as A
+from minimaster.character import hornrig as HR
 from minimaster.character import kinds as K
 from minimaster.character import limbrig as L
 from minimaster.character import mhbase as mh
@@ -387,19 +388,22 @@ def test_a_horn_turns_into_a_helix_and_otherwise_stays_in_a_plane():
 
 def test_the_horn_shapes_have_their_own_defaults_through_when():
     horn = K.KINDS["horn"]
-    assert horn.param("shape").choices == ("curved", "ram", "spiral", "antelope")
+    # (the registry horn is the anatomical one, hornrig.py: a fifth shape, the skin-covered ossicone, and
+    # the research's numbers on the neutral head -- length 1.6 and base radius 0.17 for the default
+    # curved horn -- instead of the first version's 2.2 and 0.42; the legacy builder keeps its own)
+    assert horn.param("shape").choices == ("curved", "ram", "spiral", "antelope", "ossicone")
     base = horn.defaults()
-    assert base["shape"] == "curved" and (base["length"], base["curve"], base["segments"]) == (2.2, 1.1, 8)
+    assert base["shape"] == "curved" and (base["length"], base["curve"], base["segments"]) == (1.6, 1.31, 28)
     seen = set()
     for shape in horn.param("shape").choices:
         d = horn.defaults(shape=shape)
-        assert d["shape"] == shape and d["tip_radius"] == K.HORN_TIP
+        assert d["shape"] == shape and d["tip_radius"] == HR.SHAPES[shape]["tip"]
         seen.add((d["length"], d["base_radius"], d["curve"], d["twist"], d["turns"]))
         # every shape's own limits hold: a value is clamped to the range of its shape
         values, notes = horn.clean({"shape": shape, "length": 99.0})
         assert values["length"] == 12.0 and any("outside" in n for n in notes)
-    assert len(seen) == 4                                         # four different horns
-    assert horn.defaults(shape="spiral")["turns"] == 3.0 and horn.defaults()["turns"] == 0.0
+    assert len(seen) == 5                                         # five different horns
+    assert horn.defaults(shape="spiral")["turns"] == 2.25 and horn.defaults()["turns"] == 0.0
     bad, notes = horn.clean({"shape": "unicorn"})
     assert bad["shape"] == "curved" and any("one of" in n for n in notes)
 
@@ -776,18 +780,21 @@ def test_every_horn_shape_at_the_limits_of_its_parameters_is_watertight(world, s
 
 
 @assets
-def test_the_horn_shapes_are_four_different_horns_on_the_same_sunk_base(world):
+def test_the_horn_shapes_are_different_horns_and_the_ones_on_one_site_grow_from_the_same_place(world):
     base, _, v0 = world
-    tips, bases = [], []
+    tips, anchors = [], []
     for shape in ("curved", "ram", "spiral", "antelope"):
         p = K.instantiate_all([K.new_spec("horn", params={"shape": shape}, side="left",
                                           base=base)], base, v0)[0]
         m = p.mesh()
         tips.append(m.vertices[np.argmax(np.linalg.norm(m.vertices - p.anchor, axis=1))])
-        bases.append(m.vertices[:p.params["ring_verts"]].mean(axis=0))      # ring 0
-    assert np.allclose(bases, bases[0], atol=1e-9)                     # all grow from the same place
+        anchors.append(p.anchor)
+    # (the curved, spiral and antelope horns are bound to the crown of the frontal bone, the ram to the
+    # frontotemporal crest: hornrig.SHAPES[...]["site"])
+    assert np.allclose([anchors[0], anchors[2], anchors[3]], anchors[0], atol=1e-9)
+    assert np.linalg.norm(anchors[1] - anchors[0]) > 0.3
     for a, b in itertools.combinations(tips, 2):
-        assert np.linalg.norm(a - b) > 1.0
+        assert np.linalg.norm(a - b) > 0.5          # (the spiral's and the antelope's tips are 0.7 apart)
 
 
 def _tube_report(placed_list, base, v, kinds_params=None):
@@ -830,6 +837,21 @@ def test_the_rounded_tip_removes_the_tube_tip_warning_at_medium(world, bodies):
         params = {"tip_radius": tip} if tip is not None else {}
         spec = K.new_spec(kind, params=params, base=base)
         values, _ = K.KINDS[kind].clean(spec.params)
+        if kind == "horn":
+            # The registry horn is the anatomical one (hornrig.py): its size is the head's, so the tip is
+            # the same number of millimetres on every body at a given print height (the radius scales
+            # with the eye distance, the figure with the body's height), and a registry horn is a
+            # ready-made shell, which the report measures by thickness, not by the analytic tube law of
+            # the legacy builder. The tip's diameter is read off the model.
+            placed = K.instantiate_all([spec], base, v)
+            shells = pp.character_print_shells(base, v)
+            app_shells = [[(p.name, p.mesh())] for p in placed]
+            mm = pp.figure_scale(shells + pp.appendage_print_shells(app_shells), size="medium",
+                                 reference=pp.FIGURE_SHELLS)
+            tips = [2.0 * placed[0].repose.horn.model.p.tip * float(np.cbrt(abs(np.linalg.det(p.matrix[:3, :3])))) * mm
+                    for p in placed]
+            rep = pr.appendage_report(app_shells, base, v, mm)
+            return [], tips, rep
         legacy_params = {k: val for k, val in values.items()
                          if k in ("length", "base_radius", "tip_radius", "curve", "curl", "droop",
                                   "twist", "turns", "segments", "ring_verts")}
@@ -851,7 +873,7 @@ def test_the_rounded_tip_removes_the_tube_tip_warning_at_medium(world, bodies):
         for kind in ("tail", "horn"):
             before, tips_before, _ = warns(v, kind, 0.0)
             after, tips_after, rep = warns(v, kind, None)
-            assert before and max(tips_before) < 0.1, (name, kind, tips_before)
+            assert (before or kind == "horn") and max(tips_before) < 0.1, (name, kind, tips_before)
             assert not after and min(tips_after) >= 0.2, (name, kind, tips_after)
             assert rep.ok
 

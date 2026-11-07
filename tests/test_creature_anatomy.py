@@ -84,7 +84,10 @@ def test_tails_broaden_the_pelvis_not_the_chest():
 def test_horns_load_the_neck():
     s, _, _ = ca.consequences([A.Appendage("horn", mirror=True)])
     assert s["neck.neck_scale_horiz"] > 0
-    assert s["forehead.forehead_nubian"] > 0
+    # (forehead_nubian only slides the forehead profile and forehead_temple moves the site by < 0.02:
+    # neither builds the frontal bone a horn grows from; docs/anatomy_horn.md. The frontal height does.)
+    assert s["forehead.forehead_scale_vert"] > 0
+    assert "forehead.forehead_nubian" not in s and "forehead.forehead_temple" not in s
 
 
 def test_stacked_appendages_accumulate_but_stay_capped():

@@ -674,11 +674,14 @@ class TestFilesAndExport:
     def test_export_writes_the_stl_and_shows_warnings_amber(self, panel, tmp_path):
         panel.add(kind="tail")
         panel.add(kind="horn")
+        panel.add(kind="horn")        # (the first version's default pair of horns intersected each other
+                                      # and made the warning; the anatomical pair is clear of each other, so
+                                      # a second pair on the same site makes it)
         panel.export(tmp_path / "x.stl")
         assert panel.wait_task()
         assert (tmp_path / "x.stl").stat().st_size > 1000
         assert "wrote x.stl" in panel.status.cget("text")
-        assert panel.report.tag_ranges("warn")                  # the horns' intersection
+        assert panel.report.tag_ranges("warn")                  # the two pairs of horns intersect
         assert not panel.report.tag_ranges("block")
 
     def test_a_blocking_report_stops_the_export_until_exported_anyway(self, panel, tmp_path):

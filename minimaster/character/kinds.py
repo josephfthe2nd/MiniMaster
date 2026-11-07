@@ -43,6 +43,7 @@ import numpy as np
 
 from ..core.mesh import Mesh
 from . import appendages as A
+from . import hornrig as HR
 from . import junction as J
 from . import tailrig as T
 from .appendage_spec import SIDES, AppendageSpec, next_id, valid_id
@@ -944,42 +945,109 @@ class TailKind(_LoftKind):
         return None
 
 
-# the horn shapes: parameters per variant (the first row is the first version's horn).
-# Every variant is make_horn with other numbers; ``turns`` makes it a helix.
-HORN_SHAPES = {
-    #            length base_r  curve  twist  turns  segments ring_verts
-    "curved":   (2.2,   0.42,   1.1,   0.0,   0.0,   8,       HORN_RING_VERTS),   # short, curved: the default
-    "ram":      (4.2,   0.55,   2.1,   0.6,   0.0,  16,      HORN_RING_VERTS),   # thick, curling back
-    "spiral":   (4.5,   0.34,   1.2,   0.0,   3.0,  36,      HORN_RING_VERTS),   # a slender corkscrew
-    "antelope": (5.2,   0.28,   0.7,   0.0,   1.0,  28,      HORN_RING_VERTS),   # long, slim, a lyre
+# the horn shapes (hornrig.SHAPES): the parameters per variant, as the first versions' table rows
+# for the registry's own introspection (length, base_radius, curve, twist, turns, segments,
+# ring_verts); the registry horn is built by hornrig.HornModel
+HORN_SHAPES = {name: (row["length"], row["base_radius"], row["curve"], row["twist"], row["turns"],
+                      row["segments"], HORN_RING_VERTS) for name, row in HR.SHAPES.items()}
+
+# Where a horn sits on the head. The research (docs/anatomy_horn.md) found these quads on the
+# neutral cage: the crown of the frontal bone just in front of the coronal suture (bovid and
+# devil horns), the frontal eminence (short brow horns) and the frontotemporal crest above the
+# temporal fossa (a ram's). The first preset's point, ``temples``, is on the PARIETAL bone behind
+# the ear plane, 0.6 behind the bregma: records that still name it (or its quad) are read as the
+# shape's own site, see ``HornKind.resolve_placement``.
+HORN_PRESET_POINTS = {
+    "horn_crown": (0.473, 8.283, 0.980),
+    "horn_brow": (0.354, 8.215, 1.216),
+    "horn_temple_crest": (0.616, 8.011, 0.809),
 }
+HORN_PRESET_FACES = {"horn_crown": 11861, "horn_brow": 7314, "horn_temple_crest": 11860}
+PRESET_POINTS.update(HORN_PRESET_POINTS)
+PRESET_FACES.update(HORN_PRESET_FACES)
+LEGACY_HORN_FACE = PRESET_FACES["temples"]
+HORN_LOAD_REF = 1.6 * 0.17 ** 2       # length x radius^2 of the default horn: load 1
+HORN_LOAD_CAP = 2.5
 
 
 def _horn_param_specs() -> tuple:
-    out = [ParamSpec("shape", "Shape", "choice", "curved", choices=tuple(HORN_SHAPES),
-                     help="curved | ram | spiral | antelope: sets the defaults below")]
-    for key, label, col, lo, hi, step, typ in (
-            ("length", "Length", 0, 0.3, 12.0, 0.1, "float"),
-            ("base_radius", "Base radius", 1, 0.08, 1.5, 0.01, "float"),
-            ("segments", "Segments", 5, 3, 40, 1, "int"),
-            ("ring_verts", "Ring vertices", 6, 5, 24, 1, "int"),
-            ("curve", "Curve", 2, -3.0, 3.0, 0.01, "float"),
-            ("twist", "Twist", 3, -3.0, 3.0, 0.01, "float"),
-            ("turns", "Turns", 4, -4.0, 4.0, 0.05, "float")):
-        for shape, row in HORN_SHAPES.items():
-            out.append(ParamSpec(key, label, typ, row[col], lo, hi, step, when=("shape", (shape,))))
-    out.append(ParamSpec("tip_radius", "Tip radius", "float", HORN_TIP, 0.0, 0.3, 0.005,
-                         help="radius at the end, which is rounded; 0 = the first version's "
-                              "point (0.04 mm across at 32 mm)"))
-    out.append(flare_param(HORN_FLARE))
+    rows = HR.SHAPES
+    out = [ParamSpec("shape", "Shape", "choice", "curved", choices=tuple(rows),
+                     help="curved | ram | spiral | antelope | ossicone: sets the defaults below")]
+    for key, label, field, lo, hi, step, typ, help_ in (
+            ("length", "Length", "length", 0.3, 12.0, 0.1, "float",
+             "on the neutral head; scaled with the head (the eye distance)"),
+            ("base_radius", "Base radius", "base_radius", 0.05, 0.6, 0.005, "float",
+             "on the neutral head, scaled with it and never over 0.4 of the head's half-width"),
+            ("segments", "Segments", "segments", 3, 60, 1, "int", ""),
+            ("curve", "Curve", "curve", -4.0, 4.0, 0.01, "float",
+             "the total turn of the axis in radians is curve x length / 2: an equiangular spiral"),
+            ("twist", "Twist", "twist", -3.0, 3.0, 0.01, "float", "turns the bend plane"),
+            ("turns", "Turns", "turns", -4.0, 4.0, 0.05, "float", "a corkscrew's turns"),
+            ("tip_radius", "Tip radius", "tip", 0.0, 0.3, 0.005, "float",
+             "radius at the end, which is rounded (at least 0.012)"),
+            ("flare", "Root flare", "flare", 0.0, 1.5, 0.05, "float",
+             "the keratin sheath's broad base: 1 + flare times the radius at the skin, easing out "
+             "over about a third of a base radius"),
+            ("rings", "Growth rings", "rings", 0.0, 0.15, 0.005, "float",
+             "annulus amplitude in radii (a bovid sheath's transverse ridges); 0 = smooth"),
+            ("tilt", "Tilt from the skull", "tilt", 0.0, 60.0, 1.0, "float",
+             "degrees between the horn's axis and the skull's surface normal (15 to 45 reads as "
+             "grown out of the bone)")):
+        for shape, row in rows.items():
+            out.append(ParamSpec(key, label, typ, row[field], lo, hi, step, help=help_,
+                                 when=("shape", (shape,))))
+    out.append(ParamSpec("ring_verts", "Ring vertices", "int", HORN_RING_VERTS, 5, 24, 1))
+    out.append(ParamSpec("boss", "Skin boss", "float", 1.0, 0.0, 2.0, 0.05,
+                         help="how high the scalp is tented around the root, in tents (the base "
+                              "radius x 0.35, 0.5 for a ram); 0 = none"))
     out.append(fillet_param(HORN_FILLET))
     return tuple(out)
 
 
+class HornPlacement:
+    """What a placed horn carries beyond its mesh (kept on ``Placed.repose.horn``): the model
+    and site it was built from, the skin plan, the skin it comes out of and what the junction needs.
+    The layers under the skin (``bone``, ``muscle``) are built from it on demand, in the horn's local
+    frame, and carried to each side."""
+
+    def __init__(self, model, site, plan, keeps, cage, head, matrix, field, raw_field):
+        self.model, self.site, self.plan, self.keeps = model, site, plan, keeps
+        self.cage, self.head, self.matrix = cage, head, matrix
+        self.field, self.raw_field = field, raw_field
+        self._skin = None
+        self._layers = None
+
+    def skin(self):
+        """The sheath in the horn's local frame (the same on both sides: the right is the mirror)."""
+        if self._skin is None:
+            self._skin = self.model.skin(self.field)
+        return self._skin
+
+    def layers_local(self):
+        """``{name: Mesh}`` of the bone and the soft tissue in the horn's local frame."""
+        if self._layers is None:
+            sc = self.site.scale
+            rho_max = self.plan.tent_radius / sc * 1.05
+            bone = self.model.bone(self.field)
+            plate = HR.skull_plate(self.model, self.raw_field, rho_max, HR.SCALP_THICK / sc,
+                                   0.5 * HR.SCALP_THICK / sc)
+            soft = HR.soft_tissue(self.model, self.field, self.raw_field, rho_max,
+                                  HR.SKIN_THICK / sc, HR.SCALP_THICK / sc)
+            self._layers = {"bone": Mesh.merge([bone, plate]), "muscle": soft}
+        return self._layers
+
+
 class HornKind(_LoftKind):
-    """A horn: ``shape`` picks a variant (curved, ram, spiral, antelope), each the same
-    tapered tube swept along a bend; ``tip_radius`` rounds the end to a printable size.
-    No pose controls (a horn does not move)."""
+    """A horn: the frontal bone's cornual process, the scalp tented around it and the keratin
+    sheath over both (``hornrig.py``), placed on the frontal bone (the crown, the brow or the
+    frontotemporal crest) and sized by the head (``length`` and ``base_radius`` are the values on
+    the neutral head: the eye distance sets the scale, and the radius is never more than 0.40 of
+    the head's half-width, nor more than keeps the tent 0.075 off the midline). The axis is the skull's own surface normal tilted by ``tilt`` toward the
+    shape's lean, and the bend plane comes from the head's axes: neither is a hint in the record.
+    ``shape`` picks a variant (curved, ram, spiral, antelope, or an ossicone: skin-covered bone).
+    The curve is an equiangular spiral (``curve`` x length / 2 radians in total). No pose controls
+    (a horn does not move)."""
 
     id = "horn"
     label = "Horn"
@@ -988,22 +1056,136 @@ class HornKind(_LoftKind):
     fillet_default = HORN_FILLET
     fillet_height = HORN_FILLET_HEIGHT
     junction_owner = "head"
+    placement_keys = ("anchor", "scale", "roll", "offset")
     params = _horn_param_specs()
-    presets = {"temples": {"label": "Temples (up and out on the skull)", "face": "temples",
-                           "up_hint": (0.0, 1.0, 0.0), "offset": HORN_SINK, "side": "both"}}
+    presets = {
+        "horn_crown": {"label": "Crown (frontal bone, in front of the coronal suture)",
+                       "face": "horn_crown", "offset": HORN_SINK, "side": "both"},
+        "horn_brow": {"label": "Brow (the frontal eminence)", "face": "horn_brow",
+                      "offset": HORN_SINK, "side": "both"},
+        "horn_temple_crest": {"label": "Temple crest (frontotemporal, a ram's)",
+                              "face": "horn_temple_crest", "offset": HORN_SINK, "side": "both"},
+        # the first version's name: the parietal eminence behind the ear plane. Records that name it
+        # build at the shape's own site (resolve_placement)
+        "temples": {"label": "Temples (legacy: the shape's own site)",
+                    "face": "temples", "offset": HORN_SINK, "side": "both"},
+    }
+
+    def default_preset(self, values):
+        return HR.SHAPES.get(values.get("shape", "curved"), HR.SHAPES["curved"])["site"]
 
     def load(self, params):
-        return float(params.get("length", 2.2)) / 2.2
+        # the neck pays for the horn's mass and its lever arm: length x radius^2 over the default
+        # horn's (hornrig: ``load``), capped (a record that says 12 x 0.6 does not need a neck of 40)
+        return min(float(params.get("length", 1.6)) * float(params.get("base_radius", 0.17)) ** 2
+                   / HORN_LOAD_REF, HORN_LOAD_CAP)
 
     def material(self, params):
-        return material_named("bone")
+        return material_named(HR.SHAPES.get(params.get("shape", "curved"), HR.SHAPES["curved"])
+                              ["material"])
 
-    def builder_args(self, build_values, controls):
-        return dict(length=build_values["length"], base_radius=build_values["base_radius"],
-                    segments=build_values["segments"], ring_verts=build_values["ring_verts"],
-                    curve=build_values["curve"], twist=build_values["twist"],
-                    turns=build_values["turns"], tip_radius=_tip(build_values),
-                    flare=float(build_values.get("flare", 0.0)))
+    def draft_params(self, values):
+        # the growth rings make 3x the rings: a draft does without them
+        return {"rings": 0.0}
+
+    def resolve_placement(self, spec, values, ctx):
+        """The record's placement, with two readings of the first version's records:
+
+        * the first preset's quad (``temples``, 12116, on the parietal eminence behind the ear: the
+          horns came out of the back of the skull) is read as the shape's own site on the frontal
+          bone (``horn_crown``, the ram's ``horn_temple_crest``): the document is not rewritten;
+        * the first preset's sink (-0.55 along the surface normal, a constant 2.7 radii) is read as
+          "the anatomical root" (the sheath's foot follows the skin down to its bowl,
+          ``hornrig.HornModel.foot_rings``): ``offset`` is a slide of the horn's origin along its axis
+          now, 0 by default (any other value is that many units out, negative = deeper)."""
+        pl = super().resolve_placement(spec, values, ctx)
+        if pl["face"] == LEGACY_HORN_FACE and pl["weights"] is None:
+            site = HR.SHAPES.get(values.get("shape", "curved"), HR.SHAPES["curved"])["site"]
+            pl["face"] = PRESET_FACES[site]
+        if abs(pl["offset"] - HORN_SINK) < 1e-9:
+            pl["offset"] = 0.0
+        return pl
+
+    def horn_params(self, build_values) -> "HR.HornParams":
+        v = build_values
+        return HR.HornParams(
+            shape=v.get("shape", "curved"), length=float(v["length"]),
+            base_radius=float(v["base_radius"]), segments=int(v["segments"]),
+            ring_verts=int(v["ring_verts"]), curve=float(v["curve"]), twist=float(v["twist"]),
+            turns=float(v["turns"]), tip_radius=float(v["tip_radius"]),
+            flare=float(v.get("flare", 0.15)), rings=float(v.get("rings", 0.0)),
+            tilt=float(v["tilt"]))
+
+    def build(self, spec, side, values, build_values, pl, ctx):
+        app = self._engine(side, pl, params={})
+        head = HR.head_frame(ctx.base, ctx.verts, ctx.cage)
+        hp = self.horn_params(build_values)
+        names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
+        left = self._surface(ctx, app, 0)               # the stored quad's point (the left-hand one)
+        site = HR.horn_site(ctx.cage, head, left, hp, scale=pl["scale"], roll=pl["roll"])
+        boss = float(values.get("boss", 1.0))
+        hp = hp.with_(base_radius=site.base_radius, boss=boss)
+        model = HR.HornModel(hp)
+        ml = site.matrix(float(pl["offset"]))
+        inv = np.linalg.inv(ml)
+        plan = HR.skin_plan(hp, site, float(values.get("fillet", self.fillet_default)),
+                            self.fillet_height)
+        plan = HR.SkinPlan(plan.tent_radius, plan.tent_height * max(boss, 0.0), plan.fillet,
+                           plan.fillet_height)
+        k = head.k
+        keeps = []
+        for ctr, rad in ((head.ear, 0.30), (head.eye, 0.30)):
+            keeps.append(((inv @ np.append(ctr, 1.0))[:3], rad * k / site.scale))
+        # the skin the sheath comes out of: the cage as the junction moulds it around this horn (the
+        # foot of the sheath must lie on that surface, not on the unmoulded one)
+        cage = ctx.cage
+        jspec = (HR.junction_spec("horn", model, site, plan, keeps).transformed(ml)
+                 if plan.fillet > 0 else None)
+        if jspec is not None:
+            cage = HR.moulded_cage(ctx.base, ctx.verts, jspec)
+        n_local = inv[:3, :3] @ site.normal
+        reach = model.R * (1.0 + hp.flare) * 2.4 + 0.2
+        fallback = HR.PlaneField(n_local)
+        field = HR.SkinField(cage, ml, reach=reach, fallback=fallback)
+        raw_field = field if cage is ctx.cage else HR.SkinField(ctx.cage, ml, reach=reach,
+                                                                fallback=fallback)
+        flip = np.diag([-1.0, 1.0, 1.0, 1.0])
+        out = []
+        for idx in app._indices():
+            name, letter = names[idx]
+            m = ml if idx == 0 else flip @ ml
+            anchor = left if idx == 0 else flip[:3, :3] @ left
+            hpl = HornPlacement(model, site, plan, tuple(keeps), ctx.cage, head, m, field, raw_field)
+            mesh = hpl.skin().transform(m)
+
+            def repose(controls, mesh=mesh):
+                return mesh
+
+            repose.horn = hpl
+            out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
+                              anchor=anchor, matrix=m, params=dict(values), controls={},
+                              static=mesh, repose=repose,
+                              root_depth=float(model.p.sink * site.scale)))
+        return out
+
+    def junction(self, placed, controls=None):
+        """The skin around the root: the tube of the sheath's first part with the tent as a mound
+        along the horn's axis (``hornrig.junction_spec``), the ear and the eye kept."""
+        fillet = float(placed.params.get("fillet", self.fillet_default))
+        hpl = getattr(placed.repose, "horn", None)
+        if fillet <= 0.0 or hpl is None:
+            return None
+        spec = HR.junction_spec(placed.name, hpl.model, hpl.site, hpl.plan, hpl.keeps)
+        return spec.transformed(placed.matrix)
+
+    def layers(self, placed, controls=None):
+        hpl = getattr(placed.repose, "horn", None)
+        if hpl is None:
+            return {"skin": placed.mesh(controls)}
+        m = placed.matrix
+        loc = hpl.layers_local()
+        return {"bone": loc["bone"].transform(m), "muscle": loc["muscle"].transform(m),
+                "skin": placed.mesh(controls)}
 
 
 # -- the wing ----------------------------------------------------------------------------
