@@ -88,6 +88,34 @@ deliberate setting is never silently overwritten, and clamps the result to each
 slider's range. Unknown keys are dropped when a catalog is supplied, so a
 character built against a different asset set still loads.
 
+## The derived layer: what a document stores
+
+`apply_to` **bakes** the adaptation into a Character: it adds to the user's sliders in
+place, a second call adds it again (pectoral 0.85 after one call, 1.00 after a second), and
+nothing undoes it, so a saved document that had been through it could never get its own
+body back. A character document therefore never uses it. It stores the user's own slider
+values, the appendage records, and two numbers (`anatomy = {"enabled": true, "cap": 1.0}`);
+the body it is printed with is recomputed from them every time:
+
+```python
+sliders, macro, notes = character.effective(catalog)       # user values + enabled appendages
+weights = character.effective_target_weights(catalog)      # what the CLI builds the body from
+delta, notes = ca.anatomy_delta(character.appendages)      # just the amounts; nothing is touched
+```
+
+`effective = clamp(user + Σ consequences of the enabled appendages)`, clamped on the sum
+(sliders to ±1, macros to 0..1; the sum of the appendages' own contributions to ±`cap`
+first). It is a pure function of the document, so applying twice is applying once, removing
+or switching off an appendage restores the body exactly, and save → load → build changes
+nothing; for the same appendages it yields the same numbers `apply_to` would (a test pins
+that), minus the damage. `character.target_weights()` is still the body the user dialled in.
+
+A *record* asks its **kind** for its size and whether a pair is typical (`Kind.load(params)`,
+`Kind.paired` in `minimaster.character.kinds`; the kind ids `wing`, `tail`, `horn`, `harvest`
+are the keys of `CONSEQUENCES` and `PAIRED_KINDS`, which still serve the older
+`Appendage` objects). Only the placement keys a kind honours scale its load: a harvested
+limb ignores `scale`, so it no longer costs anatomy either.
+
 ## The honest physics
 
 `flight_report()` refuses to pretend. It takes the body volume straight from the

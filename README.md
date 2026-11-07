@@ -243,12 +243,90 @@ printable and still responds to every other control.
 
 ![plain vs. adapted](docs/images/anatomy_before_after.png)
 
+**Printing them.** Appendages are Y-up MakeHuman objects; the print shells are Z-up. One function
+moves them across and keeps the size contract: `"medium"` means a 32 mm **body**, the wings ride along
+(a spread pair stands ~38 mm tall and overhangs a 25 mm base, which the report states):
+
+```python
+shells = printprep.character_print_shells(base, verts)
+shells += printprep.appendage_print_shells(appendages, base, verts)      # Z-up, named wing_l, tail, ...
+mesh, rep = printprep.assemble_character(shells, size="medium",
+                                         reference=printprep.FIGURE_SHELLS, fit_base=True)
+report = print_report.appendage_report(appendages, base, verts, rep.scale, assembly=rep)
+print(report.as_text())                  # BLOCKED / OK, per appendage, in mm at this size
+```
+
+The watertight gate only checks topology, so it passes a tail that merely touches the skin, three feathers
+hanging in the air and a sheet thinner than the printer resolves. The report measures them: **blocking**
+are a shell that is open or inside-out (every one is listed), a part not overlap-connected to the body, a
+root not buried in it (the default tail and horns touch the skin: 2% and 0.2% of their volume), more than
+30% of an appendage's area under 0.2 mm at this size (a bat wing at "tiny": 71%), or the same share of a
+tail's length; **warnings** are a thin or fragile sheet, a folded membrane's pleats, a tail tip below what
+resolves, two appendages that intersect, a base the wings overhang. The thickness floor
+(`min_thickness_mm=0.3`) thickens wings for a small print. It assumes the slicer unions overlapping shells.
+
 `flight_report()` gives the honest verdict alongside it, using the character's
 own mesh volume for mass: powered flight tops out near 2.2 kg in bats and even
 soaring scales out around 41 kg, so a human-scale flyer is off the chart by
 ~1.7×. It reports that; it does not stop you. See
 [docs/creature_anatomy.md](docs/creature_anatomy.md) for the sources behind
 every coefficient.
+
+**Rendering speed.** `render_portrait` (the CLI and every figure above) runs on a
+vectorised visibility-buffer rasteriser instead of a per-triangle Python loop:
+the same pixels, 15–20× faster (a body with two bat wings in 0.065 s, with two
+feathered wings in 0.28 s, at 320×480), with the view-independent shading terms
+cached per shell, a `check=` hook so a worker can abort a render, an id-buffer
+`pick()`, and draft-tier proxies for interactive previews. The old loop survives
+in `tests/test_raster.py` as the golden reference; numpy stays at ≥ 1.24. See
+[docs/renderer.md](docs/renderer.md).
+
+#### Appendages in a character document
+
+The realistic character is a document (`.mmchar`), and appendages are part of it. A
+record is plain data — an `id`, a `kind` (`wing`, `tail`, `horn`, `harvest` = an extra
+arm or leg cut from the character's own body), a `side` (`center`, `left`, `right`,
+`both`), the kind's parameters, its pose controls and its placement — so a saved
+character stays cheap to load (no numpy, no wing code) and can be edited by a UI, a
+script or by hand:
+
+```bash
+minimaster character --list-kinds                         # kinds, parameters, ranges, presets
+minimaster character -o winged.png --save-character winged.mmchar \
+    --add wing:style=feathered,span=15 --add tail:length=8 --add horn
+minimaster character --character winged.mmchar -o again.png \
+    --remove horn-1 --add horn:side=left --pose wing-1:fold=0.6 --pose wing-1.r:raise_=20
+```
+
+```python
+doc = Character.load("winged.mmchar")
+placed = doc.instantiate_appendages(base, verts, lib)     # [Placed]: wing-1.l, wing-1.r, tail-1, ...
+placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ranges of THIS placed wing
+```
+
+* **Placement follows the body.** A record stores the body *quad* it is bound to (a
+  preset such as `shoulder_blades`, `tail_base`, `temples`, `shoulder_socket`, or
+  `at=X/Y/Z`), not a point in space, so on a taller, smaller, younger or heavier body
+  the wing is still on the shoulder blade (the old world-point anchors put a wing 7.7
+  units below it on a tall body). The right-hand side is the exact mirror of the stored
+  left-hand quad, so a single right wing equals the right wing of a pair, bit for bit, and
+  several wings can coexist (`wing-1.l`, `wing-2.r`, ... name their shells and joints).
+  The membrane wing's attachment line aims at a waist quad, so it runs to the waist on
+  every body. Tails and horns are sunk into the body by default (tail ~25%, horn ~65% of
+  their volume embedded, instead of a hairline weld).
+* **Body adaptation is derived, never saved.** The adapted body (broader chest for
+  wings, ...) is `your sliders + what the enabled appendages ask for`, recomputed every
+  time (`Character.effective()`); the document stores only the switch and the cap
+  (`--no-anatomy`, `--anatomy-cap`). Removing an appendage gives the original body back
+  exactly; saving and loading change nothing.
+* **Versioned and forward compatible.** A character with no appendages is still written
+  as version 1, byte for byte; version 2 is written only when appendages exist. Unknown
+  kinds, parameters, controls, styles and top-level keys are kept in the file and skipped
+  with a warning when something is built from them. (A program older than this change
+  loads a version 2 file and its body, but would drop the appendages if it saved it.)
+
+The STL export of appendages is part of the print integration; today a character with
+appendages renders to PNG and exports its body to STL.
 
 ## Licensing
 

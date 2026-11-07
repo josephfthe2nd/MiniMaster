@@ -1,0 +1,27 @@
+{
+  "asymmetry": {
+    "cheek.cheek_bones": 0.15
+  },
+  "format": "minimaster-character",
+  "macro": {
+    "african": 0.1,
+    "age": 0.3,
+    "asian": 0.2,
+    "caucasian": 0.7,
+    "gender": 0.8,
+    "height": 0.7,
+    "muscle": 0.6,
+    "weight": 0.45
+  },
+  "materials": {
+    "eye_color": "#3c6e47",
+    "skin": "SKIN"
+  },
+  "name": "golden-v1",
+  "sliders": {
+    "cheek.cheek_bones": -0.25,
+    "chin.chin_prognathism": 0.4,
+    "nose.nose_curve": 0.8
+  },
+  "version": 1
+}

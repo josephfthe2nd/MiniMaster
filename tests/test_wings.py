@@ -855,15 +855,30 @@ class TestOnRealBody:
 
     @pytest.mark.parametrize("style", STYLES)
     def test_a_winged_character_exports_through_the_print_gate(self, style):
+        """The old version appended Y-up wings to Z-up shells and asserted only that every
+        shell was closed (0% of the wing was inside the body, the wings lay flat behind the
+        figure, and it passed). Now: through the frame seam, sized by the figure, and the wing
+        root must sit on the body in the frame of the STL."""
+        from minimaster.character import print_report as pr
         from minimaster.character import printprep as pp
         base, lib = mh.load()
         v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
-        shells = pp.character_print_shells(base, v)
-        shells += self._app(style).build(base, v)
-        mesh, rep = pp.assemble_character(shells, size="medium")
+        app = self._app(style)
+        body = pp.character_print_shells(base, v)
+        shells = body + pp.appendage_print_shells([app], base, v)
+        mesh, rep = pp.assemble_character(shells, size="medium", reference=pp.FIGURE_SHELLS)
         assert rep.watertight
         assert rep.shells >= 6
         assert len(mesh.faces) > 0
+        assert max(pr.root_gaps(rep.placed_shells).values()) <= 0.1      # mm: the wing is on the back
+        # the figure, not the wing tips, is 32 mm
+        assert np.ptp(dict(rep.placed_shells)["body"].vertices[:, 2]) == pytest.approx(32.0, abs=0.01)
+        # and the same wings left in MakeHuman's Y-up frame (what this test used to export) are
+        # several millimetres off the body, which the gate cannot see and this check does
+        wrong = pp.assemble_character(body + app.build(base, v), size="medium",
+                                      reference=pp.FIGURE_SHELLS)[1]
+        assert wrong.watertight
+        assert min(pr.root_gaps(wrong.placed_shells).values()) > 1.0
 
 
 def test_the_hand_panel_has_visible_camber(spread):

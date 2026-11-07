@@ -1,6 +1,6 @@
 # Dynamic appendages — design (v2, after independent review)
 
-Status: **plan; implementation starts with tracks T1 and T2 below.** Goal: the user adds, removes
+Status: **T1a (document, placement, anatomy layer, kind registry, CLI) and T1b (print integration, printability report) are implemented** — see section 6; tracks T2 (renderer, see `docs/renderer.md`), T3 and T4 follow. Goal: the user adds, removes
 and tunes appendages (wings, tails, horns, extra arms, anything later) on a realistic character in
 the running app, sees the result, and prints it.
 
@@ -106,6 +106,9 @@ vertex-clustered body proxy (~4k tris, 0.3 ms per morph update) and cluster prox
 counter, `check()` between shells and buckets, frozen spec in, bytes out, main thread polls a queue with
 `after(15)`; debounce 150 ms). Display: draft at half resolution when the pane is large. The numpy floor
 is either raised to ≥ 1.25 or the shading uses `bincount` (same numbers on both).
+**Status (T2, implemented):** steps 1–2 plus the draft-tier building blocks are in
+`raster.py`, `draft.py`, `portrait.py` and `shading.py`; the floor stays at 1.24 with `bincount`
+(bit-identical) -- see [renderer.md](renderer.md).
 
 **D8. Printability is defined by measurements, not by the gate.** The watertight gate is topological
 and blind to placement, connection, scale and thickness. Per-appendage report (computed per spec and
@@ -151,3 +154,86 @@ three.
 - Clothes are a separate subsystem; the registry must not assume an appendage is a limb.
 - What was not measured: native Windows/macOS Tk, HiDPI, the dragon style's proxy timings (same class
   as the bat), numpy 1.24 for the Tk paths.
+
+## 6. Status: T1a (document model, placement, anatomy layer, registry, CLI)
+
+Implemented in `minimaster/character/appendage_spec.py` (pure data), `kinds.py` (registry),
+additive fields on `appendages.Appendage`, `creature_anatomy.py` (derived layer) and the
+`character` CLI command. Every claim below has a test (`tests/test_character_document.py`,
+`test_kinds.py`, `test_creature_anatomy.py`, `test_character_cli.py`).
+
+| Item | State |
+| --- | --- |
+| D2 pure-data `AppendageSpec`, `.mmchar` v2 | done. `sliders.py` imports no numpy/wings (subprocess test); v2 only when appendages exist; `Character()` is byte-identical to v1; golden v1 fixture written by bcdae81; unknown kinds/params/controls/styles/keys round-trip; a v2 file loads in the old reader. **Limit:** an old reader that re-saves a v2 file drops the appendages (it cannot know them). |
+| D3 registry | done for `wing` (membrane/dragon/feathered; scalar params, `when`, tertials >= 1), `tail`, `horn`, `harvest` (`limb` = arm/leg). `Kind.instantiate(spec, ctx) -> [Placed]`, `control_range`, presets, `draft_params`, `load`/`paired`. `Appendage` stays the engine; ids unchanged. Property test: every `ParamSpec` at lo and hi builds a watertight solid (96 cases). |
+| D4 placement follows the body | done: `anchor_face` (+ weights), `root_face`, `side`, exact mirror-face map; presets are quad ids on the neutral body (guard test recomputes them); v1 world points convert once. Wing shoulder vs scapula marker: 7.7 -> 1.7 units on a tall body. `placement.aim` overrides the style's default root. |
+| Sinks | tail -0.6 (25% of the volume inside), horn -0.55 (65%), harvest -0.5 along the limb axis (exactly `offset` x the unit limb axis). The harvested limb still overlaps the original arm heavily: T3 owns making extra limbs sensible. |
+| Bug 5 (l-/r- swap) | fixed: `appendages.mirror_joint_name`, tested over all 55 markers and a mirrored leg harvest. |
+| D6 anatomy | done: `Character.effective()`, `creature_anatomy.anatomy_delta/effective_values`; `apply_to` kept for the older tools (documented as baking). |
+| CLI | `--add KIND[:k=v,...]`, `--remove ID`, `--pose ID[.l\|.r]:k=v`, `--list-kinds`, `--no-anatomy`, `--anatomy-cap`; PNG shows the appendages. STL still exports the body only (T1b). |
+
+The seam for T1b: `Character.instantiate_appendages(base, verts, lib=None)` returns `Placed`
+objects (name `wing-1.l`, side, `anchor` = where it joins the body, `matrix`, `rig` for wings,
+`mesh(controls)` in the MakeHuman frame, `joint_prefix`, `material`); the Z-up conversion is
+`portrait.MH_TO_Z_UP`. Nothing here touches `printprep.py`.
+
+## 6b. T1b status: print integration and the printability report (implemented)
+
+Files: `printprep.py` (frame seam, `reference=`, floors), `print_report.py` (the report), `PlacedWing.piece_meshes`
+(`wingrig.py`), the alula mount (`wings.py`), tests `test_print_appendages.py`, `test_print_report.py` and the three
+formerly vacuous export tests. Everything works against the existing `Appendage` API (`build` / `build_rigs`, `kind`,
+`params`, `scale`) or ready-made `[(name, Mesh)]` lists, so T1a's registry can call it unchanged.
+
+| Bug / decision | State |
+| --- | --- |
+| **D5 frame seam** | `appendage_print_shells(appendages, base, verts, split_pieces=False)` returns Z-up named shells (`MH_TO_Z_UP`, a proper rotation); a wing split into pieces is `wing_l/primary05`; the mirrored side's winding comes from `PlacedWing.piece_meshes(pose)`, which slices the placed mesh, so the flip lives only in `Mesh.transform`. Duplicate shell names raise. |
+| **Bug 2** (frame untested) | The three export tests now go through the seam, size by the figure and assert `print_report.root_gaps(rep.placed_shells) <= 0.1 mm` (0.0 for every correct appendage; **1.8-13 mm** when the same appendages are left Y-up, which the gate cannot see). Each fails when the conversion is removed. |
+| **Bug 9** (size/base set by wing tips) | `assemble_character(shells, ..., reference=printprep.FIGURE_SHELLS, fit_base=False)`: height, standing plane, XY centring and the default base come from body/eyes/teeth. **Size contract adopted: "medium / 32 mm" is the BODY**; a spread pair stands ~38.7 mm tall and reaches ~11 mm past the 12.5 mm base (`PrintReport.overhang_mm`, a note; `fit_base=True` widens the base). Without `reference` nothing changes. `PrintReport.volume_mm3` is now `shell_volume_mm3` ("sum over shells, overlaps counted twice", base excluded; `volume_mm3` stays as an alias; note `check=False` used to include the base); a union volume needs voxelisation and is not attempted. |
+| **Bug 10** (no thickness floor) | `apply_thickness_floor(appendages, mm_per_unit, floor_mm=0.3)` / `appendage_print_shells(..., min_thickness_mm=, mm_per_unit=, adjustments=[])`: `thickness = max(thickness, floor_mm / (mm_per_unit * scale))` on wings, off by default, the change named in the report. At "tiny" it takes the bat from 73% of its area under 0.2 mm to 1.5% (a warning remains: it is still under 0.3 mm). Tails and horns have no thickness to raise; their thin ends are reported. |
+| **Bug 8** (alula island) | `_alula_mount`: a rod, the alula's thumb, from inside the hand through the three roots, rigid with `thumb_cmc`. The spread feathered wing is one overlap-connected component in the spread and in every preset pose; nothing the alula tests pin moved. |
+| **Bug 7** (check only) | The report blocks today's tail (2.1-2.4% of its volume in the body) and horn (0.1-0.2%). Placement is unchanged: T1a adds the sinks (a tail sunk 0.3 / 0.6 is 14% / 27%, a horn 40% / 70%). |
+
+**The report** (`print_report.appendage_report`, a `PrintabilityReport` with `blocking`, `warnings`, `as_text()`,
+`as_dict()`), thresholds in `PrintRules`:
+
+* **Blocking.** Any shell open / non-manifold / degenerate / inside-out, every one listed (`check_shells` now raises a
+  `PrintError` with all of them in `.failures`). A part not overlap-connected to the body that is at least 2% of its
+  appendage's volume or 2 mm3 (three alula feathers are 0.7% and 1.5 mm3 and would only warn). The best root piece buried
+  less than **5% of its volume** (named root pieces: bat arm / propatagium / membrane, angel arm / hand; the whole shell of
+  a tail, horn or arm); 5-8% warns. More than **30% of an appendage's area under 0.2 mm** at this size; more than 25% of a
+  tube's length under 0.2 mm.
+* **Warning.** 20% of the area under 0.3 mm (a bat or angel at "small": 64-71%); posed membranes, where pleats lay sheet
+  on sheet, with more than 10% under 0.2 mm (folded bat 23%); a tube with 15% of its length under 0.4 mm, or a tip below
+  0.2 mm; two appendages that intersect; below the feet; a base the appendages overhang. An info line names the floor
+  changes, and every report says it *assumes the slicer unions overlapping shells*.
+* **Measured how.** Thickness: an inward ray from face centroids (not per-vertex normals, which read 0.000 at every rim),
+  200 rays per shell at van der Corput quantiles of the area, area-weighted p5 and shares under 0.2 / 0.3 mm, in scene units
+  on the unposed shape and rescaled by mm/unit (bat 0.4% and angel 1.6% under 0.2 mm at medium, as the reviewer measured by
+  the full probe); a posed re-probe only for pieces the pose stretches. Connection: union-find over shells with a
+  vertex-in-shell parity test cropped to the query box. Root weld: Monte Carlo (Halton) share of the root piece's volume in
+  the body. Tail/horn diameter: analytic from the builder's radius law, checked against the built rings by a test.
+* **Cost.** Bat pair + tail 0.4 s uncached (folded 0.9 s); angel pair 2.0 s (folded 2.7 s); a size change or new thresholds ~0.01-0.07 s with
+  the caller's `cache` dict (thickness once per appendage in scene units, connectivity once per appendage and body).
+
+Decisions that depart from the text above, and why:
+
+* **Root weld is a share of the root piece's VOLUME, 5% / 8%.** The first reading, share of vertices, mixes the two numbers
+  in this document (the tail's 3.8% was a volume, the wing arm's 21-25% a vertex share): by volume the default wing arm is
+  11-15% and the sunk tails clear 5% easily. The vertex share undersells a sunk tail (10-14% at -0.45 / -0.6 where it is 21-27%
+  by volume). **Measured across five bodies and every pose, the default wings are only firmly welded on the reference body in
+  the spread pose**: on a short (child-like) body the spread bat arm is 2.6% and the angel 3.3% (blocked), and a half-folded or
+  upstroke angel is 0-7% on every body (0.4% / 1.9% on the reference body). That is bug 1 (placement does not follow the morphs), T1a's; the report is the
+  instrument that will show it fixed.
+* **Tube tips warn, a thin tube blocks.** A taper reaches zero at every resolution, so "tip under the printable minimum" as a
+  block fails every default tail at every size and makes T1's `--add tail` unreachable even once sunk. A tail/horn blocks
+  when more than 25% of its length is under 0.2 mm (a horn at "tiny": 33%, at "small": 21%, a warning; a tail at "tiny":
+  18%); the sub-resolution tip (0.07 mm tail, 0.04 mm horn at medium) is a warning.
+* **A folded membrane's thickness is a warning, as written**, but it is only a probe artefact in part: the pleated layers are
+  fused by the union. It is kept as a warning with that wording.
+* **Appendage-appendage overlap** is reported for shells whose boxes meet (on the anatomy-adapted body: a default angel's two tertials
+  against the tail, a half-folded angel's nine pieces); it never blocks.
+
+Open after T1b: a real-slicer check of the union assumption; the base auto-widen is opt-in (`fit_base`), because a 50 mm
+base under a 32 mm figure is not what a tabletop user expects; the report's `levels` argument builds the body as the print
+will (a subdivided body shifts the tail's share from ~3% to ~2%); harvested arms are blocked by the root rule until T1a/T3 place
+them body-relative and sink them.

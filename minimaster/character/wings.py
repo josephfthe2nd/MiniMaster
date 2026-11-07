@@ -1631,6 +1631,7 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
     step = 0.05 * thickness
     parts: list[Piece] = []
     bone_of: dict[tuple, str] = {}
+    alula_roots: list[np.ndarray] = []
     for fe in layout:
         root_pt = fe["root"].copy()
         root_pt[1] = height(root_pt[0]) - fe["layer"] * step
@@ -1648,10 +1649,13 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
         parts.append(Piece(f"{fe['row']}{fe['i']:02d}",
                            _place_feather(blade, root_pt, fe["yaw"], fe["roll"]), bone=tj))
         bone_of[(fe["row"], fe["i"])] = tj
+        if fe["row"] == "alula":
+            alula_roots.append(root_pt.copy())
     if coverts:
         parts += _coverts(sk, layout, bone_of, thickness, height, step, underwing)
     if bones:
         parts += _feather_bones(sk, height, s)
+        parts.append(_alula_mount(sk, alula_roots, height, s))
     return sk, parts
 
 
@@ -1903,6 +1907,24 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
         arm_row("under_marginal0_", 0, 0.12, 28, 1.0, 0.0, 0.95, 8.0, True, 0.5,
                 nose=True, pitch=52.0, curl=-0.25)
     return out
+
+
+def _alula_mount(sk, roots, height, s) -> Piece:
+    """The alula's digit: a short rod from inside the hand at the wrist up through the three
+    alula roots. The alula is stacked on top of the primary bases (each feather a clear step
+    above the one below, so they never z-fight), which lifts its roots 0.03-0.06 units clear of
+    the hand tube and every covert: three feathers hanging in the air that the watertight gate
+    cannot see and a slicer prints as a floating island. The rod is the thumb that carries
+    them, rigid with the thumb joint like the feathers, and it ends in the hand at the wrist,
+    which is the thumb joint's own pivot, so it stays welded to the hand when the thumb
+    swings (a fold)."""
+    J = sk.joints
+    p0 = J["wrist"] + 0.10 * (J["d3_tip"] - J["wrist"])        # inside the hand tube
+    p0 = np.array([p0[0], height(p0[0]) - 0.04 * s, p0[2]])     # on its axis (see _feather_bones)
+    pts = [p0] + sorted((np.asarray(r) for r in roots), key=lambda r: float(r[0]))
+    line = _polyline(pts, 4)
+    return Piece("alula_mount", _tube(line, np.linspace(0.030 * s, 0.020 * s, len(line)), 8),
+                 bone="thumb_cmc")
 
 
 def _feather_bones(sk, height, s) -> list[Piece]:

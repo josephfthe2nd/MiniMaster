@@ -29,8 +29,10 @@ of names, so it is cheap and independently testable.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -299,9 +301,25 @@ class SliderCatalog:
         return out
 
 
+# keys the document itself writes; anything else in a file rides along in ``Character.extra``
+_DOC_KEYS = frozenset({"format", "version", "name", "macro", "sliders", "asymmetry",
+                       "materials", "appendages", "anatomy"})
+# the newest document version this code understands (1: body only; 2: + appendages)
+DOC_VERSION = 2
+
+
 @dataclass
 class Character:
-    """A saved character: macro values + slider values + choices."""
+    """A saved character: macro values + slider values + choices + appendages.
+
+    Version 1 documents hold the body only and are written byte-for-byte as before.
+    Version 2 is written *only when appendages exist* (the lowest version that can hold
+    the document), so a body-only character stays readable by every older reader and an
+    older reader that does meet a version 2 file loads the body and ignores the rest.
+    Nothing this version does not understand is ever dropped: unknown top-level keys
+    land in :attr:`extra` and unknown kinds / parameters / controls stay in their
+    :class:`~minimaster.character.appendage_spec.AppendageSpec`; both are written back.
+    """
 
     name: str = "unnamed"
     macro: dict = field(default_factory=lambda: {
@@ -311,21 +329,55 @@ class Character:
     asymmetry: dict = field(default_factory=dict)
     materials: dict = field(default_factory=lambda: {
         "skin": "SKIN", "eye_color": "#5b7c8d"})
+    appendages: list = field(default_factory=list)      # list[AppendageSpec]
+    # body adaptation (creature_anatomy) is a DERIVED layer: only the switch and the cap are
+    # stored, the effect is recomputed from the enabled appendages and never written back
+    anatomy: dict = field(default_factory=lambda: {"enabled": True, "cap": 1.0})
+    extra: dict = field(default_factory=dict)           # unknown top-level keys, kept
+    file_version: int = field(default=0, repr=False, compare=False)
 
     def to_dict(self) -> dict:
-        return {"format": "minimaster-character", "version": 1,
-                "name": self.name, "macro": dict(self.macro),
-                "sliders": {k: float(v) for k, v in self.sliders.items()},
-                "asymmetry": {k: float(v) for k, v in self.asymmetry.items()},
-                "materials": dict(self.materials)}
+        # lowest version that can hold the document -- but never DOWNGRADE a file written
+        # by a newer version, whose unknown parts we preserve and must not relabel
+        version = DOC_VERSION if self.appendages else 1
+        version = max(version, self.file_version if self.file_version > DOC_VERSION else 0)
+        d = {"format": "minimaster-character", "version": version,
+             "name": self.name, "macro": dict(self.macro),
+             "sliders": {k: float(v) for k, v in self.sliders.items()},
+             "asymmetry": {k: float(v) for k, v in self.asymmetry.items()},
+             "materials": dict(self.materials)}
+        if self.appendages:
+            d["appendages"] = [a.to_dict() for a in self.appendages]
+            d["anatomy"] = copy.deepcopy(self.anatomy)
+        for k, v in self.extra.items():
+            d.setdefault(k, copy.deepcopy(v))
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Character":
+        from .appendage_spec import AppendageSpec, next_id
         c = cls(name=d.get("name", "unnamed"))
         c.macro.update(d.get("macro", {}))
         c.sliders = {k: float(v) for k, v in d.get("sliders", {}).items()}
         c.asymmetry = {k: float(v) for k, v in d.get("asymmetry", {}).items()}
         c.materials.update(d.get("materials", {}))
+        raw = d.get("appendages", [])
+        if not isinstance(raw, list):
+            raise ValueError("'appendages' must be a list")
+        for item in raw:
+            spec = AppendageSpec.from_dict(item)
+            if not spec.id:
+                spec.id = next_id(spec.kind, c.appendages)
+            c.appendages.append(spec)
+        if isinstance(d.get("anatomy"), dict):
+            c.anatomy.update(d["anatomy"])
+        c.extra = {k: copy.deepcopy(v) for k, v in d.items() if k not in _DOC_KEYS}
+        version = d.get("version", 1)
+        c.file_version = version if isinstance(version, int) else 0
+        if c.file_version > DOC_VERSION:
+            warnings.warn(f"character file is version {c.file_version}, newer than this "
+                          f"program understands ({DOC_VERSION}); the parts it does not "
+                          "know are kept and written back", stacklevel=2)
         return c
 
     def save(self, path) -> None:
@@ -342,12 +394,62 @@ class Character:
         Macro targets come from :func:`mhbase.macro_weights`; slider targets
         from the catalog. Unknown slider keys are ignored, so a character saved
         against a different asset set still loads.
+
+        This is the body the USER dialled in. The body an appendage asks for on top of
+        that (a wing broadens the chest) is a derived layer: see :meth:`effective` and
+        :meth:`effective_target_weights`.
         """
         from .mhbase import macro_weights
         out = dict(macro_weights(**self.macro))
         for name, w in catalog.weights(self.sliders, self.asymmetry).items():
             out[name] = out.get(name, 0.0) + w
         return out
+
+    # -- the derived body-adaptation layer (design D6) --------------------------------
+
+    def effective(self, catalog: SliderCatalog | None = None):
+        """``(sliders, macro, notes)``: the user's values plus what the ENABLED appendages
+        ask of the body, recomputed from scratch and clamped on the sum. Nothing is
+        written back, so removing an appendage restores the body exactly and calling this
+        twice (or saving and reloading) changes nothing."""
+        if not (self.anatomy.get("enabled", True) and
+                any(a.enabled for a in self.appendages)):
+            return dict(self.sliders), dict(self.macro), []
+        from . import creature_anatomy as ca
+        return ca.effective_values(self.sliders, self.macro, self.appendages,
+                                   catalog=catalog, cap=float(self.anatomy.get("cap", 1.0)))
+
+    def effective_target_weights(self, catalog: SliderCatalog) -> dict[str, float]:
+        """:meth:`target_weights` of the *effective* body (user values + anatomy layer)."""
+        from .mhbase import macro_weights
+        sliders, macro, _ = self.effective(catalog)
+        out = dict(macro_weights(**macro))
+        for name, w in catalog.weights(sliders, self.asymmetry).items():
+            out[name] = out.get(name, 0.0) + w
+        return out
+
+    # -- appendage helpers ---------------------------------------------------------------
+
+    def spec(self, spec_id: str):
+        """The appendage called ``spec_id`` or ``None``."""
+        from .appendage_spec import find
+        return find(self.appendages, spec_id)
+
+    def remove_appendage(self, spec_id: str) -> bool:
+        """Drop an appendage; ``True`` if there was one. Other ids are left untouched."""
+        keep = [a for a in self.appendages if a.id != spec_id]
+        removed = len(keep) != len(self.appendages)
+        self.appendages = keep
+        return removed
+
+    def instantiate_appendages(self, base, verts, lib=None):
+        """The character's enabled appendages built on a morphed body: a list of
+        :class:`~minimaster.character.kinds.Placed`, each with its name, its side and its
+        mesh in the MakeHuman frame (Y up; the print and preview frame is Z up, see
+        ``portrait.MH_TO_Z_UP``). Unknown kinds, parameters and controls are skipped
+        with a warning, never deleted from the document."""
+        from . import kinds
+        return kinds.instantiate_all(self.appendages, base, verts, lib=lib)
 
 
 def randomize(catalog: SliderCatalog, seed=None, amount: float = 0.35,

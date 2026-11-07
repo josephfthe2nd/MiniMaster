@@ -204,14 +204,27 @@ class TestOnRealBody:
             assert rep["volume"] > 0, name
 
     def test_creature_exports_through_the_print_gate(self):
+        """Through the frame seam, with the roots checked against the body in the STL frame
+        (the old version added Y-up tails and horns to Z-up shells and only checked that every
+        shell was closed). A tail or horn at offset 0 is tangent: it TOUCHES the body (the
+        gap check passes) and the printability report calls it unwelded."""
+        from minimaster.character import print_report as pr
         from minimaster.character import printprep as pp
         base, lib = mh.load()
         v = lib.apply(base.verts, mh.macro_weights(gender=1.0))
-        shells = pp.character_print_shells(base, v)
-        for app in (A.Appendage("tail", anchor_point=(0.0, 1.6, -1.15)),
-                    A.Appendage("horn", anchor_point=(0.85, 8.55, 0.05),
-                                mirror=True)):
-            shells += app.build(base, v)
-        mesh, rep = pp.assemble_character(shells, size="medium")
+        apps = [A.Appendage("tail", anchor_point=(0.0, 1.6, -1.15)),
+                A.Appendage("horn", anchor_point=(0.85, 8.55, 0.05), mirror=True)]
+        body = pp.character_print_shells(base, v)
+        shells = body + pp.appendage_print_shells(apps, base, v)
+        mesh, rep = pp.assemble_character(shells, size="medium", reference=pp.FIGURE_SHELLS)
         assert rep.watertight
         assert rep.shells >= 6
+        gaps = pr.root_gaps(rep.placed_shells)
+        assert set(gaps) == {"tail", "horn_l", "horn_r"}
+        assert max(gaps.values()) <= 0.1                      # mm: they touch the body
+        blocked = {f.where for f in pr.appendage_report(apps, base, v, rep.scale).blocking}
+        assert blocked == {"tail", "horn_l", "horn_r"}        # ... along a hairline
+        wrong = pp.assemble_character(body + [s for a in apps for s in a.build(base, v)],
+                                      size="medium", reference=pp.FIGURE_SHELLS)[1]
+        assert wrong.watertight                               # the gate cannot tell
+        assert min(pr.root_gaps(wrong.placed_shells).values()) > 1.0   # the gap check can

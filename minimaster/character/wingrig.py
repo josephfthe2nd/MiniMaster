@@ -1116,6 +1116,35 @@ class PlacedWing:
         """``WingRig.flap`` for this wing: a flap cycle sized to its placed range."""
         return self.rig.flap(phase_deg, amp, **kw)
 
+    def piece_meshes(self, pose=None, **controls) -> list[tuple[str, Mesh]]:
+        """``[(piece name, Mesh)]``: every closed solid of the wing, placed in BODY space
+        (the frame :meth:`pose` returns) under ``pose``.
+
+        ``pose`` is what :meth:`pose` takes (a :class:`PoseControls`, a preset name or
+        ``None``, plus keyword ``controls``) or a raw pose dict as :meth:`mesh` takes. Each
+        piece is a watertight, outward-oriented shell of its own, so a printability check can
+        name the offending feather. The winding of a mirrored (right) wing is whatever
+        :meth:`Mesh.transform` gave the whole wing -- the pieces are sliced out of that mesh,
+        so the flip lives in exactly one place and a caller never has to know about it.
+        """
+        if isinstance(pose, Mapping):
+            if controls:
+                raise TypeError("keyword controls cannot be combined with a raw pose dict")
+            placed = self.mesh(pose)
+        else:
+            placed = self.pose(pose, **controls) if (pose is not None or controls) else self.mesh()
+        out = []
+        v0 = f0 = 0
+        for piece in self.rig.pieces:
+            nv, nf = len(piece.mesh.vertices), len(piece.mesh.faces)
+            out.append((piece.name, Mesh(placed.vertices[v0:v0 + nv],
+                                         placed.faces[f0:f0 + nf] - v0)))
+            v0 += nv
+            f0 += nf
+        assert v0 == len(placed.vertices) and f0 == len(placed.faces), \
+            "a pose must keep every piece's vertex and face count"
+        return out
+
     def joint_positions(self, pose=None) -> dict[str, np.ndarray]:
         """Joint positions in BODY space under ``pose``."""
         M = self.matrix

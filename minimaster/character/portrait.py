@@ -8,6 +8,14 @@ eyes and teeth shade differently in one pass.
 
     shells = [Shell(mesh, shading.SKIN), Shell(eye_mesh, shading.EYE)]
     img = render_portrait(shells, size=(600, 800), azimuth=25)
+
+Triangles are rasterised by the vectorised visibility buffer in
+:mod:`minimaster.character.raster` (no per-triangle Python loop; pixel-identical
+to the loop it replaced, ~15x faster), and the view-independent shading terms
+(vertex normals, cavity AO) are cached per shell by content, so re-rendering a
+scene after editing one shell does not redo the others. ``check=`` lets a
+worker thread abort a render; :func:`visibility_buffer` / :func:`pick` expose
+the id buffer for picking.
 """
 
 from __future__ import annotations
@@ -16,10 +24,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ..core import math3d as m3
 from ..core.mesh import Mesh
 from ..render import write_png  # noqa: F401  (re-exported for convenience)
+from . import raster as R
 from . import shading as sh
+from .raster import CancelToken, Cancelled  # noqa: F401  (re-exported for workers)
 
 
 @dataclass
@@ -78,106 +87,175 @@ def character_shells(base, verts=None, skin=None, eye_color="#5b7c8d",
 
 def _vertex_normals(mesh: Mesh) -> np.ndarray:
     """Area-weighted vertex normals."""
-    v, f = mesh.vertices, mesh.faces
-    fn = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
-    out = np.zeros_like(v)
-    for i in range(3):
-        np.add.at(out, f[:, i], fn)
-    n = np.linalg.norm(out, axis=1, keepdims=True)
-    return np.divide(out, n, out=np.zeros_like(out), where=n > 1e-12)
+    return sh.vertex_normals(mesh.vertices, mesh.faces)
 
 
-def render_portrait(shells, size=(600, 800), azimuth=25.0, elevation=6.0,
-                    background="#20242c", fov=26.0, rig=None,
-                    exposure=1.15, fit=None, ao_strength=1.0):
-    """Render shells to an (h, w, 4) uint8 image."""
+def _background(size, background):
     w, h = size
-    rig = rig or sh.LightRig()
     img = np.zeros((h, w, 4), dtype=np.uint8)
     if background is not None:
         bg = sh.linear_to_srgb(sh.tonemap(sh.hex_to_linear(background), 1.0))
         img[:, :, :3] = (bg * 255).astype(np.uint8)
         img[:, :, 3] = 255
+    return img
+
+
+def _camera(shells, size, azimuth, elevation, fov, fit) -> R.Camera:
+    """The camera render_portrait, visibility_buffer and pick share."""
+    lo = np.min([s.mesh.vertices.min(axis=0) for s in shells], axis=0)
+    hi = np.max([s.mesh.vertices.max(axis=0) for s in shells], axis=0)
+    return R.orbit_camera(lo, hi, size, azimuth, elevation, fov, fit)
+
+
+def _shell_colors(shell: Shell, cam, view, rig, ao_strength, cache, ao=True):
+    """Linear radiance of every vertex of ``shell`` (``cam``: its camera-space
+    vertices). ``ao=False`` skips cavity AO (draft rendering)."""
+    mesh = shell.mesh
+    strength = ao_strength * shell.ao_strength
+    use_ao = ao and shell.ao
+    if cache is False:
+        vn = sh.vertex_normals(mesh.vertices, mesh.faces)
+        occ = (sh.cavity_ao(mesh.vertices, mesh.faces, vn, strength=strength)
+               if use_ao else None)
+    else:
+        vn, term = (sh.DEFAULT_CACHE if cache is None else cache).terms(
+            mesh.vertices, mesh.faces, ao=use_ao)
+        occ = sh.ao_from_term(term, strength) if use_ao else None
+    n_cam = vn @ view[:3, :3].T
+    n_cam /= np.maximum(np.linalg.norm(n_cam, axis=1, keepdims=True), 1e-12)
+    # view direction: from the surface toward the camera (origin in cam space)
+    vd = -cam
+    vd /= np.maximum(np.linalg.norm(vd, axis=1, keepdims=True), 1e-12)
+    return sh.shade_vertices(n_cam, vd, shell.material, rig, occ,
+                             base_colors=shell.base_colors)
+
+
+def render_portrait(shells, size=(600, 800), azimuth=25.0, elevation=6.0,
+                    background="#20242c", fov=26.0, rig=None,
+                    exposure=1.15, fit=None, ao_strength=1.0,
+                    check=None, cache=None):
+    """Render shells to an (h, w, 4) uint8 image.
+
+    ``check`` makes the render abortable: it is called (with no arguments)
+    before each shell is shaded and before each chunk of triangles is
+    rasterised, never per pixel. Whatever it raises propagates out of
+    ``render_portrait`` -- raise :class:`Cancelled` (``portrait.Cancelled``) --
+    and no image is returned. :class:`CancelToken` is a ready-made, thread-safe
+    ``check`` (``token.cancel()`` from another thread). A cancelled render
+    leaves nothing half-done behind: cache entries are inserted whole.
+
+    ``cache`` is the :class:`~minimaster.character.shading.ShadingCache` that
+    keeps the view-independent shading terms (default: the shared one;
+    ``False`` computes them afresh every call).
+    """
+    w, h = size
+    rig = rig or sh.LightRig()
+    img = _background(size, background)
 
     shells = [s for s in shells if len(s.mesh.faces)]
     if not shells:
         return img
 
-    combined = Mesh.merge([s.mesh for s in shells])
-    lo, hi = combined.bounds
-    center = (lo + hi) / 2.0
-    radius = float(np.linalg.norm(hi - lo)) / 2.0 or 1.0
-    if fit is not None:  # (center, radius) override, e.g. to frame the head
-        center, radius = np.asarray(fit[0], dtype=np.float64), float(fit[1])
+    camera = _camera(shells, size, azimuth, elevation, fov, fit)
+    proj = R.Projected([s.mesh for s in shells], camera, check)
+    colors = []
+    for shell, cam in zip(shells, proj.cam):
+        if check:
+            check()
+        colors.append(_shell_colors(shell, cam, camera.view, rig, ao_strength, cache))
 
-    az, el = np.radians(azimuth), np.radians(elevation)
-    distance = radius / np.tan(np.radians(fov) / 2.0) * 1.05
-    eye = center + distance * np.array(
-        [np.sin(az) * np.cos(el), -np.cos(az) * np.cos(el), np.sin(el)])
-    view = m3.look_at(eye, center)
-    focal = (h / 2.0) / np.tan(np.radians(fov) / 2.0)
-    zbuf = np.full((h, w), np.inf)
-
-    for shell in shells:
-        mesh = shell.mesh
-        vn = _vertex_normals(mesh)
-        ao = None
-        if shell.ao:
-            ao = sh.cavity_ao(mesh.vertices, mesh.faces, vn,
-                              strength=ao_strength * shell.ao_strength)
-        cam = m3.transform_points(view, mesh.vertices)
-        n_cam = vn @ view[:3, :3].T
-        n_cam /= np.maximum(np.linalg.norm(n_cam, axis=1, keepdims=True), 1e-12)
-        # view direction: from the surface toward the camera (origin in cam space)
-        vd = -cam
-        vd /= np.maximum(np.linalg.norm(vd, axis=1, keepdims=True), 1e-12)
-
-        vcol = sh.shade_vertices(n_cam, vd, shell.material, rig, ao,
-                                 base_colors=shell.base_colors)
-
-        tris = cam[mesh.faces]
-        depths = -tris[:, :, 2]
-        fn = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
-        facing = np.einsum("ij,ij->i", fn, tris.mean(axis=1)) < 0.0
-        valid = facing & (depths.min(axis=1) > 1e-6)
-        xs = w / 2.0 + focal * tris[:, :, 0] / depths
-        ys = h / 2.0 - focal * tris[:, :, 1] / depths
-        cols = vcol[mesh.faces]  # (m, 3, 3)
-
-        for i in np.nonzero(valid)[0]:
-            tx, ty, tz = xs[i], ys[i], depths[i]
-            x0 = max(int(np.floor(tx.min())), 0)
-            x1 = min(int(np.ceil(tx.max())) + 1, w)
-            y0 = max(int(np.floor(ty.min())), 0)
-            y1 = min(int(np.ceil(ty.max())) + 1, h)
-            if x0 >= x1 or y0 >= y1:
-                continue
-            px, py = np.meshgrid(np.arange(x0, x1) + 0.5,
-                                 np.arange(y0, y1) + 0.5)
-            d = ((tx[1] - tx[0]) * (ty[2] - ty[0])
-                 - (tx[2] - tx[0]) * (ty[1] - ty[0]))
-            if abs(d) < 1e-12:
-                continue
-            l1 = ((px - tx[0]) * (ty[2] - ty[0])
-                  - (py - ty[0]) * (tx[2] - tx[0])) / d
-            l2 = ((py - ty[0]) * (tx[1] - tx[0])
-                  - (px - tx[0]) * (ty[1] - ty[0])) / d
-            l0 = 1.0 - l1 - l2
-            inside = (l0 >= 0) & (l1 >= 0) & (l2 >= 0)
-            if not inside.any():
-                continue
-            inv_z = l0 / tz[0] + l1 / tz[1] + l2 / tz[2]
-            depth = np.where(inv_z > 1e-12, 1.0 / np.maximum(inv_z, 1e-12), np.inf)
-            region = zbuf[y0:y1, x0:x1]
-            upd = inside & (depth < region)
-            if not upd.any():
-                continue
-            region[upd] = depth[upd]
-            c = (l0[:, :, None] * cols[i, 0]
-                 + l1[:, :, None] * cols[i, 1]
-                 + l2[:, :, None] * cols[i, 2])
-            rgb = (sh.linear_to_srgb(sh.tonemap(c, exposure)) * 255).astype(np.uint8)
-            tgt = img[y0:y1, x0:x1]
-            tgt[..., :3][upd] = rgb[upd]
-            tgt[..., 3][upd] = 255
+    ids, _ = R.rasterize(proj.sx, proj.sy, proj.depth, proj.faces, (w, h),
+                         np.nonzero(proj.valid)[0], check)
+    if check:
+        check()
+    vis, rgb = R.shade_gouraud(ids, proj.sx, proj.sy, proj.faces,
+                               np.concatenate(colors), exposure,
+                               sh.tonemap, sh.linear_to_srgb)
+    flat = img.reshape(h * w, 4)
+    flat[vis, :3] = rgb
+    flat[vis, 3] = 255
     return img
+
+
+# --------------------------------------------------------------------------
+# id buffer / picking
+
+
+@dataclass
+class VisBuffer:
+    """What is under every pixel: ``shell`` and ``face`` (index within that
+    shell's mesh) are ``-1`` where nothing is, ``depth`` is camera-space
+    distance along the view axis (``inf`` where nothing is). Pixel ``(x, y)``
+    is column ``x``, row ``y`` (origin top left, sampled at its centre)."""
+
+    camera: R.Camera
+    shell: np.ndarray
+    face: np.ndarray
+    depth: np.ndarray
+
+    def pick(self, x, y):
+        """``(shell index, face index)`` at pixel ``(x, y)``, or ``None``
+        (background, or outside the image). ``x``, ``y`` may be fractional: the
+        pixel containing them is used."""
+        h, w = self.shell.shape
+        px, py = int(np.floor(x)), int(np.floor(y))
+        if not (0 <= px < w and 0 <= py < h) or self.shell[py, px] < 0:
+            return None
+        return int(self.shell[py, px]), int(self.face[py, px])
+
+    def pick_many(self, xs, ys):
+        """Vectorised :meth:`pick`: two int arrays, ``-1`` for a miss."""
+        h, w = self.shell.shape
+        px = np.floor(np.asarray(xs, dtype=np.float64)).astype(np.int64)
+        py = np.floor(np.asarray(ys, dtype=np.float64)).astype(np.int64)
+        ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+        px, py = np.where(ok, px, 0), np.where(ok, py, 0)
+        shell = np.where(ok, self.shell[py, px], -1)
+        return shell, np.where(shell >= 0, self.face[py, px], -1)
+
+    def world_point(self, x, y):
+        """World position of the surface under pixel ``(x, y)`` (its centre), or
+        ``None``: the inverse of the projection at the stored depth."""
+        h, w = self.shell.shape
+        px, py = int(np.floor(x)), int(np.floor(y))
+        if not (0 <= px < w and 0 <= py < h) or self.shell[py, px] < 0:
+            return None
+        z = float(self.depth[py, px])
+        f = self.camera.focal
+        pc = np.array([(px + 0.5 - w / 2.0) * z / f, -(py + 0.5 - h / 2.0) * z / f, -z])
+        view = self.camera.view
+        return view[:3, :3].T @ (pc - view[:3, 3])
+
+
+def visibility_buffer(shells, size=(600, 800), azimuth=25.0, elevation=6.0,
+                      fov=26.0, fit=None, check=None, dtype=np.float64) -> VisBuffer:
+    """Rasterise only the ids (no shading: ~4 ms for the body at 320x480).
+
+    The camera is the one :func:`render_portrait` uses for the same arguments.
+    ``shell`` indices refer to the ``shells`` list as given (empty shells keep
+    their slot)."""
+    w, h = size
+    live = [i for i, s in enumerate(shells) if len(s.mesh.faces)]
+    if not live:
+        full = np.full((h, w), -1, dtype=np.int32)
+        return VisBuffer(R.orbit_camera(np.zeros(3), np.ones(3), size, azimuth,
+                                        elevation, fov, fit),
+                         full, full.copy(), np.full((h, w), np.inf))
+    chosen = [shells[i] for i in live]
+    camera = _camera(chosen, size, azimuth, elevation, fov, fit)
+    proj = R.Projected([s.mesh for s in chosen], camera, check)
+    ids, z = R.rasterize(proj.sx, proj.sy, proj.depth, proj.faces, (w, h),
+                         np.nonzero(proj.valid)[0], check, dtype=dtype)
+    hit = ids >= 0
+    shell, face = proj.locate(np.where(hit, ids, 0))
+    shell = np.where(hit, np.asarray(live)[shell], -1).astype(np.int32)
+    face = np.where(hit, face, -1).astype(np.int32)
+    return VisBuffer(camera, shell, face, z)
+
+
+def pick(shells, size, azimuth, elevation, fit, x, y, fov=26.0, check=None):
+    """The ``(shell index, triangle index)`` visible at pixel ``(x, y)`` of
+    ``render_portrait(shells, size, azimuth, elevation, fit=fit)``, or ``None``
+    over background. Builds the id buffer for the call; keep a
+    :func:`visibility_buffer` to pick many pixels of one view."""
+    return visibility_buffer(shells, size, azimuth, elevation, fov, fit, check).pick(x, y)

@@ -31,6 +31,7 @@ Two ways to get the appendage geometry:
 from __future__ import annotations
 
 import dataclasses
+import weakref
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -112,6 +113,102 @@ def cap_boundaries(verts, faces):
     verts = np.vstack([verts, np.asarray(extra_v)])
     tris = np.vstack([tris, np.asarray(extra_f, dtype=np.int64)])
     return verts, tris
+
+
+# --------------------------------------------------------------------------
+# left and right
+
+
+def mirror_joint_name(name: str) -> str:
+    """The joint marker on the other side of the body: ``l-`` <-> ``r-``.
+
+    Only the LEADING side prefix (after an optional ``joint-``) is swapped. A chain of
+    replace() calls cannot do this: ``"l-finger-2-1"`` contains ``"r-"`` inside
+    ``finger-`` and came out as ``"r-fingel-2-1"`` (21 of the 55 left-hand markers were
+    mangled, so a mirrored leg or finger harvest raised KeyError). Names on the midline
+    (``pelvis``, ``spine-1``, ``head``) are returned unchanged.
+    """
+    head, rest = ("joint-", name[6:]) if name.startswith("joint-") else ("", name)
+    if rest.startswith("l-"):
+        return head + "r-" + rest[2:]
+    if rest.startswith("r-"):
+        return head + "l-" + rest[2:]
+    return name
+
+
+_MIRROR_TOL = 1e-9
+_MIRROR_MAPS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _mirror_index_map(points: np.ndarray) -> np.ndarray:
+    """For each point, the index of the point at its x-mirror position.
+
+    Exact-match lookup on a 1e-6 grid first (the mesh is symmetric to ~1e-15, so nearly
+    every point matches by hash), then brute force only for the few that straddle a grid
+    boundary. Raises if some point has no mirror partner within ``_MIRROR_TOL``.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    mir = pts * np.array([-1.0, 1.0, 1.0])
+    quant = 1e-6
+    keys = lambda a: [tuple(k) for k in np.round(a / quant).astype(np.int64)]  # noqa: E731
+    table = {k: i for i, k in enumerate(keys(pts))}
+    out = np.array([table.get(k, -1) for k in keys(mir)], dtype=np.int64)
+    todo = np.nonzero(out < 0)[0]
+    for i in todo:
+        out[i] = int(np.argmin(np.linalg.norm(pts - mir[i], axis=1)))
+    err = np.abs(pts[out] - mir).max(axis=1) if len(pts) else np.zeros(0)
+    if len(err) and (err.max() > _MIRROR_TOL or not np.array_equal(out[out], np.arange(len(out)))):
+        raise ValueError(
+            f"the body mesh is not mirror-symmetric (worst partner is {err.max():.2e} away); "
+            "a mirrored appendage needs a symmetric base")
+    return out
+
+
+def mirror_face_map(base) -> np.ndarray:
+    """``map[f]`` is the cage quad that is the x-mirror image of quad ``f`` (an
+    involution; a quad on the midline may be its own mirror).
+
+    The cage topology never changes with the morphs and the unmorphed base is symmetric
+    (max centroid error ~1e-15), so this is computed ONCE per base mesh and cached. It
+    is what lets a side be stored once: the left-hand face is persisted and the right
+    wing is placed on ``map[face]``, an exact mirror of the left, whatever the body is.
+    """
+    cached = _MIRROR_MAPS.get(base)
+    if cached is None:
+        bv, bq = base.body_cage(None)
+        cached = _mirror_index_map(bv[bq].mean(axis=1))
+        cached.setflags(write=False)
+        _MIRROR_MAPS[base] = cached
+    return cached
+
+
+_MIRROR_VERTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def mirror_vertex_map(base) -> np.ndarray:
+    """``map[i]`` is the cage vertex at the x-mirror position of cage vertex ``i``."""
+    cached = _MIRROR_VERTS.get(base)
+    if cached is None:
+        bv, _ = base.body_cage(None)
+        cached = _mirror_index_map(bv)
+        cached.setflags(write=False)
+        _MIRROR_VERTS[base] = cached
+    return cached
+
+
+def mirror_anchor_weights(base, body_q, face: int, weights) -> tuple:
+    """The weights of an anchor on ``face`` expressed on its mirror face.
+
+    A quad and its mirror image are stored with their corners in a different order, so
+    non-uniform weights must follow the corner VERTICES, not the corner positions.
+    """
+    mf = int(mirror_face_map(base)[face])
+    vmap = mirror_vertex_map(base)
+    corners = [int(c) for c in body_q[mf]]
+    out = [0.0] * len(corners)
+    for c, w in zip(body_q[face], weights):
+        out[corners.index(int(vmap[int(c)]))] = float(w)
+    return tuple(out)
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +594,25 @@ class Appendage:
     # ``root_point`` as an offset from the anchor's surface point instead of a point in body
     # space (so it follows the body's morphs). Mirrored like the point.
     root_relative: bool = False
+    # ---- topological placement (additive; ``None`` keeps the legacy behaviour exactly) ----
+    # ``anchor_point`` is a point in WORLD space that is re-snapped to whichever body face is
+    # nearest on every build, so on a taller or smaller body it lands on a different part of
+    # the body (a wing shoulder 7.7 units below the shoulder blade). ``anchor_face`` is the
+    # cage quad itself: the binding is topological, the quad exists on every morph of the
+    # body and carries the appendage with it. It is the LEFT-hand quad; the right side uses
+    # its exact mirror image (``mirror_face_map``). ``anchor_weights`` are barycentric
+    # weights over the quad's corners (default: its centre).
+    anchor_face: int | None = None
+    anchor_weights: tuple | None = None
+    # ``root_point`` bound to the body the same way: the end of the wing's attachment line is
+    # the centroid of cage quad ``root_face`` (mirrored for the right side) plus
+    # ``root_offset`` (mirrored in x), so the waist target moves with the waist.
+    root_face: int | None = None
+    root_offset: tuple = (0.0, 0.0, 0.0)
+    # which sides to build: ``None`` = legacy (``mirror`` decides: one or a pair), or one of
+    # ``center`` / ``left`` / ``right`` / ``both``. ``right`` is the exact mirror of the
+    # left-hand definition, so a lone right wing equals the right wing of a pair.
+    side: str | None = None
 
     # pose controls that may ride along in ``params`` for a wing; everything
     # else in ``params`` shapes the wing itself
@@ -507,15 +623,43 @@ class Appendage:
     # override what the preset sets
     PRESET_KEY = "preset"
 
-    def _anchor_frame(self, body_v, body_q, idx, pt):
+    def _has_root(self) -> bool:
+        return self.root_point is not None or self.root_face is not None
+
+    def _face_for(self, face, idx, base) -> int:
+        """The cage quad for side ``idx``: the stored (left-hand) quad, or its mirror."""
+        if idx == 0:
+            return int(face)
+        if base is None:
+            raise ValueError("placing the right-hand side of a face-anchored appendage "
+                             "needs the base mesh (for its mirror-face map)")
+        return int(mirror_face_map(base)[int(face)])
+
+    def _face_anchor(self, body_v, body_q, idx, hint, base) -> SurfaceAnchor:
+        f = self._face_for(self.anchor_face, idx, base)
+        corners = tuple(int(c) for c in body_q[f])
+        k = len(corners)
+        if self.anchor_weights is None:
+            weights = (1.0 / k,) * k
+        elif idx == 0:
+            weights = tuple(float(w) for w in self.anchor_weights)
+        else:
+            weights = mirror_anchor_weights(base, body_q, int(self.anchor_face),
+                                            self.anchor_weights)
+        return SurfaceAnchor(corners=corners, weights=weights, up_hint=hint)
+
+    def _anchor_frame(self, body_v, body_q, idx, pt, base=None):
         """The 4x4 placement of the appendage for side ``idx`` (0 left, 1 right)."""
         hint = np.asarray(self.up_hint, dtype=np.float64)
         if idx == 1:                    # mirrored side needs a mirrored hint
             hint = hint * np.array([-1.0, 1.0, 1.0])
-        anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
+        if self.anchor_face is not None:
+            anchor = self._face_anchor(body_v, body_q, idx, hint, base)
+        else:
+            anchor = SurfaceAnchor.from_point(body_v, body_q, pt, hint)
         anchor.offset = self.offset
-        if self.root_point is not None:
-            return self._rooted_frame(anchor, body_v, idx)
+        if self._has_root():
+            return self._rooted_frame(anchor, body_v, idx, body_q, base)
         roll = self.roll
         rot = _euler(np.radians([roll, 0.0, 0.0]))
         if idx == 1:
@@ -528,7 +672,7 @@ class Appendage:
             rot = np.diag([1.0, -1.0, 1.0]) @ rot
         return anchor_matrix(anchor, body_v, self.scale, rot)
 
-    def _rooted_frame(self, anchor, body_v, idx) -> np.ndarray:
+    def _rooted_frame(self, anchor, body_v, idx, body_q=None, base=None) -> np.ndarray:
         """Placement of an appendage that has a ROOT POINT, built from body-space
         vectors rather than from the anchor quad's frame.
 
@@ -546,7 +690,7 @@ class Appendage:
         # sink a fixed distance straight into the back, not along one quad's normal
         origin = pt + back * self.offset
         x = np.asarray(self.up_hint, dtype=np.float64)
-        rp = self._root_world(pt, idx)
+        rp = self._root_world(pt, idx, body_v, body_q, base)
         mirrored = idx == 1
         if mirrored:
             x = x * np.array([-1.0, 1.0, 1.0])
@@ -564,9 +708,15 @@ class Appendage:
         m[:3, 3] = origin
         return m
 
-    def _root_world(self, surface_pt, idx) -> np.ndarray:
+    def _root_world(self, surface_pt, idx, body_v=None, body_q=None, base=None) -> np.ndarray:
         """The root target in body space for side ``idx``; ``surface_pt`` is the anchor's
         surface point on that side (before the sink)."""
+        if self.root_face is not None:
+            f = self._face_for(self.root_face, idx, base)
+            off = np.asarray(self.root_offset, dtype=np.float64)
+            if idx == 1:
+                off = off * np.array([-1.0, 1.0, 1.0])
+            return np.asarray(body_v, dtype=np.float64)[body_q[f]].mean(axis=0) + off
         rp = np.asarray(self.root_point, dtype=np.float64)
         if idx == 1:
             rp = rp * np.array([-1.0, 1.0, 1.0])
@@ -603,13 +753,29 @@ class Appendage:
             points.append(points[0] * np.array([-1.0, 1.0, 1.0]))
         return points
 
-    def build_rigs(self, base, verts=None):
-        """``[(name, PlacedWing)]`` -- wings as posable rigs on the current body.
+    def _indices(self) -> list[int]:
+        """The sides to build: 0 = the stored (left-hand) one, 1 = its mirror image."""
+        if self.side is None:
+            return [0, 1] if self.mirror else [0]
+        try:
+            return {"center": [0], "left": [0], "right": [1], "both": [0, 1]}[self.side]
+        except KeyError:
+            raise ValueError(f"unknown side {self.side!r}; use center, left, right or both"
+                             ) from None
 
-        Only wings have a rig. Each carries its skeleton, skin weights and the
-        placement that puts it on the morphed body, so the pair can be posed
-        (fold, raise, flap) and re-meshed without rebuilding anything.
-        """
+    def _tag(self, idx: int) -> str:
+        """Suffix of the shell name: none for a lone midline appendage, else ``_l``/``_r``."""
+        lone = (not self.mirror) if self.side is None else self.side == "center"
+        return "" if lone else ("_l" if idx == 0 else "_r")
+
+    def _point(self, idx: int):
+        pt = np.asarray(self.anchor_point, dtype=np.float64)
+        return pt * np.array([-1.0, 1.0, 1.0]) if idx == 1 else pt
+
+    def place_rigs(self, base, verts=None):
+        """``[(idx, PlacedWing)]`` for the sides to build (``idx`` 0 = left, 1 = right).
+
+        The engine behind :meth:`build_rigs`, which only adds the legacy names."""
         if self.kind != "wing":
             raise ValueError(f"only wings are rigged, not {self.kind!r}")
         from .wings import make_wing_rig
@@ -619,13 +785,12 @@ class Appendage:
                  if k not in self.POSE_KEYS and k != self.PRESET_KEY}
         style = shape.pop("style", "membrane")
         out = []
-        points = self._points()
-        for idx, pt in enumerate(points):
-            M = self._anchor_frame(body_v, body_q, idx, pt)
+        for idx in self._indices():
+            M = self._anchor_frame(body_v, body_q, idx, self._point(idx), base)
             kw = dict(shape)
-            if self.root_point is not None and "root" not in kw:
+            if self._has_root() and "root" not in kw:
                 surface = M[:3, 3] + np.array([0.0, 0.0, self.offset])      # before the sink
-                rp = self._root_world(surface, idx)
+                rp = self._root_world(surface, idx, body_v, body_q, base)
                 local = np.linalg.inv(M) @ np.append(rp, 1.0)      # into wing units
                 kw["root"] = (float(local[0]), float(local[2]))
             rig = make_wing_rig(style, **kw)
@@ -634,9 +799,17 @@ class Appendage:
             axes = Rm.T @ np.array([[0.0, 0.0, -1.0], [0.0, -1.0, 0.0],
                                     [-1.0 if idx == 1 else 1.0, 0.0, 0.0]]).T
             rig.skeleton.stow_against(axes[:, 0], axes[:, 1], axes[:, 2])
-            side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
-            out.append((f"wing{side}", rig.placed(M)))
+            out.append((idx, rig.placed(M)))
         return out
+
+    def build_rigs(self, base, verts=None):
+        """``[(name, PlacedWing)]`` -- wings as posable rigs on the current body.
+
+        Only wings have a rig. Each carries its skeleton, skin weights and the
+        placement that puts it on the morphed body, so the pair can be posed
+        (fold, raise, flap) and re-meshed without rebuilding anything.
+        """
+        return [(f"wing{self._tag(idx)}", pw) for idx, pw in self.place_rigs(base, verts)]
 
     def pose_controls(self) -> dict:
         """The pose controls riding in ``params`` (e.g. ``fold``)."""
@@ -646,6 +819,41 @@ class Appendage:
         """The named pose riding in ``params`` (e.g. ``"folded"``), or ``None``."""
         return self.params.get(self.PRESET_KEY)
 
+    def place_meshes(self, base, verts=None):
+        """``[(idx, Mesh)]`` for a tail, horn or harvested limb on the sides to build."""
+        v = base.verts if verts is None else verts
+        body_v, body_q = base.body_cage(v)
+        out = []
+        for idx in self._indices():
+            pt = self._point(idx)
+            if self.kind == "harvest":
+                chain = list(self.chain)
+                if idx == 1:                    # mirror swaps the side prefix
+                    chain = [mirror_joint_name(c) for c in chain]
+                mesh = harvest_region(base, chain, v, **self.params)
+                src = joint_position(base, chain[0], v)
+                shift = pt - src
+                if self.anchor_face is not None:
+                    # body-relative: the copy's shoulder goes to the quad it is bound to
+                    # (so it follows the morphs), then SINKS along the limb axis by
+                    # ``offset`` -- the harvest has no surface normal to sink along
+                    hint = np.asarray(self.up_hint, dtype=np.float64)
+                    anchor = self._face_anchor(body_v, body_q, idx, hint, base)
+                    origin, _ = anchor.resolve(body_v)
+                    axis = joint_position(base, chain[-1], v) - src
+                    ln = float(np.linalg.norm(axis))
+                    shift = origin - src + (self.offset * axis / ln if ln > 1e-9 else 0.0)
+                mesh = mesh.translated(shift)
+            else:
+                builder = BUILDERS.get(self.kind)
+                if builder is None:
+                    raise KeyError(f"unknown appendage kind {self.kind!r}; "
+                                   f"have {sorted(BUILDERS) + ['harvest']}")
+                mesh = builder(**self.params).transform(
+                    self._anchor_frame(body_v, body_q, idx, pt, base))
+            out.append((idx, mesh))
+        return out
+
     def build(self, base, verts=None):
         """Return ``[(name, Mesh)]`` placed on the current morphed body."""
         v = base.verts if verts is None else verts
@@ -653,25 +861,5 @@ class Appendage:
             controls, preset = self.pose_controls(), self.pose_preset()
             return [(name, pw.pose(preset, **controls) if (controls or preset) else pw.mesh())
                     for name, pw in self.build_rigs(base, v)]
-        body_v, body_q = base.body_cage(v)
-        out = []
-        points = self._points()
-        for idx, pt in enumerate(points):
-            if self.kind == "harvest":
-                chain = list(self.chain)
-                if idx == 1:                    # mirror swaps the side prefix
-                    chain = [c.replace("l-", "@").replace("r-", "l-")
-                              .replace("@", "r-") for c in chain]
-                mesh = harvest_region(base, chain, v, **self.params)
-                src = joint_position(base, chain[0], v)
-                mesh = mesh.translated(pt - src)
-            else:
-                builder = BUILDERS.get(self.kind)
-                if builder is None:
-                    raise KeyError(f"unknown appendage kind {self.kind!r}; "
-                                   f"have {sorted(BUILDERS) + ['harvest']}")
-                mesh = builder(**self.params).transform(
-                    self._anchor_frame(body_v, body_q, idx, pt))
-            side = "" if len(points) == 1 else ("_l" if idx == 0 else "_r")
-            out.append((f"{self.kind}{side}", mesh))
-        return out
+        return [(f"{self.kind}{self._tag(idx)}", mesh)
+                for idx, mesh in self.place_meshes(base, v)]

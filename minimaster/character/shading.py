@@ -25,6 +25,9 @@ Python rasteriser.
 
 from __future__ import annotations
 
+import hashlib
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -158,6 +161,43 @@ def _neighbour_sums(faces, n):
     return np.concatenate([src, dst]), np.concatenate([dst, src])
 
 
+# The scatter-adds below use np.bincount, not np.add.at. bincount adds its
+# weights one by one in index order, exactly like add.at, so the sums (and
+# everything computed from them) are bit-for-bit what add.at gave; but add.at
+# is ~4x slower before numpy 1.25 (the declared floor is 1.24) and bincount is
+# not.
+
+
+def _scatter_sum(idx, values, n):
+    """``out[idx[k]] += values[k]`` for (m,) or (m, c) ``values``, in index order."""
+    if values.ndim == 1:
+        return np.bincount(idx, weights=values, minlength=n).astype(np.float64, copy=False)
+    return np.stack([np.bincount(idx, weights=values[:, a], minlength=n)
+                     for a in range(values.shape[1])], axis=1).astype(np.float64, copy=False)
+
+
+def vertex_normals(verts: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """Area-weighted unit vertex normals (zero where a vertex has no area).
+
+    The face normals are accumulated corner 0 for every face, then corner 1,
+    then corner 2 (the order ``np.add.at`` was called in), so the result is
+    identical to the add.at version it replaces.
+    """
+    f = faces
+    fn = np.cross(verts[f[:, 1]] - verts[f[:, 0]], verts[f[:, 2]] - verts[f[:, 0]])
+    out = _scatter_sum(f.T.reshape(-1), np.tile(fn, (3, 1)), len(verts))
+    n = np.linalg.norm(out, axis=1, keepdims=True)
+    return np.divide(out, n, out=np.zeros_like(out), where=n > 1e-12)
+
+
+def _smooth(values, src, dst, cnt, iterations):
+    v = np.asarray(values, dtype=np.float64).copy()
+    for _ in range(int(iterations)):
+        acc = np.bincount(src, weights=v[dst], minlength=len(v)).astype(np.float64, copy=False)
+        v = 0.5 * v + 0.5 * (acc / cnt)
+    return v
+
+
 def smooth_vertex_scalar(values, faces, iterations: int = 2):
     """Average a per-vertex scalar over its neighbours a few times.
 
@@ -165,16 +205,41 @@ def smooth_vertex_scalar(values, faces, iterations: int = 2):
     up as dirt streaks along edge loops. Smoothing keeps the real creases (they
     are many vertices wide) and removes the per-quad noise.
     """
-    v = np.asarray(values, dtype=np.float64).copy()
-    src, dst = _neighbour_sums(faces, len(v))
-    for _ in range(int(iterations)):
-        acc = np.zeros(len(v))
-        cnt = np.zeros(len(v))
-        np.add.at(acc, src, v[dst])
-        np.add.at(cnt, src, 1.0)
-        cnt = np.maximum(cnt, 1.0)
-        v = 0.5 * v + 0.5 * (acc / cnt)
-    return v
+    n = len(values)
+    src, dst = _neighbour_sums(faces, n)
+    cnt = np.maximum(np.bincount(src, minlength=n).astype(np.float64), 1.0)
+    return _smooth(values, src, dst, cnt, iterations)
+
+
+def cavity_term(verts: np.ndarray, faces: np.ndarray, normals: np.ndarray,
+                radius_scale: float = 1.0, smooth: int = 2) -> np.ndarray:
+    """The strength-independent part of :func:`cavity_ao`: per-vertex concavity
+    in ``0..1`` (0 on flat and convex surface, towards 1 in a crease).
+
+    It depends only on the mesh, not on the camera or the AO strength, so a
+    cache can keep it (see :class:`ShadingCache`)."""
+    n = len(verts)
+    src, dst = _neighbour_sums(faces, n)
+    cnt = np.maximum(np.bincount(src, minlength=n).astype(np.float64), 1.0)
+    vd = verts[dst]
+    mean_nb = _scatter_sum(src, vd, n) / cnt[:, None]
+    delta = mean_nb - verts
+    # normalise by each vertex's OWN neighbourhood size, not the global mean:
+    # the mesh has wildly varying quad density (dense face, coarse limbs) and a
+    # global scale turns that density variation into fake occlusion.
+    edge = _scatter_sum(src, np.linalg.norm(vd - verts[src], axis=1), n)
+    edge = np.maximum(edge / cnt, 1e-9) * radius_scale
+    proj = np.einsum("ij,ij->i", delta, normals) / edge
+
+    proj = _smooth(proj, src, dst, cnt, smooth)
+    # proj > 0 -> concave (occluded). Map through a smooth curve to 0..1.
+    occ = 1.0 / (1.0 + np.exp(-3.0 * proj))          # 0.5 at flat
+    return np.clip((occ - 0.5) * 2.0, 0.0, 1.0)
+
+
+def ao_from_term(term: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """Per-vertex AO (1 = open, 0 = fully occluded) from a :func:`cavity_term`."""
+    return np.clip(1.0 - strength * term, 0.0, 1.0)
 
 
 def cavity_ao(verts: np.ndarray, faces: np.ndarray, normals: np.ndarray,
@@ -192,32 +257,99 @@ def cavity_ao(verts: np.ndarray, faces: np.ndarray, normals: np.ndarray,
     exactly the features that make a face legible — for a couple of
     scatter-adds rather than a ray cast per vertex.
     """
-    n = len(verts)
-    src, dst = _neighbour_sums(faces, n)
+    return ao_from_term(cavity_term(verts, faces, normals, radius_scale, smooth), strength)
 
-    acc = np.zeros((n, 3))
-    cnt = np.zeros(n)
-    np.add.at(acc, src, verts[dst])
-    np.add.at(cnt, src, 1.0)
-    cnt = np.maximum(cnt, 1.0)
-    mean_nb = acc / cnt[:, None]
 
-    delta = mean_nb - verts
-    # normalise by each vertex's OWN neighbourhood size, not the global mean:
-    # the mesh has wildly varying quad density (dense face, coarse limbs) and a
-    # global scale turns that density variation into fake occlusion.
-    local = np.linalg.norm(delta, axis=1)
-    edge = np.zeros(n)
-    np.add.at(edge, src, np.linalg.norm(verts[dst] - verts[src], axis=1))
-    edge = np.maximum(edge / cnt, 1e-9) * radius_scale
-    proj = np.einsum("ij,ij->i", delta, normals) / edge
-    del local
+# --------------------------------------------------------------------------
+# view-independent terms, cached
 
-    proj = smooth_vertex_scalar(proj, faces, smooth)
-    # proj > 0 -> concave (occluded). Map through a smooth curve to 0..1.
-    occ = 1.0 / (1.0 + np.exp(-3.0 * proj))          # 0.5 at flat
-    ao = 1.0 - strength * np.clip((occ - 0.5) * 2.0, 0.0, 1.0)
-    return np.clip(ao, 0.0, 1.0)
+
+def _digest(a: np.ndarray) -> bytes:
+    a = np.ascontiguousarray(a)
+    h = hashlib.blake2b(digest_size=16)
+    h.update(repr((a.shape, a.dtype.str)).encode())
+    if a.size:
+        h.update(memoryview(a).cast("B"))
+    return h.digest()
+
+
+class ShadingCache:
+    """LRU cache of the view-independent shading terms of a mesh: vertex normals
+    and :func:`cavity_term`.
+
+    Entries are keyed by the *content* of the vertex and face arrays (a 128-bit
+    hash, about 1 ms per megabyte), not by object identity, so an edited mesh
+    can never be served stale terms, while the body of a character whose wing
+    was just dragged still hits: its AO is computed once, not once per frame.
+    The cache is bounded by ``max_entries`` and ``max_bytes``; a posed wing
+    produces a new key per pose and simply ages out. It is safe to share
+    between a UI thread and a render worker (entries are inserted whole, so a
+    cancelled render never leaves a half-built one).
+    """
+
+    def __init__(self, max_entries: int = 64, max_bytes: int = 96 << 20):
+        self.max_entries = int(max_entries)
+        self.max_bytes = int(max_bytes)
+        self._items: OrderedDict = OrderedDict()
+        self._bytes = 0
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.normal_builds = 0      # vertex-normal computations (cache misses)
+        self.cavity_builds = 0      # cavity-term computations (cache misses)
+
+    def __len__(self):
+        return len(self._items)
+
+    @property
+    def nbytes(self) -> int:
+        return self._bytes
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+            self._bytes = 0
+
+    def terms(self, verts: np.ndarray, faces: np.ndarray, ao: bool = True,
+              radius_scale: float = 1.0, smooth: int = 2):
+        """``(normals, cavity_term)`` of the mesh; the term is ``None`` if ``ao``
+        is false. Do not modify the returned arrays."""
+        key = (_digest(verts), _digest(faces))
+        akey = (float(radius_scale), int(smooth))
+        with self._lock:
+            ent = self._items.get(key)
+            if ent is not None:
+                self._items.move_to_end(key)
+        hit = ent is not None and (not ao or akey in ent["ao"])
+        if ent is None:
+            normals = vertex_normals(verts, faces)
+            ent = {"n": normals, "ao": {}}
+            with self._lock:
+                self.normal_builds += 1
+        if ao and akey not in ent["ao"]:
+            term = cavity_term(verts, faces, ent["n"], radius_scale, smooth)
+            with self._lock:
+                self.cavity_builds += 1
+            ent["ao"][akey] = term
+        with self._lock:
+            if hit:
+                self.hits += 1
+            old = self._items.get(key)
+            if old is not None and old is not ent:
+                self._bytes -= self._size(old)
+            self._items[key] = ent
+            self._items.move_to_end(key)
+            self._bytes = sum(self._size(e) for e in self._items.values())
+            while len(self._items) > 1 and (len(self._items) > self.max_entries
+                                            or self._bytes > self.max_bytes):
+                self._bytes -= self._size(self._items.popitem(last=False)[1])
+        return ent["n"], (ent["ao"][akey] if ao else None)
+
+    @staticmethod
+    def _size(ent) -> int:
+        return ent["n"].nbytes + sum(t.nbytes for t in ent["ao"].values())
+
+
+DEFAULT_CACHE = ShadingCache()
 
 
 # --------------------------------------------------------------------------

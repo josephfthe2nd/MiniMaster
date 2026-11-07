@@ -278,12 +278,20 @@ class TestOnRealBody:
                             mirror=True)]
         ca.apply_to(c, apps, cat)
         v = lib.apply(base.verts, c.target_weights(cat))
-        shells = pp.character_print_shells(base, v)
-        for app in apps:
-            shells += app.build(base, v)
-        _, rep = pp.assemble_character(shells, size="medium")
+        from minimaster.character import print_report as pr
+        body = pp.character_print_shells(base, v)
+        shells = body + pp.appendage_print_shells(apps, base, v)
+        _, rep = pp.assemble_character(shells, size="medium", reference=pp.FIGURE_SHELLS)
         assert rep.watertight
         assert rep.shells >= 8
+        # the reshaped body carries the wings and horns: each root is on it in the STL frame
+        # (the old version added Y-up appendages to Z-up shells and never looked)
+        gaps = pr.root_gaps(rep.placed_shells)
+        assert set(gaps) == {"wing_l", "wing_r", "horn_l", "horn_r"}
+        assert max(gaps.values()) <= 0.1
+        wrong = [s for a in apps for s in a.build(base, v)]
+        far = pp.assemble_character(body + wrong, size="medium", reference=pp.FIGURE_SHELLS)[1]
+        assert min(pr.root_gaps(far.placed_shells).values()) > 1.0
 
     def test_flight_report_uses_the_characters_own_mass(self, assets):
         base, lib, cat = assets
@@ -299,3 +307,203 @@ class TestOnRealBody:
         assert heavy.required_muscle_kg > light.required_muscle_kg
         # a human-scale body lands in a plausible mass range, not milligrams
         assert 30.0 < light.body_mass_kg < 150.0
+
+
+# -- the derived layer: the body is never baked (design D6, bug 3) -----------------------------
+
+import copy                                                       # noqa: E402
+
+from minimaster.character import kinds as K                       # noqa: E402
+from minimaster.character.appendage_spec import AppendageSpec     # noqa: E402
+
+PECTORAL = "torso.torso_muscle_pectoral"
+
+
+def _winged(**kw):
+    c = Character(name="winged", **kw)
+    c.appendages += [K.new_spec("wing"), K.new_spec("tail"), K.new_spec("horn")]
+    return c
+
+
+def test_apply_to_bakes_the_adaptation_and_a_second_call_adds_it_again():
+    """The behaviour the derived layer replaces (kept for the older tools): pectoral
+    0.85 after one apply, 1.00 after a second, with no inverse."""
+    c = Character()
+    apps = [A.Appendage("wing", mirror=True)]
+    ca.apply_to(c, apps)
+    assert c.sliders[PECTORAL] == pytest.approx(0.85)
+    ca.apply_to(c, apps)
+    assert c.sliders[PECTORAL] == 1.0
+
+
+def test_the_effective_body_is_recomputed_not_accumulated():
+    c = _winged()
+    first = c.effective()
+    for _ in range(3):
+        again = c.effective()
+    assert again == first
+    assert first[0][PECTORAL] == pytest.approx(0.85)
+    assert c.sliders == {} and c.macro == Character().macro        # nothing written back
+
+
+def test_the_effective_values_are_what_apply_to_would_have_made():
+    user = Character()
+    user.sliders[PECTORAL] = 0.2
+    legacy = copy.deepcopy(user)
+    ca.apply_to(legacy, [A.Appendage("wing", mirror=True), A.Appendage("tail"),
+                         A.Appendage("horn", mirror=True)])
+    mine = copy.deepcopy(user)
+    mine.appendages += _winged().appendages
+    sliders, macro, notes = mine.effective()
+    assert sliders == legacy.sliders and macro == legacy.macro
+    assert len(notes) == 3
+    assert mine.sliders == {PECTORAL: 0.2}
+
+
+def test_removing_an_appendage_restores_the_body_exactly():
+    c = _winged()
+    plain = Character()
+    assert c.effective()[0] != plain.effective()[0]
+    for spec_id in ("wing-1", "tail-1", "horn-1"):
+        assert c.remove_appendage(spec_id)
+    assert c.effective() == (plain.sliders, plain.macro, [])
+    # switching one off is the same as removing it
+    d = _winged()
+    for spec in d.appendages:
+        spec.enabled = False
+    assert d.effective() == (plain.sliders, plain.macro, [])
+
+
+def test_a_switched_off_record_costs_nothing_while_the_others_still_do():
+    c = _winged()
+    only_wing = Character()
+    only_wing.appendages.append(K.new_spec("wing"))
+    c.spec("tail-1").enabled = False
+    c.spec("horn-1").enabled = False
+    assert c.effective() == only_wing.effective()
+    apps = c.appendages
+    assert ca.consequences(apps) == ca.consequences([c.spec("wing-1")])
+    assert [n.split(" ")[0] for n in ca.anatomy_delta(apps)[1]] == ["wing"]
+
+
+def test_the_anatomy_switch_and_cap_are_the_only_stored_state():
+    c = _winged()
+    c.anatomy["enabled"] = False
+    assert c.effective()[0] == {} and c.effective()[2] == []
+    c.anatomy.update(enabled=True, cap=0.3)
+    sliders, macro, _ = c.effective()
+    assert sliders and all(abs(v) <= 0.3 + 1e-12 for v in sliders.values())
+    again = Character.from_dict(c.to_dict())
+    assert again.anatomy == {"enabled": True, "cap": 0.3} and again.effective() == c.effective()
+    assert "sliders" not in c.to_dict()["anatomy"]
+
+
+def test_save_and_load_leave_the_effective_body_unchanged(tmp_path):
+    c = _winged()
+    c.sliders["nose.nose_curve"] = 0.4
+    before = c.effective()
+    c.save(tmp_path / "c.mmchar")
+    after = Character.load(tmp_path / "c.mmchar")
+    assert after.sliders == {"nose.nose_curve": 0.4}               # no anatomy in the saved sliders
+    assert after.effective() == before
+    after.save(tmp_path / "d.mmchar")
+    assert Character.load(tmp_path / "d.mmchar").effective() == before
+
+
+def test_a_record_the_registry_knows_sets_its_own_load():
+    wing = K.new_spec("wing")
+    big = K.new_spec("wing", params={"span": 26.0})
+    assert ca.appendage_load(wing) == pytest.approx(1.0)
+    assert ca.appendage_load(big) == pytest.approx(2.0)
+    wing.side = "left"
+    assert ca.appendage_load(wing) == pytest.approx(1.0 / ca.PAIR_FACTOR)   # a lone wing is lighter
+    tail = K.new_spec("tail", params={"length": 12.0})
+    assert ca.appendage_load(tail) == pytest.approx(2.0)
+    tail.side = "both"
+    assert ca.appendage_load(tail) == pytest.approx(2.0 * ca.PAIR_FACTOR)
+    scaled = K.new_spec("horn", scale=3.0)
+    assert ca.appendage_load(scaled) == pytest.approx(3.0)
+
+
+def test_a_harvested_limb_costs_the_same_whatever_its_dead_scale_says():
+    """A harvest ignores scale (the old class even multiplied the anatomy by it): the
+    kind owns that decision."""
+    a = K.new_spec("harvest")
+    b = K.new_spec("harvest")
+    b.placement["scale"] = 5.0
+    assert ca.appendage_load(a) == ca.appendage_load(b) == pytest.approx(1.0)
+    assert ca.appendage_load(A.Appendage("harvest", mirror=True, scale=5.0)) == pytest.approx(5.0)
+
+
+def test_records_that_cannot_be_built_cost_nothing():
+    unknown = AppendageSpec(id="g-1", kind="gizzard")
+    bad_style = AppendageSpec(id="w-1", kind="wing", side="both", params={"style": "gryphon"})
+    off = K.new_spec("wing")
+    off.enabled = False
+    assert ca.appendage_load(bad_style) == 0.0
+    assert ca.anatomy_delta([unknown, bad_style, off]) == ({"sliders": {}, "macro": {}}, [])
+
+
+def test_the_delta_is_returned_without_touching_anything():
+    c = Character()
+    c.sliders[PECTORAL] = 0.5
+    apps = _winged().appendages
+    snapshot = copy.deepcopy((c.sliders, c.macro, apps))
+    delta, notes = ca.anatomy_delta(apps)
+    assert delta["sliders"][PECTORAL] == pytest.approx(0.85) and delta["macro"]["weight"] < 0
+    assert len(notes) == 3
+    sliders, macro, _ = ca.effective_values(c.sliders, c.macro, apps)
+    assert sliders[PECTORAL] == 1.0                               # clamped on the SUM
+    assert (c.sliders, c.macro, apps) == snapshot
+
+
+def test_kind_ids_of_the_old_tables_still_work_for_records():
+    """The kind ids 'harvest' / PAIRED_KINDS keep their meaning for records: an extra limb
+    pair adapts the shoulders like the legacy class always did."""
+    legacy, _, _ = ca.consequences([A.Appendage("harvest", mirror=True)])
+    record, _, _ = ca.consequences([K.new_spec("harvest")])
+    assert record == legacy
+
+
+@pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
+class TestDerivedBodyOnRealMesh:
+    def _verts(self, assets, c):
+        base, lib, cat = assets
+        return lib.apply(base.verts, c.effective_target_weights(cat))
+
+    def test_save_load_build_leaves_the_body_unchanged(self, assets, tmp_path):
+        c = _winged()
+        c.macro.update(gender=1.0, muscle=0.6)
+        v0 = self._verts(assets, c)
+        c.save(tmp_path / "c.mmchar")
+        c2 = Character.load(tmp_path / "c.mmchar")
+        assert np.array_equal(self._verts(assets, c2), v0)
+        c2.save(tmp_path / "d.mmchar")
+        assert np.array_equal(self._verts(assets, Character.load(tmp_path / "d.mmchar")), v0)
+
+    def test_removing_the_appendages_gives_the_plain_body_back(self, assets):
+        _, _, cat = assets
+        c = _winged()
+        plain = Character()
+        v_winged = self._verts(assets, c)
+        assert not np.allclose(v_winged, self._verts(assets, plain))     # it did reshape the body
+        c.appendages.clear()
+        assert np.array_equal(self._verts(assets, c), self._verts(assets, plain))
+        # the user's own body is unaffected all along
+        assert _winged().target_weights(cat) == plain.target_weights(cat)
+
+    def test_two_applies_are_not_additive(self, assets):
+        base, lib, cat = assets
+        c = _winged()
+        w1 = c.effective_target_weights(cat)
+        c.effective_target_weights(cat)
+        assert c.effective_target_weights(cat) == w1
+
+    def test_the_adapted_body_is_what_the_old_bake_produced(self, assets):
+        base, lib, cat = assets
+        derived = _winged()
+        baked = Character()
+        ca.apply_to(baked, [A.Appendage("wing", mirror=True), A.Appendage("tail"),
+                            A.Appendage("horn", mirror=True)], cat)
+        assert np.array_equal(self._verts(assets, derived),
+                              lib.apply(base.verts, baked.target_weights(cat)))

@@ -117,8 +117,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_char = sub.add_parser(
         "character",
         help="build a realistic morphable human (needs the CC0 assets)")
-    p_char.add_argument("-o", "--output", required=True,
-                        help="output path: .stl to print, .png to render")
+    p_char.add_argument("-o", "--output",
+                        help="output path: .stl to print, .png to render "
+                             "(required unless only listing sliders or kinds)")
     p_char.add_argument("--gender", type=float, default=0.5,
                         help="0 = female, 1 = male")
     p_char.add_argument("--age", type=float, default=0.5,
@@ -156,6 +157,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument("--save-character", help="write the .mmchar file")
     p_char.add_argument("--randomize-face", type=int, metavar="SEED",
                         help="plausible random facial variation")
+    p_char.add_argument("--add", action="append", default=[], metavar="KIND[:k=v,...]",
+                        help="add an appendage, repeatable: wing, tail, horn or harvest "
+                             "(an extra limb), e.g. --add wing:style=feathered,span=15 "
+                             "--add tail:length=8 --add horn:side=left; also side=, "
+                             "preset=, scale=, roll=, offset=, at=X/Y/Z, id=")
+    p_char.add_argument("--remove", action="append", default=[], metavar="ID",
+                        help="remove an appendage of a loaded --character by id "
+                             "(e.g. wing-1), repeatable")
+    p_char.add_argument("--list-kinds", action="store_true",
+                        help="list the appendage kinds with their parameters and exit")
+    p_char.add_argument("--pose", action="append", default=[],
+                        metavar="ID[.l|.r]:control=value,...",
+                        help="pose an appendage, repeatable (e.g. --pose wing-1:fold=0.6 "
+                             "--pose wing-1.r:raise_=20 --pose wing-1:preset=folded); "
+                             "saved with --save-character")
+    p_char.add_argument("--fit-base", action="store_true",
+                        help="STL with appendages: widen the base to carry wings that "
+                             "overhang it")
+    p_char.add_argument("--force", action="store_true",
+                        help="STL with appendages: write the file even when the "
+                             "printability report blocks it")
+    p_char.add_argument("--no-anatomy", action="store_true",
+                        help="do not adapt the body to its appendages (broader chest "
+                             "for wings, ...); saved with --save-character")
+    p_char.add_argument("--anatomy-cap", type=float, metavar="X",
+                        help="largest body adaptation any slider may take from the "
+                             "appendages (default 1.0); saved with --save-character")
 
     # -- Blender backend (optional) --------------------------------------
 
@@ -378,6 +406,14 @@ def main(argv: list[str] | None = None) -> int:
     if command == "character":
         from .character import mhbase, portrait, printprep
 
+        if args.list_kinds:
+            from .character import kinds
+            print(kinds.format_kinds())
+            return 0
+        if args.output is None and args.list_sliders is None:
+            print("error: character needs -o/--output (or --list-sliders / --list-kinds)",
+                  file=sys.stderr)
+            return 2
         if not mhbase.available():
             print("error: the CC0 MakeHuman assets are not installed.\n"
                   "       run: python tools/fetch_makehuman_assets.py",
@@ -431,11 +467,37 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError:
                 print(f"error: {val!r} is not a number", file=sys.stderr)
                 return 2
+        if args.remove or args.add or args.pose or args.no_anatomy \
+                or args.anatomy_cap is not None:
+            from .character import kinds
+            try:
+                for spec_id in args.remove:
+                    if not doc.remove_appendage(spec_id):
+                        have = ", ".join(a.id for a in doc.appendages) or "none"
+                        raise ValueError(f"no appendage {spec_id!r} to remove "
+                                         f"(the character has: {have})")
+                for text in args.add:
+                    doc.appendages.append(
+                        kinds.add_from_text(text, doc.appendages, base=base, lib=lib))
+                for text in args.pose:
+                    kinds.apply_pose(*kinds.pose_from_text(text, doc.appendages))
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            if args.no_anatomy:
+                doc.anatomy["enabled"] = False
+            if args.anatomy_cap is not None:
+                doc.anatomy["cap"] = args.anatomy_cap
         if args.save_character:
             doc.save(args.save_character)
             print(f"wrote {args.save_character}")
 
-        weights = doc.target_weights(catalog)
+        # the body the character is built with = the user's sliders + what the enabled
+        # appendages ask of it (a derived layer, recomputed here and never saved)
+        weights = doc.effective_target_weights(catalog)
+        if doc.appendages:
+            for note in doc.effective(catalog)[2]:
+                print(f"body adapted: {note}")
         for spec in args.morph:
             if "=" not in spec:
                 print(f"error: --morph wants NAME=VALUE, got {spec!r}",
@@ -457,9 +519,21 @@ def main(argv: list[str] | None = None) -> int:
         verts = lib.apply(base.verts, weights)
 
         out = Path(args.output)
+        placed = []
+        if doc.appendages:
+            import warnings
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                placed = doc.instantiate_appendages(base, verts, lib)
+            for w in caught:
+                print(f"warning: {w.message}", file=sys.stderr)
+            print("appendages: " + (", ".join(p.name for p in placed) or "none built"))
         if out.suffix.lower() == ".png":
             shells = portrait.character_shells(
                 base, verts, eye_color=args.eye_color, levels=args.subdivide)
+            # appendages come out in the MakeHuman frame (Y up); the renderer is Z up
+            shells += [portrait.Shell(p.mesh().transform(portrait.MH_TO_Z_UP), p.material)
+                       for p in placed]
             fit = None
             if args.face:
                 import numpy as _np
@@ -481,15 +555,50 @@ def main(argv: list[str] | None = None) -> int:
         try:
             shells = printprep.character_print_shells(
                 base, verts, levels=args.subdivide)
+            figure = list(shells)
+            app_shells = []
+            if placed:
+                # one named shell per rig piece for a wing (the unit the printability
+                # report names), one per tail/horn; MakeHuman frame in, Z-up out
+                for p in placed:
+                    if p.rig is not None:
+                        ctl = dict(p.controls)
+                        preset = ctl.pop("preset", None)
+                        app_shells.append([(f"{p.name}/{n}", m)
+                                           for n, m in p.rig.piece_meshes(preset, **ctl)])
+                    else:
+                        app_shells.append([(p.name, p.mesh())])
+                shells = shells + printprep.appendage_print_shells(app_shells)
             mesh, rep = printprep.assemble_character(
                 shells, size=args.size, height=args.height,
-                with_base=not args.no_base)
+                with_base=not args.no_base,
+                reference=printprep.FIGURE_SHELLS if placed else None,
+                fit_base=bool(placed) and args.fit_base)
         except printprep.PrintError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
+        blocked = False
+        report_text = ""
+        if placed:
+            from .character import print_report
+            mm_per_unit = printprep.figure_scale(
+                shells, size=args.size, height=args.height,
+                reference=printprep.FIGURE_SHELLS)
+            prep = print_report.appendage_report(
+                app_shells, base, verts, mm_per_unit, levels=args.subdivide,
+                figure_shells=figure, assembly=rep)
+            report_text = prep.as_text()
+            blocked = bool(prep.blocking)
+        if blocked and not args.force:
+            print(report_text, file=sys.stderr)
+            print("error: the printability report blocks this export; fix the "
+                  "appendages or pass --force to write the STL anyway", file=sys.stderr)
+            return 3
         write_stl(mesh, out, name="character")
         print(f"wrote {out}")
         print(rep.as_text())
+        if report_text:
+            print(report_text)
         return 0
 
     if command in ("fuse", "hq-render"):

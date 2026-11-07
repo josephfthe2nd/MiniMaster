@@ -220,9 +220,18 @@ The **alula** is two or three small, stiff feathers on the leading edge at the w
 of the longest primary long (it was 12–19%, rooted out along the thumb), standing 10–26° off
 the hand axis in a small fan and rolled up 12°, stacked longest and lowest: it is a group of
 its own, not a continuation of the primaries. It sits on top of the primary bases (each
-feather 0.08 units higher than the one below).
+feather 0.08 units higher than the one below). Stacked that way the three roots stand 0.03-0.06 units
+clear of the hand tube and of every covert, so the alula was a **floating island** (the watertight
+gate cannot see it; a slicer prints it as a speck or loses it): the **alula mount**, a thin rod
+(`_alula_mount`, radius 0.03 → 0.02 of the wing scale) from inside the hand at the wrist up through the
+three alula roots, is the thumb that carries them. It is rigid with the alula's own joint (`thumb_cmc`),
+whose pivot is the wrist, so it stays welded to the hand when the thumb swings in a fold. Nothing the
+alula tests pin moves (roots, 26° / 18° / 10°, 26-32% of the longest primary, the stacking); the rod is
+hidden under the plumage in every view, it is only built with the bones (the draft preview has none) and
+`tests/test_print_report.py` holds the whole spread wing to **one overlap-connected component** in the
+spread and in every preset pose (before the rod: two, the alula being the other).
 
-Total: 274 pieces, ~86k triangles (was 306 pieces, 98k). The humerus's tube ends in a rounded
+Total: 275 pieces, ~86k triangles (was 306 pieces, 98k). The humerus's tube ends in a rounded
 blunt tip at the shoulder (`blunt` in `_feather_bones`), and the first marginals are not built
 (`ROOT_BURIED`): stowed, the shoulder end of the arm stood up beside the wrist as a second dome, and
 spread it is buried in the back.
@@ -752,6 +761,30 @@ lowest at 225-315, and every vertex of both wings stays ≥ 0.2 units off the mi
 (`test_every_preset_and_flap_phase_keeps_the_wings_off_the_midline`; the pure folds are held to 0.1: the half-folded angel's inner edge is
 0.19 from the spine with no control touched).
 
+### Placement in a character document
+
+`back_wings()` / `Appendage(anchor_point=...)` keep their meaning, but a *document* binds the wing
+to the body topologically (`minimaster.character.kinds`, design D4): the record stores the cage
+**quad** (`placement.anchor.face`, the shoulder-blade quad 10296 on the neutral body), and
+`Appendage.anchor_face` makes `_anchor_frame` use that quad instead of re-snapping a world point to
+whichever quad is nearest on the current body (`anchor_face=None` is the untouched legacy path,
+bit-identical). Measured on the wing shoulder joint against the scapula marker: on a tall body
+(macro height 1) the world-point wing lands 7.7 units below it, on a short one 2.0 above; the quad
+keeps it 1.0-1.9 units off on every body tried (height 0..1, child, old, weight, heavy, slim).
+The stored quad is the left-hand one; the right side is its exact mirror
+(`appendages.mirror_face_map`, 13,378 quads, max centroid error 1.8e-15, an involution, computed once
+per base mesh), so a single right wing (`side: right`) equals the right wing of a pair vertex for
+vertex.
+
+The membrane's `WING_ROOT` is the second world-fixed constant: with only the origin on a quad, the
+shoulder-to-root distance divided by the torso length varied 0.3-1.4 across bodies (1.3-9.9 wing
+units). A record aims at a **waist quad** instead (`Appendage.root_face` + `root_offset`, the quad's
+centroid plus the vector that lands exactly on `WING_ROOT` on the neutral body), so the distance is
+0.72-0.92 of the torso on every body and the wing is vertex-identical to `back_wings()` on the
+neutral one. The feathered wing's root stays relative to the anchor (it already followed the body).
+Wing parameters that a record exposes are the scalar ones, selected by style (`ParamSpec.when`), and
+the pose controls are per side (`{"*": {...}, "l": {...}, "r": {...}}`).
+
 ## Printing
 
 `thickness` is in wing units. A 32 mm figure makes one unit ≈ 1.9 mm: the 0.16 membrane is
@@ -760,6 +793,21 @@ to stay thicker than the sheet. Every piece — membrane, each bone, each feathe
 closed solid, merged into one mesh; overlapping closed shells still use every edge exactly twice,
 so the mesh passes the watertight gate as-is and the slicer unions them. Print a wing spread (or
 posed); a fully folded membrane is a thicket of self-overlapping sheet that no slicer will love.
+
+**On the print path** (`printprep.appendage_print_shells`, `print_report.appendage_report`; design doc D5/D8):
+the wing joins the body shells in the same Z-up frame (`PlacedWing.piece_meshes(pose)` gives every piece
+as its own outward-oriented shell, mirrored side included, so the report can say *which feather*), and
+`assemble_character(..., reference=printprep.FIGURE_SHELLS)` makes "medium / 32 mm" the height of the
+**body**: a spread pair stands ~38 mm tall and reaches ~11 mm past a 25 mm base (reported as
+`overhang_mm`; `fit_base=True` widens the base). The report measures what the gate cannot: the root arm /
+hand / membrane buried in the body (a share of its volume; the default pair is 11-14%), every piece
+overlap-connected to the body, and thickness at the chosen size by an inward ray from each face centroid
+(bat 0.4% and angel 1.6% of the area under 0.2 mm at medium; the bat 70% at tiny: blocked, and 71% under
+0.3 mm at small: warned). `printprep.apply_thickness_floor` / `appendage_print_shells(min_thickness_mm=...)` thicken a
+sheet that would print below the floor (`thickness >= floor_mm / (mm_per_unit * scale)`; off by default).
+A folded membrane's pleats lay sheet on sheet, which the posed-mesh probe warns about (23% under 0.2 mm
+folded, at medium); a folded or flapping pose also moves the arm out of the back, so a weld that is firm
+spread (11-14%) can be shallow or none (a half-folded or upstroke angel: 0-7%) and the report says so.
 
 ## Regenerating the figures
 

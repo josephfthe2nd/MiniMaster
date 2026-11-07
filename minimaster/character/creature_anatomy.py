@@ -27,6 +27,15 @@ The mappings below follow comparative anatomy:
 Nothing here invents new geometry — it only turns sliders the character
 already has, so the result stays printable and still responds to every other
 control.
+
+THE DERIVED LAYER. The body a character is printed with is NOT the body it was saved
+with. A document stores the user's own slider values, the list of appendages and two
+numbers (the switch and the cap of this module); :func:`effective_values` recomputes the
+adapted body from scratch every time -- ``user values + the consequences of the ENABLED
+appendages``, clamped on the sum -- and never writes it back. So saving and loading
+changes nothing, applying twice is the same as applying once, and removing an appendage
+gives the original body back exactly. :func:`apply_to` (which adds into a Character in
+place and cannot be undone) is kept for the older tools and demos.
 """
 
 from __future__ import annotations
@@ -125,12 +134,41 @@ PAIRED_KINDS = frozenset({"wing", "horn", "harvest"})
 PAIR_FACTOR = 1.45      # a pair costs more than one, but not double
 
 
+def _registered_kind(app):
+    """The registry :class:`~minimaster.character.kinds.Kind` of a document record
+    (an ``AppendageSpec``), or ``None`` for a legacy ``Appendage`` or an unknown kind.
+    The registry owns ``load()`` and ``paired`` for the records it knows; the tables in
+    this module keep serving everything else."""
+    from .appendage_spec import AppendageSpec
+    if not isinstance(app, AppendageSpec):
+        return None
+    from . import kinds
+    return kinds.KINDS.get(app.kind)
+
+
 def appendage_load(app) -> float:
     """How much body adaptation this appendage demands.
 
     Scaled from the appendage's own size so a small decorative horn costs
     almost nothing and a nine-metre wing costs a lot.
     """
+    spec_kind = _registered_kind(app)
+    if spec_kind is not None:
+        # a document record: its kind says how big it is and whether a pair is typical,
+        # and only the placement keys the kind honours scale it (a harvested limb ignores
+        # ``scale``, so it must not cost anatomy either)
+        try:
+            values, _ = spec_kind.clean(app.params or {})
+        except ValueError:
+            return 0.0                  # cannot be built (unknown style): no anatomy either
+        load = spec_kind.load(values)
+        if "scale" in spec_kind.placement_keys:
+            load *= float(app.scale)
+        if app.mirror and not spec_kind.paired:
+            load *= PAIR_FACTOR
+        elif spec_kind.paired and not app.mirror:
+            load /= PAIR_FACTOR
+        return max(0.0, load)
     from .wings import DEFAULT_SPAN
     p = app.params or {}
     kind = app.kind
@@ -162,6 +200,8 @@ def consequences(appendages, cap: float = 1.0):
     macro: dict[str, float] = {}
     notes: list[str] = []
     for app in appendages:
+        if getattr(app, "enabled", True) is False:       # a switched-off record costs nothing
+            continue
         eff = CONSEQUENCES.get(app.kind)
         if eff is None:
             continue
@@ -178,12 +218,45 @@ def consequences(appendages, cap: float = 1.0):
     return sliders, macro, notes
 
 
+def anatomy_delta(appendages, catalog=None, cap: float = 1.0):
+    """What the (enabled) appendages ask of the body, WITHOUT touching anything:
+    ``(delta, notes)`` with ``delta = {"sliders": {...}, "macro": {...}}`` (amounts to
+    add; slider amounts are capped to ``+-cap`` on the sum of all appendages, and unknown
+    slider keys are left out when a ``catalog`` is given)."""
+    sliders, macro, notes = consequences(appendages, cap=cap)
+    if catalog is not None:
+        sliders = {k: v for k, v in sliders.items() if k in catalog}
+    return {"sliders": sliders, "macro": macro}, notes
+
+
+def effective_values(user_sliders, user_macro, appendages, catalog=None, cap: float = 1.0):
+    """``(sliders, macro, notes)`` of the body the appendages call for: the user's values
+    plus :func:`anatomy_delta`, clamped on the sum (sliders to -1..1, macros to 0..1).
+
+    A pure function of its arguments: the inputs are not modified, so the result can be
+    recomputed whenever a record is added, removed, switched off or edited, and it is
+    never saved. It gives the same numbers :func:`apply_to` would, minus the damage."""
+    delta, notes = anatomy_delta(appendages, catalog=catalog, cap=cap)
+    sliders = dict(user_sliders)
+    for key, amount in delta["sliders"].items():
+        sliders[key] = max(-1.0, min(1.0, float(user_sliders.get(key, 0.0)) + amount))
+    macro = dict(user_macro)
+    for key, amount in delta["macro"].items():
+        if key in macro:
+            macro[key] = max(0.0, min(1.0, float(user_macro[key]) + amount))
+    return sliders, macro, notes
+
+
 def apply_to(character, appendages, catalog=None, cap: float = 1.0):
     """Fold appendage consequences into a Character, in place.
 
     Existing user slider values are ADDED to, not replaced, so a deliberate
     setting is never silently overwritten. Unknown slider keys are dropped
     (the asset set may differ), which is why a catalog can be passed.
+
+    This BAKES the adaptation into the character: a second call adds it again, and nothing
+    undoes it. It is kept for the older tools; a character document uses the derived
+    layer instead (:func:`effective_values`, ``Character.effective``).
     """
     sliders, macro, notes = consequences(appendages, cap=cap)
     for key, val in sliders.items():

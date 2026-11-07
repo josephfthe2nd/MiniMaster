@@ -1,0 +1,21 @@
+{
+  "asymmetry": {},
+  "format": "minimaster-character",
+  "macro": {
+    "african": 0.0,
+    "age": 0.5,
+    "asian": 0.0,
+    "caucasian": 1.0,
+    "gender": 0.5,
+    "height": 0.5,
+    "muscle": 0.5,
+    "weight": 0.5
+  },
+  "materials": {
+    "eye_color": "#5b7c8d",
+    "skin": "SKIN"
+  },
+  "name": "unnamed",
+  "sliders": {},
+  "version": 1
+}
