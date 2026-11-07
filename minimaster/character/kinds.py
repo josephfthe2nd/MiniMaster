@@ -200,7 +200,10 @@ HORN_RING_VERTS = 16
 TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.0, 0.8
 HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
 WING_FILLET, WING_FILLET_HEIGHT = 3.0, 0.4        # the arm is a thin rod: a broad, low boss
-WING_MOUND_RADIUS, WING_MOUND_HEIGHT = 0.55, 0.07     # the scapular mass, in arm lengths
+# the scapular mass, as FRACTIONS of the trunk's radius (junction.Mound(scale="trunk"): the core
+# resolves them from the body's own skeleton). In arm lengths (0.55 / 0.07 of a 3 unit arm) it was a
+# pillow 1.7 units wide on any body: the folded wing's 'lobes' and a child's boxy shoulders
+WING_MOUND_RADIUS, WING_MOUND_HEIGHT = 0.5, 0.055
 HARVEST_FILLET, HARVEST_FILLET_HEIGHT = 1.0, 0.7
 # the radius of the neutral body's own limb along its bones, as a fraction of the upper bone:
 # (positions along the upper bone, radii there, positions along the forearm from the elbow,
@@ -413,6 +416,7 @@ class Kind:
     paired = False                     # is a symmetric pair its typical installation?
     fillet_default = 1.0               # the ``fillet`` parameter's default (width, in root radii)
     fillet_height = 0.6                # how high the skin climbs the root, over the fillet width
+    junction_owner = None              # the part of the body the root belongs to (junction.JunctionSpec.owner)
 
     # -- parameters ---------------------------------------------------------------------
 
@@ -717,7 +721,8 @@ class _LoftKind(_NumericControls, Kind):
         reach = 1.5 * placed.root_depth + 1.5 * fillet * base_r * scale
         k = J.rings_for_length(centres, reach)
         return J.JunctionSpec(placed.name, centres[:k], radii[:k], width=fillet,
-                              base_radius=base_r * scale, height=self.fillet_height)
+                              base_radius=base_r * scale, height=self.fillet_height,
+                              owner=self.junction_owner)
 
 
 class TailKind(_LoftKind):
@@ -736,6 +741,7 @@ class TailKind(_LoftKind):
     paired = False
     fillet_default = TAIL_FILLET
     fillet_height = TAIL_FILLET_HEIGHT
+    junction_owner = "trunk"
     controls = (ControlSpec("curl", "Curl (added to the shape)", 0.0),
                 ControlSpec("droop", "Droop (added to the shape)", 0.0),
                 ControlSpec("lift", "Lift (degrees, up)", 0.0),
@@ -831,6 +837,7 @@ class HornKind(_LoftKind):
     paired = True
     fillet_default = HORN_FILLET
     fillet_height = HORN_FILLET_HEIGHT
+    junction_owner = "head"
     params = _horn_param_specs()
     presets = {"temples": {"label": "Temples (up and out on the skull)", "face": "temples",
                            "up_hint": (0.0, 1.0, 0.0), "offset": HORN_SINK, "side": "both"}}
@@ -949,12 +956,11 @@ class WingKind(Kind):
         sh, el = np.asarray(joints["shoulder"]), np.asarray(joints["elbow"])
         scale = float(np.cbrt(abs(np.linalg.det(placed.matrix[:3, :3]))))
         r = _wing_arm_radius(pw) * scale
-        arm = float(np.linalg.norm(el - sh))
         pts = [sh, sh + 0.5 * (el - sh), el]
-        mound = J.Mound(tuple(placed.anchor), radius=WING_MOUND_RADIUS * arm,
-                        height=WING_MOUND_HEIGHT * arm)
+        mound = J.Mound(tuple(placed.anchor), radius=WING_MOUND_RADIUS, height=WING_MOUND_HEIGHT,
+                        scale="trunk")
         return J.JunctionSpec(placed.name, pts, [r * J.HUG] * 3, width=fillet, base_radius=r,
-                              height=WING_FILLET_HEIGHT, mounds=(mound,))
+                              height=WING_FILLET_HEIGHT, mounds=(mound,), owner="trunk")
 
     def draft_params(self, values):
         if values.get("style") == "feathered":
@@ -1133,9 +1139,12 @@ class HarvestKind(_NumericControls, Kind):
         along = np.array(list(s_up) + [1.0] * len(s_lo))
         t = np.clip(along * upper / max(A.NECK_LENGTH * upper, 1e-9), 0.0, 1.0)
         radii = radii * (neck + (1.0 - neck) * t * t * (3.0 - 2.0 * t)) * J.HUG
-        return J.JunctionSpec(placed.name, pts, radii, width=fillet,
-                              base_radius=float(radii[-len(s_lo) - 1]) / J.HUG,
-                              height=HARVEST_FILLET_HEIGHT)
+        base_r = float(radii[-len(s_lo) - 1]) / J.HUG
+        # the neutral body's limb is only a model of the placed copy (a different body, a pose, a
+        # root tapered to fit the torso): the skin may only count as hidden where the mesh IS
+        radii = J.fit_radii_to_mesh(pts, radii, placed.mesh(controls).vertices)
+        return J.JunctionSpec(placed.name, pts, radii, width=fillet, base_radius=base_r,
+                              height=HARVEST_FILLET_HEIGHT, owner="trunk")
 
     def material(self, params):
         return material_named("skin")

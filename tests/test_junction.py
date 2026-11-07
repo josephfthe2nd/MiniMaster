@@ -68,6 +68,12 @@ def displacement(base, specs, **kw):
     return out - base.verts
 
 
+# the S1b guards (smoothing, stretch / Lipschitz / gap limits, crossing check) off: the LAW of a
+# spec alone, which the first two tests below pin
+LAW_ONLY = dict(max_lipschitz=None, max_area_growth=None, max_edge_growth=None,
+                intersections=False, smooth=0, tight_gap=None, min_area_ratio=0.0, min_normal_dot=-1.0)
+
+
 # -- the description -----------------------------------------------------------------------
 
 
@@ -174,9 +180,13 @@ def test_a_vertex_beyond_the_fillet_width_does_not_move_and_the_law_holds_inside
     spec = tube_up(width=1.5)
     W = spec.fillet_width
     v = body.verts
-    d = displacement(body, [spec])
+    d = displacement(body, [spec], **LAW_ONLY)       # the law itself: the guards come next
     dist, _ = J.tube_distance(v, np.asarray(spec.points), np.asarray(spec.radii))
     assert np.all(d[dist >= W] == 0.0)                           # exactly unchanged at >= W
+    # the guarded result also leaves everything beyond W alone, and moves less than the law
+    dg = displacement(body, [spec])
+    assert np.all(dg[dist >= W] == 0.0) and np.linalg.norm(dg, axis=1).max() <= np.linalg.norm(
+        d, axis=1).max() + 1e-12
     assert np.any((dist > 0) & (dist < W) & (np.linalg.norm(d, axis=1) > 1e-6))
     # the remaining distance of every moved outside vertex is W f(delta / W), within the skin's
     # curvature (the radius is 10: the climb is along the wall, so the distance is kept to O(t^2))
@@ -203,7 +213,7 @@ def test_the_skin_climbs_the_tube_and_ends_tangent_to_it(fine):
     spec = tube_up(width=2.0, height=1.0, sharpness=2.0)
     W = spec.fillet_width
     v = body.verts
-    out = v + displacement(body, [spec])
+    out = v + displacement(body, [spec], **LAW_ONLY)             # the law itself (guards: below)
     dist, c = J.tube_distance(v, np.asarray(spec.points), np.asarray(spec.radii))
     close = (dist > 0) & (dist < 0.3 * W)
     assert close.sum() > 10
@@ -222,6 +232,12 @@ def test_the_skin_climbs_the_tube_and_ends_tangent_to_it(fine):
     angle_old = angle(v, vertex_normals(v, q))
     angle_new = angle(out, vertex_normals(out, q))
     assert angle_old.mean() > 80 and angle_new.mean() < 55
+    # with the guards on (no edge stretches past 2x, neighbours differ by <= 1.25 edge lengths)
+    # the skin still climbs and is still more tangent to the wall than it was: a vertical
+    # wall is as steep as a 0.15 edge can follow a 1.2 rise, so less than the law
+    guarded = v + displacement(body, [spec])
+    assert (guarded - v)[close][:, 2].min() > 0.08 * W
+    assert angle(guarded, vertex_normals(guarded, q)).mean() < angle_old.mean() - 15
 
 
 def test_a_tube_buried_under_the_skin_leaves_it_alone(fine):
@@ -408,7 +424,9 @@ def test_it_is_fast_on_a_body_of_this_size(body):
         t0 = time.perf_counter()
         J.apply_junctions(body, body.verts, specs)
         t.append(time.perf_counter() - t0)
-    assert min(t) < 0.05, t
+    # S1: 8 ms. S1b adds the crossing test, the smoothing and the facing-gap limits on three specs:
+    # ~70-100 ms cold (the lab caches the result by body and specs, and a drag draws the unshaped skin)
+    assert min(t) < 0.15, t
 
 
 def test_cage_is_closed_tells_a_closed_cage_from_an_open_one():
@@ -626,7 +644,7 @@ def test_one_junction_on_a_fixed_body_is_a_pure_function(world):
 
 
 @assets
-def test_a_pair_and_a_tail_take_well_under_fifty_milliseconds(world):
+def test_a_pair_and_a_tail_take_well_under_150_milliseconds(world):
     base, lib, verts = world
     c, v, placed = _placed(world, "tail", "horn")                         # tail + horn pair
     specs = J.junction_specs(placed)
@@ -636,7 +654,9 @@ def test_a_pair_and_a_tail_take_well_under_fifty_milliseconds(world):
         t0 = time.perf_counter()
         J.apply_junctions(base, v, specs)
         t.append(time.perf_counter() - t0)
-    assert min(t) < 0.05, t
+    # S1: 8 ms. S1b adds the crossing test, the smoothing and the facing-gap limits on three specs:
+    # ~70-100 ms cold (the lab caches the result by body and specs, and a drag draws the unshaped skin)
+    assert min(t) < 0.15, t
 
 
 @assets
@@ -649,11 +669,18 @@ def test_the_skin_meets_the_root_at_a_smaller_angle_and_without_new_creases(worl
     out = c.shaped_body(base, v, placed)
     m = J.measure_junction(base, v, out, spec, levels=2)
     assert m["flipped"] == 0 and m["min_area_ratio"] >= J.MIN_AREA_RATIO - 1e-9
-    # the skin ran into the root at 56-92 degrees from tangent; now it meets it at 15-30 less
-    assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - 15, m
+    # the skin ran into the root at 56-92 degrees from tangent; now it meets it at 15-30 less. The
+    # tail's S1 figure (27 degrees) was bought with 2.5-3.4x stretched edges and 12 new crossings
+    # of the cleft's two cheeks; inside the 2x cap and without crossings the cage gives ~9 there
+    # (the tail sits in the cleft; its anatomy is another track's).
+    need = {"tail": 5.0}.get(text, 15.0)
+    assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - need, m
     # no crease the body did not already have: the 99th percentile of what the junction adds to
-    # the crease of an edge, on the twice-subdivided skin, and the 95th percentile of the zone
-    assert m["dihedral_increase_p99_deg"] < 14.0, m
+    # the crease of an edge, on the twice-subdivided skin (S1: 14), and the 95th percentile of the zone
+    assert m["dihedral_increase_p99_deg"] < 10.0, m
+    # ... and the WORST edge (S1: it could rise 60-95 degrees where the body already has a crease:
+    # the cleft under the tail, the armpit under the wing arm)
+    assert m["dihedral_increase_max_deg"] < {"tail": 50.0}.get(text, 30.0), m   # the cleft: 43 here
     assert m["p95_dihedral_deg_after"] < max(14.0, m["p95_dihedral_deg_before"] + 6.0), m
 
 
@@ -911,3 +938,535 @@ def test_subdivided_prints_work_and_the_open_teeth_are_left_out(world, tmp_path)
     assert main(["character", "--subdivide", "1", "--add", "tail", "--add", "horn", "-o", str(out2),
                  "--size", "medium"]) == 0
     assert out2.stat().st_size > 1_000_000
+
+
+# ==========================================================================================
+# S1b: the core made robust (validity guards, ownership, body-relative sizes, quality helper)
+# ==========================================================================================
+
+from minimaster.character import bodyframe as BF  # noqa: E402
+from minimaster.character import junction_checks as JC  # noqa: E402
+
+
+def unit_quad():
+    v = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=float)
+    return v, np.array([[0, 1, 2, 3]])
+
+
+def test_a_quad_that_would_grow_past_the_cap_is_backed_off():
+    v, q = unit_quad()
+    push = np.zeros((4, 3))
+    push[2] = (1.5, 1.5, 0.0)                                  # the far corner: the area becomes 3.25x
+    off, _, r0 = J.limit_displacement(v, q, push)              # S1: no growth guard
+    assert r0 == 0 and np.array_equal(off, push)
+    out, factor, rounds = J.limit_displacement(v, q, push, max_area_growth=2.0)
+    new = np.linalg.norm(J._quad_vectors(v + out, q)[0])
+    assert rounds > 0 and factor[2] < 1.0
+    assert new <= 2.0 * np.linalg.norm(J._quad_vectors(v, q)[0]) + 1e-9
+    assert new > 1.7 * np.linalg.norm(J._quad_vectors(v, q)[0])          # ... as little as it takes
+
+
+def test_an_edge_that_would_stretch_past_the_cap_is_backed_off():
+    v, q = unit_quad()
+    push = np.zeros((4, 3))
+    push[1] = push[2] = (2.0, 0.0, 0.0)           # one edge becomes 3x, the quad 3x
+    # only the edge guard, so it is the one that is tested
+    out, factor, _ = J.limit_displacement(v, q, push, max_edge_growth=2.0)
+    new = v + out
+    assert np.linalg.norm(new[1] - new[0]) <= 2.0 * 1.0 + 1e-9 and factor[1] < 1.0
+    free, _, r = J.limit_displacement(v, q, push)
+    assert r == 0 and np.linalg.norm((v + free)[1] - (v + free)[0]) == pytest.approx(3.0)
+
+
+def test_neighbours_may_not_move_more_than_the_lipschitz_bound_apart():
+    v = np.array([[0, 0, 0], [0.1, 0, 0], [0.1, 0.1, 0], [0, 0.1, 0]], dtype=float)
+    q = np.array([[0, 1, 2, 3]])
+    push = np.zeros((4, 3))
+    push[1] = push[2] = (0.0, 0.0, 0.3)               # 3 edge lengths apart from the others
+    out, factor, _ = J.limit_displacement(v, q, push, max_lipschitz=1.25)
+    d = np.linalg.norm(out[1] - out[0]) / 0.1
+    assert d <= 1.25 + 1e-6 and factor[1] < 1.0 and d > 1.0        # as much as it allows
+    free, _, r = J.limit_displacement(v, q, push)
+    assert r == 0 and np.linalg.norm(free[1] - free[0]) / 0.1 == pytest.approx(3.0)
+
+
+def two_cubes(gap, levels=2):
+    """Two rounded closed cages facing each other across ``gap`` (a cleft): ``(base, n)``, the
+    first ``n`` vertices are cube A (its +X face looks at cube B's -X face)."""
+    v, q = cube_cage(2.0)
+    v, q = subdivide_quads(v, q, levels)
+    v2 = v + np.array([v[:, 0].max() - v[:, 0].min() + gap, 0.0, 0.0])
+    return FakeBase(np.vstack([v, v2]), np.vstack([q, q + len(v)])), len(v)
+
+
+def test_the_skin_is_not_pushed_through_the_opposite_skin():
+    # two plain boxes (6 big quads each): the +X face of A pushed 0.6 into B, which stands 0.3 away
+    # and a little off to the side, so the edges of A cross the interior of B's -X face
+    v, q = cube_cage(2.0)
+    v2 = v + np.array([2.3, 0.3, 0.3])
+    base2 = FakeBase(np.vstack([v, v2]), np.vstack([q, q + 8]))
+    v = base2.verts
+    face = np.nonzero(v[:8, 0] > 0.5)[0]
+    push = np.zeros_like(v)
+    push[face] = (0.6, 0.0, 0.0)
+    q = base2.body_quads
+    moved = np.nonzero(np.linalg.norm(push, axis=1) > 0)[0]
+    assert len(JC.self_intersection_pairs(v + push, q, moved)) > 0        # the test is not vacuous
+    assert len(JC.self_intersection_pairs(v, q, moved)) == 0
+    # the cage guard
+    out, factor, _ = J.limit_displacement(v, q, push, intersections=True)
+    assert len(JC.self_intersection_pairs(v + out, q, moved)) == 0
+    assert 0 < factor[face].mean() < 1.0                          # backed off, not wiped out
+    # a pair that is hidden inside the appendage's own tube is allowed (the slicer's union)
+    everywhere = lambda pts: np.ones(len(pts), dtype=bool)  # noqa: E731
+    same, f2, _ = J.limit_displacement(v, q, push, intersections=True, benign=everywhere)
+    assert np.array_equal(same, push) and np.all(f2 == 1.0)
+
+
+def test_skin_next_to_skin_it_already_touches_is_left_alone_and_fades_back_in():
+    base2, n = two_cubes(0.02, levels=3)                          # a closed cleft: 0.02 apart
+    v = base2.verts
+    # a mound that wants to lift cube A's +X face by 0.1 along X (toward the other cube)
+    xa = v[:n, 0].max()
+    spec = J.JunctionSpec("m", (), (), mounds=(J.Mound((xa, 0.0, 0.0), 0.8, 0.1,
+                                                       direction=(1.0, 0.0, 0.0)),))
+    free = J.apply_junctions(base2, v, [spec], tight_gap=None, intersections=False) - v
+    kept = J.apply_junctions(base2, v, [spec], intersections=False) - v
+    mag_free, mag_kept = np.linalg.norm(free, axis=1), np.linalg.norm(kept, axis=1)
+    assert mag_free.max() > 0.05                                  # not vacuous: it moves the skin
+    facing = (v[:n, 0] > xa - 0.05) & (np.abs(v[:n, 1]) < 0.15) & (np.abs(v[:n, 2]) < 0.15)
+    assert mag_free[:n][facing].min() > 0.05 and mag_kept[:n][facing].max() < 1e-12   # touching: held
+    assert mag_kept.max() > 0.0              # and it fades back in: the skin further on still moves
+
+
+def test_the_smoothing_spreads_a_step_and_keeps_what_is_pinned_and_what_never_moved():
+    v, q = sphere(levels=4)
+    d = np.zeros_like(v)
+    near = np.nonzero(np.linalg.norm(v - np.array([0, 0, 10.0]), axis=1) < 1.5)[0]
+    core = near[np.linalg.norm(v[near] - np.array([0, 0, 10.0]), axis=1) < 0.4]
+    d[near] = (0, 0, 0.2)
+    d[core] = (0, 0, 1.0)                                          # a spike on a plateau
+    pinned = np.zeros(len(v), dtype=bool)
+    pinned[core] = True
+    out = J.diffuse_displacement(v, q, d, pinned, 15)
+    assert np.array_equal(out[core], d[core])                      # pinned: as given
+    rim = np.setdiff1d(np.arange(len(v)), near)
+    assert np.all(out[rim] == 0.0)                                 # never moved: still not
+    ref = JC.stretch_report(v, v + d, q)["lipschitz_max"]
+    assert JC.stretch_report(v, v + out, q)["lipschitz_max"] < ref  # a smoother field
+    assert np.array_equal(J.diffuse_displacement(v, q, d, pinned, 0), d)
+
+
+def test_a_tube_lying_in_the_skin_does_not_move_the_skin_straight_above_it():
+    """``sps``: over a tube the skin normal IS the wall's normal and nothing climbs (S1's
+    mutant that dropped the factor lifted a ridge over the whole length of a lying tube)."""
+    pts = [(-1.5, 0.0, 9.97), (0.0, 0.0, 9.97), (1.5, 0.0, 9.97)]
+    spec = J.JunctionSpec("lying", pts, [0.6] * 3, width=1.5, base_radius=0.6, height=1.0)
+    v, q = sphere(levels=6)
+    idx, d = J.junction_displacement(spec, v, J.vertex_normals(v, q))
+    full = np.zeros_like(v)
+    full[idx] = d
+    above = (np.abs(v[:, 1]) < 0.05) & (np.abs(v[:, 0]) < 0.3) & (v[:, 2] > 9.9)
+    beside = (np.abs(v[:, 1]) > 0.7) & (np.abs(v[:, 1]) < 1.0) & (np.abs(v[:, 0]) < 1.0)
+    assert above.sum() >= 3 and np.linalg.norm(full[above], axis=1).max() < 0.04    # without sps: ~0.9
+    assert np.linalg.norm(full[beside], axis=1).max() > 0.1
+
+
+class _Frame:
+    """A stand-in for a BodyFrame: ``size`` of a part."""
+    def size(self, scale, near=None):
+        return {"head": 1.0, "trunk": 2.0, "arm": 0.5, "leg": 0.7, "local": 3.0}[scale]
+
+
+def test_a_relative_mound_is_resolved_from_the_body_and_stays_absolute_without_one():
+    m = J.Mound((0, 0, 10.0), 0.5, 0.1, scale="trunk")
+    spec = J.JunctionSpec("w", (), (), mounds=(m,))
+    assert J.resolve_spec(spec, None) is spec                     # no skeleton (a synthetic body): as written
+    r = J.resolve_spec(spec, _Frame()).mounds[0]
+    assert (r.radius, r.height, r.scale) == (1.0, 0.2, None)
+    assert J.resolve_spec(J.JunctionSpec("a", (), (), mounds=(J.Mound((0, 0, 10.0), 0.5, 0.1),)),
+                          _Frame()).mounds[0].radius == 0.5       # an absolute mound is left alone
+    with pytest.raises(ValueError, match="scale"):
+        J.Mound((0, 0, 0), 1.0, 0.1, scale="elbow")
+    # serialised only when set (the digest of a spec without it is the one it always had), and
+    # a relative size is a ratio: a similarity transform moves the centre, not the fractions
+    assert "scale" not in J.Mound((0, 0, 0), 1.0, 0.1).to_dict()
+    assert J.Mound.from_dict(m.to_dict()) == m and J.JunctionSpec.from_dict(spec.to_dict()) == spec
+    big = np.diag([2.0, 2.0, 2.0, 1.0])
+    t = m.transformed(big)
+    assert (t.radius, t.height, t.scale) == (0.5, 0.1, "trunk")
+    plain = J.JunctionSpec("p", [(0, 0, 0), (0, 0, 1)], [0.1, 0.1])
+    assert "owner" not in plain.to_dict() and plain.digest() == J.JunctionSpec.from_dict(
+        plain.to_dict()).digest()
+    owned = plain.with_(owner="trunk")
+    assert owned.to_dict()["owner"] == "trunk" and J.JunctionSpec.from_dict(owned.to_dict()) == owned
+    assert owned.mirrored().owner == "trunk" and owned.transformed(big).owner == "trunk"
+    assert owned.digest() != plain.digest()
+    with pytest.raises(ValueError, match="owner"):
+        plain.with_(owner="")
+
+
+def test_the_tube_is_fitted_to_the_mesh_it_stands_for_and_never_fatter():
+    """A tube thicker than the real mesh leaves the skin that 'is inside it' sticking out of a
+    thin root: the radii are capped by the radius of the mesh around the centreline."""
+    ang = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+    zs = np.linspace(0.0, 4.0, 9)
+    verts = np.array([(0.3 * np.cos(a), 0.3 * np.sin(a), z) for z in zs for a in ang])
+    pts = [(0, 0, 0.5), (0, 0, 1.5), (0, 0, 2.5)]
+    fat = J.fit_radii_to_mesh(pts, [0.5, 0.5, 0.5], verts)
+    assert all(r <= 0.5 for r in fat)
+    assert fat == pytest.approx([0.3 * J.HUG] * 3, rel=0.02)            # the mesh's, hugged
+    thin = J.fit_radii_to_mesh(pts, [0.1, 0.1, 0.1], verts)
+    assert thin == pytest.approx([0.1] * 3)                             # never FATTER than given
+    off = J.fit_radii_to_mesh([(5, 5, 5), (5, 5, 6)], [0.4, 0.2], verts)  # no mesh anywhere near
+    assert off == pytest.approx([0.4, 0.2])
+
+
+def test_facing_pairs_finds_the_two_sides_of_a_cleft_and_not_neighbours():
+    base2, n = two_cubes(0.1)
+    v, q = base2.verts, base2.body_quads
+    nrm = J.vertex_normals(v, q)
+    a = np.nonzero(v[:n, 0] > v[:n, 0].max() - 0.01)[0]
+    vi, ui, dist = J.facing_pairs(v, q, nrm, a, 0.2)
+    assert len(vi) > 0 and np.all(vi < n) and np.all(ui >= n) and dist.min() == pytest.approx(0.1, abs=1e-6)
+    none = J.facing_pairs(v, q, nrm, a, 0.05)[0]
+    assert len(none) == 0                                          # out of reach
+    assert not JC.share_a_quad(q, vi, ui).any()
+
+
+def test_ring_distance_counts_the_rings_around_a_mask():
+    v, q = sphere(levels=3)
+    mask = np.zeros(len(v), dtype=bool)
+    mask[0] = True
+    rd = JC.ring_distance(q, mask, 3)
+    assert rd[0] == 0 and (rd == 1).sum() >= 3 and rd.max() == 4 and (rd == 2).sum() > (rd == 1).sum()
+
+
+# -- on the real body: the junction is a VALID skin --------------------------------------------
+
+KINDS6 = ("tail", "horn", "wing:style=membrane", "wing:style=feathered", "harvest:preset=upper_arms",
+          "harvest:preset=lower_arms", "harvest:preset=extra_legs")
+BODIES5 = {"neutral": {"gender": 1.0, "muscle": 0.55}, "tall": {"gender": 1.0, "muscle": 0.55, "height": 1.0},
+           "short": {"gender": 1.0, "muscle": 0.55, "height": 0.0}, "child": {"age": 0.1875},
+           "heavy": {"weight": 1.0, "gender": 1.0, "muscle": 1.0}}
+
+
+def _shaped(world, texts, macro=None, poses=(), **kw):
+    """``(character, verts, placed, shaped verts, info)`` for appendage texts on a body."""
+    from minimaster.character import kinds
+    from minimaster.character.sliders import Character
+    base, lib, verts = world
+    if macro:
+        verts = lib.apply(base.verts, mh.macro_weights(**macro))
+    c = Character()
+    for t in ([texts] if isinstance(texts, str) else texts):
+        c.appendages.append(kinds.add_from_text(t, c.appendages, base=base, lib=lib))
+    for p in poses:
+        kinds.apply_pose(*kinds.pose_from_text(p, c.appendages))
+    placed = c.instantiate_appendages(base, verts, lib)
+    info: dict = {}
+    out = J.apply_junctions(base, verts, J.junction_specs(placed), info, **kw)
+    return c, verts, placed, out, info
+
+
+@assets
+@pytest.mark.parametrize("body", sorted(BODIES5))
+@pytest.mark.parametrize("text", KINDS6)
+def test_the_junction_is_a_valid_skin_on_every_kind_and_body(world, text, body):
+    """The reviewer's count: S1 stretched cage quads up to 2.5-6.5x (edges 2-5x, neighbours
+    3-4 edge lengths apart) and made 12-52 new pairs of crossing triangles in the cleft and the
+    armpit (30-64 on the subdivided print body). Every bound of ``quality_violations`` holds
+    for every kind on five bodies, on the cage and on the body subdivided once."""
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, text, BODIES5[body])
+    q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=(1,))
+    assert J.quality_violations(q) == [], (text, body, q)
+    assert q["moved"] == 0 or q["max_move"] > 0.02
+    assert q["max_move"] <= max(s.move_limit() for s in J.junction_specs(placed)) + 1e-9
+
+
+@assets
+@pytest.mark.parametrize("body", ["neutral", "child", "heavy"])
+def test_the_tail_and_the_wing_do_not_cross_the_skin_on_the_twice_subdivided_body(world, body):
+    base, lib, verts = world
+    for text in ("tail", "wing"):
+        c, v, placed, out, info = _shaped(world, text, BODIES5[body])
+        q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=(1, 2))
+        assert J.quality_violations(q) == [] and q["L2_selfx_new_visible"] == 0, (text, body)
+
+
+@assets
+def test_quality_violations_names_what_is_broken():
+    good = {"flipped": 0, "area_growth_max": 1.5, "area_ratio_min": 0.5, "edge_growth_max": 1.4,
+            "lipschitz_max": 0.9, "selfx_new_visible": 0, "L1_selfx_new_visible": 0}
+    assert J.quality_violations(good) == []
+    for key, bad in (("flipped", 2), ("area_growth_max", 3.0), ("area_ratio_min", 0.05),
+                     ("edge_growth_max", 2.5), ("lipschitz_max", 2.0), ("L1_selfx_new_visible", 4)):
+        msgs = J.quality_violations({**good, key: bad})
+        assert len(msgs) == 1, (key, msgs)
+    # and the helper measures a real stretch: S1's raw displacement on the real tail is flagged
+    world = _real_world()
+    base, lib, verts = world
+    c, v, placed, _, _ = _shaped(world, "tail", BODIES5["child"])
+    raw = J.apply_junctions(base, v, J.junction_specs(placed), **LAW_ONLY)
+    q = J.junction_quality(base, v, raw, J.junction_specs(placed), levels=(1,))
+    assert J.quality_violations(q), q            # the unguarded law stretches and crosses the cleft
+
+
+def _real_world():
+    base, lib = mh.load()
+    return base, lib, lib.apply(base.verts, mh.macro_weights(gender=1.0, muscle=0.55))
+
+
+@assets
+def test_a_wing_pose_does_not_puff_the_back_into_lobes_and_a_child_is_not_a_neutral_body(world):
+    """S1's body-independent scapular mound (1.74 units wide, 0.22 high) made two pillows on the
+    back beside a FOLDED wing and boxy shoulders on a child. It is now a fraction of the body's
+    own trunk: nothing on the back moves by more than a few millimetres, folded or not."""
+    base, lib, verts = world
+    results = {}
+    for label, macro, poses in (("neutral", BODIES5["neutral"], ()), ("child", BODIES5["child"], ()),
+                                ("folded", BODIES5["neutral"], ("wing-1:preset=folded",)),
+                                ("swung", BODIES5["neutral"], ("wing-1:swing=30",))):
+        c, v, placed, out, info = _shaped(world, "wing", macro, poses)
+        q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=(1,))
+        assert J.quality_violations(q) == [], label
+        assert q["max_move"] < 0.35 and q["moved"] > 0, (label, q["max_move"])
+        # beyond the root's fillet only the mound moves the skin (S1: up to 0.22 on the whole back)
+        cv0, cq = base.body_cage(v)
+        cv1, _ = base.body_cage(out)
+        far = np.ones(len(cv0), dtype=bool)
+        for sp in J.junction_specs(placed):
+            far &= J.tube_distance(cv0, np.asarray(sp.points), np.asarray(sp.radii))[0] > sp.fillet_width
+        assert np.linalg.norm(cv1 - cv0, axis=1)[far].max() < 0.12, label
+        results[label] = (q["max_move"], J.junction_specs(placed)[0], BF.frame_or_none(
+            base, lib.apply(base.verts, mh.macro_weights(**macro))))
+    for label in ("neutral", "folded"):
+        # the mound the spec carries is relative; resolved on the body it is a scapula, not a back
+        m = J.resolve_spec(results[label][1], results[label][2]).mounds[0]
+        assert m.radius < 0.9 and m.height < 0.12, (label, m)
+    rn = J.resolve_spec(results["neutral"][1], results["neutral"][2]).mounds[0]
+    rc = J.resolve_spec(results["child"][1], results["child"][2]).mounds[0]
+    assert rc.radius < 0.8 * rn.radius and rc.height < 0.8 * rn.height     # the child's is smaller
+    assert results["child"][0] < results["neutral"][0] + 0.02
+
+
+@assets
+def test_a_swung_arm_does_not_make_spikes_on_the_chest(world):
+    """The default lower arms swung 50 degrees across the front: the S1 core tented the chest
+    with two conical teats (the spec's tube was fatter than the arm's own mesh and the buried
+    root tented the skin). The tube now follows the mesh and only the exposed part moulds."""
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, "harvest:preset=lower_arms", BODIES5["neutral"],
+                                      ("arm-1:swing=50",))
+    specs = J.junction_specs(placed)
+    q = J.junction_quality(base, v, out, specs, levels=(1,))
+    assert J.quality_violations(q) == [], q
+    # the cone is a stretch signature: the unguarded law (S1's) grows a quad 3x and makes
+    # neighbours move 2 edge lengths apart there
+    raw = J.apply_junctions(base, v, specs, **LAW_ONLY)
+    bad = J.quality_violations(J.junction_quality(base, v, raw, specs, levels=()))
+    assert any("quad grew" in m for m in bad) and any("edge lengths apart" in m for m in bad), bad
+    cv0, cq = base.body_cage(v)
+    cv1, _ = base.body_cage(out)
+    nrm = J.vertex_normals(cv0, cq)
+    chest = (cv0[:, 2] > 0.8) & (cv0[:, 1] > 3.0) & (cv0[:, 1] < 5.0) & (np.abs(cv0[:, 0]) < 2.0)
+    out_of_skin = ((cv1 - cv0) * nrm).sum(axis=1)[chest]
+    assert out_of_skin.max() < 0.35 and info["moved"] < 400, (out_of_skin.max(), info)
+    # the tube follows the mesh: no radius is fatter than the arm it stands for
+    for p in placed:
+        spec = p.junction()
+        measured = J.fit_radii_to_mesh(spec.points, [10.0] * len(spec.radii), p.mesh().vertices)
+        assert np.all(np.asarray(spec.radii) <= 1.15 * np.asarray(measured)), (spec.radii, measured)
+
+
+@assets
+@pytest.mark.parametrize("text", ["horn:flare=2", "horn:length=8,base_radius=1.0", "horn:flare=1.5,base_radius=0.8"])
+def test_an_oversized_horn_root_does_not_swell_the_head(world, text):
+    """S1: ``flare=2`` moved 2,803 vertices (1,424 backed off by the limiter) and swelled the
+    temples; a root fatter than the head it grows from has no skin to flow into, so it moulds
+    nothing; a big but sane one moulds the head locally and boundedly."""
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, text, BODIES5["neutral"])
+    q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=(1,))
+    assert J.quality_violations(q) == []
+    head_part = q.get("by_part", {}).get("head", (0, 0.0))
+    assert q["moved"] <= 700 and q["max_move"] <= 0.3, (text, q["moved"], q["max_move"])
+    assert head_part[0] == q["moved"]                  # only the head's own skin
+    if text != "horn:flare=1.5,base_radius=0.8":
+        assert q["moved"] == 0                         # thicker than the head: nothing to mould
+
+
+@assets
+@pytest.mark.parametrize("text,away", [("harvest:preset=extra_legs", ("arm_l", "arm_r", "head")),
+                                       ("harvest:preset=upper_arms", ("arm_l", "arm_r", "head")),
+                                       ("harvest:preset=lower_arms", ("arm_l", "arm_r", "head", "leg_l", "leg_r"))])
+def test_an_extra_limb_does_not_mould_the_skin_of_the_original_arm_or_the_head(world, text, away):
+    """S1: the extra legs dragged the ORIGINAL arm's armpit into a web (1,094 vertices moved) and
+    the extra upper arms raised a ridge along its trapezius: foreign skin is left alone."""
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, text, BODIES5["neutral"])
+    q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=())
+    assert q["moved"] > 50
+    parts = q["by_part"]
+    assert parts["trunk"][0] > 0.8 * q["moved"]
+    for name in away:
+        assert parts.get(name, (0, 0.0))[1] <= 0.05, (name, parts)           # a hair at the rim, no more
+
+
+@assets
+def test_the_owner_of_each_kind_and_the_skeleton_that_tells_parts_apart(world):
+    base, lib, verts = world
+    for text, owner in (("tail", "trunk"), ("horn", "head"), ("wing", "trunk"),
+                        ("harvest:preset=extra_legs", "trunk")):
+        c, v, placed, out, info = _shaped(world, text)
+        assert {s.owner for s in J.junction_specs(placed)} == {owner}, text
+    frame = BF.frame_or_none(base, verts)
+    assert frame is not None and BF.frame_or_none(base, verts) is frame          # cached
+    assert {p: frame.part_size(p) for p in frame.parts}["head"] > 0.5
+    cage, _ = base.body_cage(verts)
+    scores = frame.part_scores(cage)
+    owners = np.array(frame.parts)[scores.argmin(axis=1)]
+    # the map is anatomical: the head is the top of the figure, the legs the bottom, arms are lateral
+    assert cage[owners == "head"][:, 1].min() > 5.5 and cage[owners == "leg_l"][:, 1].max() < 1.0
+    assert np.all(np.abs(cage[owners == "arm_l"][:, 0]) > 1.5) and np.all(cage[owners == "arm_l"][:, 0] > 0)
+    assert np.all(cage[owners == "arm_r"][:, 0] < 0) and np.all(cage[owners == "leg_r"][:, 0] < 0)
+    # a size is a body dimension: a child's trunk is smaller than an adult's
+    child = BF.frame_or_none(base, lib.apply(base.verts, mh.macro_weights(age=0.1875)))
+    assert child.size("trunk") < 0.8 * frame.size("trunk") and frame.size("local", (0, 3.0, 0)) == frame.size("trunk")
+    w = frame.owner_weights(np.array([[0.0, 3.0, 0.0], [4.0, 3.0, 0.5]]), frame.parts.index("trunk"))
+    assert w[0] > 0.99 and w[1] < 0.01             # the spine's skin is the trunk's, a hand's is not
+    assert frame.resolve_owner("arm", [3.0, 3.0, 0.0]) == frame.parts.index("arm_l")
+    with pytest.raises(ValueError):
+        frame.resolve_owner("tail", [0, 0, 0])
+
+
+@assets
+def test_the_harvest_tube_tracks_the_mesh_it_stands_for_and_the_tail_reaches_past_its_fillet(world):
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, "harvest:preset=lower_arms", BODIES5["neutral"])
+    p = placed[0]
+    spec = p.junction()
+    # the elbow's radius the fillet is sized by is the mesh's own, not a model of a neutral arm
+    mesh = p.mesh().vertices
+    el = np.asarray(spec.points[len(spec.points) - 3])
+    t = np.asarray(spec.points[-2]) - np.asarray(spec.points[-4])
+    t = t / np.linalg.norm(t)
+    rel = mesh - el
+    slab = np.abs(rel @ t) < 0.15
+    perp = np.linalg.norm(rel - (rel @ t)[:, None] * t, axis=1)[slab]
+    assert slab.sum() > 10 and 0.7 * np.median(perp) < spec.base_radius < 1.3 * np.median(perp)
+    # the tail's tube runs from the sunk base to 1.5 sink + 1.5 fillet widths (not three rings)
+    ct, vt, pt, ot, it = _shaped(world, "tail", BODIES5["neutral"])
+    tail = pt[0]
+    ts = tail.junction()
+    reach = 1.5 * tail.root_depth + 1.5 * ts.fillet_width
+    length = float(np.linalg.norm(np.diff(np.asarray(ts.points), axis=0), axis=1).sum())
+    assert length >= 0.8 * reach, (length, reach)
+
+
+@assets
+def test_the_junction_of_an_appendage_the_core_cannot_place_is_skipped_not_fatal(world):
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, "tail")
+    assert out is not v and info["moved"] > 0
+    out2 = J.apply_junctions(base, v, [J.junction_specs(placed)[0].with_(strength=0.0)])
+    assert out2 is v                                           # nothing active: the input itself
+
+
+@assets
+def test_the_lab_export_measures_the_root_weld_against_the_body_that_prints(tmp_path, monkeypatch):
+    """The report assumes the body is the one that is printed: the skin moulded around the tail.
+    (Before S1b nothing pinned the lab path; the CLI's was pinned.)"""
+    from minimaster.character import lab as L
+    from minimaster.character import print_report
+    res = L.Resources.shared()
+    doc = L.LabDocument(res)
+    doc.add_appendage("tail")
+    seen = {}
+    real = print_report.appendage_report
+
+    def spy(*a, **kw):
+        seen["body_verts"], seen["verts"] = kw.get("body_verts"), a[2]
+        return real(*a, **kw)
+
+    monkeypatch.setattr(print_report, "appendage_report", spy)
+    doc.engine.export(doc.character, tmp_path / "o.stl", size="small", force=True)
+    body = doc.engine.body_state(doc.character)
+    assert seen["verts"] is body.verts and seen["body_verts"] is not None
+    assert np.abs(seen["body_verts"] - body.verts).max() > 0.05      # the shaped skin, not the placed-on one
+
+
+@assets
+def test_the_draft_of_a_pose_drag_shapes_both_sides_of_a_mirrored_pair():
+    """A pose drag builds only the left wing and mirrors it: the skin must have the right-hand
+    fillet too (the half-built path adds ``spec.mirrored()``)."""
+    from minimaster.character import lab as L
+    from minimaster.character.appendages import mirror_vertex_map
+    res = L.Resources.shared()
+    doc = L.LabDocument(res)
+    doc.add_appendage("wing")
+    eng = doc.engine
+    draft = eng.draft_scene(doc.character, "pose", "wing-1")
+    body = eng.body_state(doc.character)
+    cv0, cq = res.base.body_cage(body.verts)
+    cv1, _ = res.base.body_cage(draft.body.verts)
+    d = cv1 - cv0
+    vm = mirror_vertex_map(res.base)
+    moved = np.linalg.norm(d, axis=1) > 0.01
+    assert (moved & (cv0[:, 0] > 0)).sum() > 50 and (moved & (cv0[:, 0] < 0)).sum() > 50
+    assert np.abs(d[vm] * [-1, 1, 1] - d).max() < 1e-9
+
+
+def test_the_skin_never_climbs_higher_than_the_tube_stands_above_it():
+    """A root that grazes the skin from inside (axis 0.3 under it, a radius of 0.6: it stands 0.3
+    above the skin) is a hair high, not a spike of the fillet's height (1.5): the swung arms of S1
+    tented the chest with cones where a buried root passed under it."""
+    pts = [(-1.5, 0.0, 9.7), (0.0, 0.0, 9.7), (1.5, 0.0, 9.7)]
+    spec = J.JunctionSpec("graze", pts, [0.6] * 3, width=2.5, base_radius=0.6, height=1.0)
+    v, q = sphere(levels=6)
+    idx, d = J.junction_displacement(spec, v, J.vertex_normals(v, q))
+    assert len(idx) > 20
+    assert np.linalg.norm(d, axis=1).max() < 0.4                 # without `stand`: ~1.1
+    # the same tube standing a full radius out of the skin moulds it by the fillet's height
+    tall = J.JunctionSpec("tall", [(0.0, 0.0, 9.4), (0.0, 0.0, 10.6), (0.0, 0.0, 11.8)], [0.6] * 3,
+                          width=2.5, base_radius=0.6, height=1.0)
+    idx, d = J.junction_displacement(tall, v, J.vertex_normals(v, q))
+    assert np.linalg.norm(d, axis=1).max() > 1.0
+
+
+@assets
+def test_the_default_call_smooths_the_displacement_over_the_cage(world):
+    """``smooth`` is on by default: the raw displacement is defined through skin normals that jump
+    in a crease, and the smoothed field has the smaller neighbour differences (S1: 3-4 edge lengths)."""
+    import inspect
+    assert inspect.signature(J.apply_junctions).parameters["smooth"].default == J.DIFFUSE_ITERATIONS > 0
+    base, lib, verts = world
+    c, v, placed, _, _ = _shaped(world, "wing", BODIES5["neutral"])
+    specs = J.junction_specs(placed)
+    rough = J.apply_junctions(base, v, specs, **{**LAW_ONLY, "smooth": 0})
+    smooth = J.apply_junctions(base, v, specs, **{**LAW_ONLY, "smooth": J.DIFFUSE_ITERATIONS})
+    default = J.apply_junctions(base, v, specs, max_lipschitz=None, max_area_growth=None,
+                                max_edge_growth=None, intersections=False, tight_gap=None)
+    cv0, cq = base.body_cage(v)
+    lip = [JC.stretch_report(cv0, base.body_cage(o)[0], cq)["lipschitz_max"] for o in (rough, smooth)]
+    assert lip[1] < 0.8 * lip[0], lip                          # smoother
+    assert np.array_equal(default, smooth)                      # and that is what the default does
+
+
+@assets
+def test_the_fillet_is_no_wider_than_the_part_of_the_body_it_lies_on(world):
+    """``WIDTH_CAP``: a root 0.7 thick on a head 0.86 across would raise a fillet as wide as the
+    root over the temple; it is capped at 0.6 radii of the head."""
+    base, lib, verts = world
+    c, v, placed, out, info = _shaped(world, "horn:base_radius=0.7", BODIES5["neutral"])
+    frame = BF.frame_or_none(base, v)
+    cap = J.WIDTH_CAP * frame.part_size("head")
+    cv0, _ = base.body_cage(v)
+    assert info["moved"] > 20
+    for sp in J.junction_specs(placed):
+        assert sp.fillet_width > cap + 0.05                      # the spec asks for more than the cap
+        alone = J.apply_junctions(base, v, [sp])                 # this horn on its own
+        moved = np.linalg.norm(base.body_cage(alone)[0] - cv0, axis=1) > 0
+        reach = J.tube_distance(cv0, np.asarray(sp.points), np.asarray(sp.radii))[0]
+        assert moved.sum() > 10 and reach[moved].max() <= cap + 1e-6, (reach[moved].max(), cap)

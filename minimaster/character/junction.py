@@ -1,11 +1,11 @@
 """Skin-conforming junctions: the body's skin flows into an appendage root.
 
-THE PROBLEM. An appendage is its own closed shell that overlaps the body (the slicer
-unions overlapping shells), so where a tail, horn, wing arm or extra limb enters the skin
-there is a hard intersection curve and nothing else: the skin does not rise to meet it, no
-flesh gathers around it, it reads as "slapped over skin". The body mesh cannot get new
-vertices (1,280 morph targets address it BY VERTEX INDEX) but its vertices can be MOVED
-after the morphs are applied. That is what this module does.
+THE PROBLEM. An appendage is its own closed shell that overlaps the body (the slicer unions
+overlapping shells), so where a tail, horn, wing arm or extra limb enters the skin there is a
+hard intersection curve and nothing else: the skin does not rise to meet it, no flesh gathers
+around it, it reads as "slapped over skin". The body mesh cannot get new vertices (1,280
+morph targets address it BY VERTEX INDEX) but its vertices can be MOVED after the morphs are
+applied. That is what this module does.
 
 THE MECHANISM. A :class:`JunctionSpec` describes the root of an appendage for the body:
 
@@ -24,6 +24,19 @@ THE MECHANISM. A :class:`JunctionSpec` describes the root of an appendage for th
 * optional **mounds** (a smooth outward bulge along the skin normal: scapular mass, sacral
   rise, deltoid cap; a negative height is a hollow; a mound with an ``end`` is a ridge or
   a groove) and **keep** spheres (what must stay sharp: lips, eyelids, a hand).
+
+THE GUARDS (S1b). The law above is the SHAPE the skin wants; the cage (0.28 units a quad, 0.08
+in the cleft) cannot always follow it, and the body has other skin than the root's. In order:
+the **owner** (``JunctionSpec.owner``, :mod:`.bodyframe`): only the skin of the part of the body
+the root belongs to moves, the fillet is capped by that part's size and a root thicker than the part
+moulds nothing; the **exposed** tube only (a section buried under the skin never tents it, and
+the skin never climbs higher than the tube stands); **relative sizes** (``Mound.scale``); the tube
+**follows the real mesh** (:func:`fit_radii_to_mesh`); the displacement is **smoothed** over the
+cage (:func:`diffuse_displacement`), **faded** where two sheets of skin already touch (a closed
+cleft); and a **validity pass** (:func:`limit_displacement`) backs vertices off until no cage quad
+flips, collapses or grows past 2x, no edge grows past 2x, no two neighbours move more than 1.25
+edge lengths apart, and the skin has not newly crossed itself (:mod:`.junction_checks`) outside the
+tube. :func:`junction_quality` reports all of it.
 
 :func:`apply_junctions` is a pure, deterministic function of ``(verts, specs)``: it
 returns new vertices of the same shape (topology and numbering are untouched, so every
@@ -51,6 +64,9 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from . import junction_checks as JC
+from .bodyframe import frame_or_none
+
 # --------------------------------------------------------------------------
 # defaults
 
@@ -61,10 +77,18 @@ DEFAULT_LEAD = 0.25           # how far (in fillet widths) the skin starts to ri
 MAX_MOVE_FACTOR = 1.6         # a vertex moves at most this many fillet widths
 MIN_AREA_RATIO = 0.12         # a quad may not shrink below this fraction of its own area
 MIN_NORMAL_DOT = 0.2          # ... nor turn its normal past this (cos of ~78 degrees)
-LIMIT_ITERATIONS = 12
-LIMIT_BACKOFF = 0.6
+LIMIT_ITERATIONS = 80
+NORMAL_SMOOTHING = 2          # S1b: rounds of averaging of the skin normals the displacement is built on
+TIGHT_GAP = 0.04              # S1b: skin within two rings of facing skin closer than this is not moved (fading back in over 2 more)
+INTERSECTION_MIN_MOVE = 0.01   # S1b: vertices that move by less than this do not start a crossing
+DIFFUSE_ITERATIONS = 20       # S1b: smoothing rounds of the raw displacement (diffuse_displacement)
+LIMIT_BACKOFF = 0.9
+MAX_AREA_GROWTH = 2.0         # S1b: a cage quad may not grow past this multiple of its own area ...
+MAX_EDGE_GROWTH = 2.0         # ... nor an edge past this multiple of its length ...
+MAX_LIPSCHITZ = 1.25          # ... and two neighbours' displacements differ by at most this many edge lengths
 
 _EPS = 1e-12
+MOUND_SCALES = ("local", "head", "trunk", "arm", "leg")
 
 
 # --------------------------------------------------------------------------
@@ -89,7 +113,15 @@ class Mound:
     The influence is ``w(u) = 1 - 3u^2 + 2u^3`` of ``u = distance / radius`` (C1 at both
     ends, zero beyond ``radius``). ``end`` turns the point into a ridge (or groove) along the
     segment ``center -> end``; ``axis`` with ``stretch`` > 1 elongates a point mound along
-    that axis. ``direction`` replaces the skin normal by a fixed direction."""
+    that axis. ``direction`` replaces the skin normal by a fixed direction.
+
+    ``scale`` makes ``radius`` and ``height`` FRACTIONS of a body dimension that
+    :func:`apply_junctions` resolves from the body's own skeleton (:mod:`.bodyframe`):
+    ``"head"``, ``"trunk"``, ``"arm"``, ``"leg"`` (the radius of that part: a head 1.0, a
+    trunk 1.2, an arm 0.5 units) or ``"local"`` (the part ``center`` lies in). A scapular mound
+    of ``radius=0.55, height=0.07, scale="trunk"`` is a third of a back on any body, where
+    0.55 units is a pillow on a child. Without a skeleton (a synthetic body) the numbers stay
+    absolute."""
 
     center: tuple
     radius: float
@@ -98,6 +130,7 @@ class Mound:
     axis: tuple | None = None
     stretch: float = 1.0
     direction: tuple | None = None
+    scale: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "center", _vec(self.center, "mound center"))
@@ -113,13 +146,15 @@ class Mound:
             raise ValueError("mound height must be finite")
         if not (math.isfinite(self.stretch) and self.stretch > 0):
             raise ValueError("mound stretch must be positive")
+        if self.scale is not None and self.scale not in MOUND_SCALES:
+            raise ValueError(f"mound scale must be one of {MOUND_SCALES} or None, got {self.scale!r}")
 
     def mirrored(self) -> "Mound":
         m = _mirror_point
         return Mound(m(self.center), self.radius, self.height,
                      None if self.end is None else m(self.end),
                      None if self.axis is None else m(self.axis), self.stretch,
-                     None if self.direction is None else m(self.direction))
+                     None if self.direction is None else m(self.direction), self.scale)
 
     def transformed(self, matrix) -> "Mound":
         M = np.asarray(matrix, dtype=np.float64)
@@ -131,8 +166,9 @@ class Mound:
         def vec(p):
             return None if p is None else tuple(M[:3, :3] @ np.asarray(p) / s)
 
-        return Mound(pt(self.center), self.radius * s, self.height * s, pt(self.end),
-                     vec(self.axis), self.stretch, vec(self.direction))
+        k = 1.0 if self.scale else s          # a relative size is not a length: it is not scaled
+        return Mound(pt(self.center), self.radius * k, self.height * k, pt(self.end),
+                     vec(self.axis), self.stretch, vec(self.direction), self.scale)
 
     def to_dict(self) -> dict:
         d = {"center": list(self.center), "radius": self.radius, "height": self.height}
@@ -141,12 +177,14 @@ class Mound:
                 d[k] = list(getattr(self, k))
         if self.stretch != 1.0:
             d["stretch"] = self.stretch
+        if self.scale is not None:
+            d["scale"] = self.scale
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Mound":
         return cls(d["center"], d["radius"], d["height"], d.get("end"), d.get("axis"),
-                   d.get("stretch", 1.0), d.get("direction"))
+                   d.get("stretch", 1.0), d.get("direction"), d.get("scale"))
 
 
 @dataclass(frozen=True)
@@ -207,7 +245,11 @@ class JunctionSpec:
     ``lead`` fillet widths before the tube's axis reaches the skin (a tube buried deeper than
     that leaves the skin above it alone). ``mounds`` and ``keep`` as described in the module docstring; ``max_move`` caps how
     far one vertex may move (default ``MAX_MOVE_FACTOR`` fillet widths, and at least the
-    tallest mound).
+    tallest mound). ``owner``: the part of the body this root belongs to (``"head"``,
+    ``"trunk"``, ``"arm"``, ``"leg"`` or a part of :mod:`.bodyframe`); the spec only moulds the
+    skin of that part (and the fillet is capped by its size). ``None``: the part the tube comes
+    out of the skin in, which is right unless the appendage is rooted where another part's skin
+    is (an extra limb that starts at the original shoulder).
     """
 
     name: str
@@ -223,6 +265,7 @@ class JunctionSpec:
     keep: tuple = ()
     max_move: float | None = None
     lead: float = DEFAULT_LEAD
+    owner: str | None = None
 
     def __post_init__(self):
         pts = tuple(_vec(p) for p in self.points)
@@ -244,6 +287,8 @@ class JunctionSpec:
                     and math.isfinite(v) and v >= 0):
                 raise ValueError(f"{name} must be a finite number >= 0, got {v!r}")
             object.__setattr__(self, name, float(v))
+        if self.owner is not None and not (isinstance(self.owner, str) and self.owner):
+            raise ValueError(f"owner must be a part name or None, got {self.owner!r}")
         if self.sharpness < 1.0:
             raise ValueError("sharpness must be >= 1")
         if self.pull > 1.0:
@@ -316,6 +361,8 @@ class JunctionSpec:
             d["max_move"] = self.max_move
         if self.lead != DEFAULT_LEAD:
             d["lead"] = self.lead
+        if self.owner is not None:
+            d["owner"] = self.owner
         return d
 
     @classmethod
@@ -326,7 +373,7 @@ class JunctionSpec:
                    d.get("pull", 1.0), d.get("strength", 1.0),
                    tuple(Mound.from_dict(m) for m in d.get("mounds", ())),
                    tuple(Keep.from_dict(k) for k in d.get("keep", ())), d.get("max_move"),
-                   d.get("lead", DEFAULT_LEAD))
+                   d.get("lead", DEFAULT_LEAD), d.get("owner"))
 
     def digest(self) -> str:
         """A content hash (a cache key): equal specs have equal digests."""
@@ -365,6 +412,23 @@ def vertex_normals(verts, quads) -> np.ndarray:
                    for c in range(3)], axis=1)
     ln = np.linalg.norm(vn, axis=1, keepdims=True)
     return vn / np.maximum(ln, _EPS)
+
+
+def smooth_normals(verts, quads, normals, rounds: int = 2) -> np.ndarray:
+    """``normals`` averaged over the cage edges ``rounds`` times (unit again): the skin normal
+    of a vertex in a crease (the gluteal cleft, an armpit) flips between neighbours that are
+    0.08 apart, and any displacement built on it is as noisy; averaged, it is the normal of the
+    surface at the scale of the fillet."""
+    n = np.asarray(normals, dtype=np.float64)
+    e = JC.cage_edges(quads)
+    a = np.concatenate([e[:, 0], e[:, 1]])
+    b = np.concatenate([e[:, 1], e[:, 0]])
+    cnt = np.maximum(np.bincount(a, minlength=len(n)), 1)[:, None]
+    for _ in range(rounds):
+        acc = np.stack([np.bincount(a, weights=n[b, c], minlength=len(n)) for c in range(3)], axis=1)
+        n = n + acc / cnt
+        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), _EPS)
+    return n
 
 
 def tube_distance(points, centre, radii, radius: bool = False):
@@ -407,6 +471,10 @@ def fillet_height(rho, W: float, H: float, k: float):
     skin); its second derivative vanishes at ``W`` for ``k >= 3``."""
     x = np.clip(1.0 - np.asarray(rho, dtype=np.float64) / W, 0.0, 1.0)
     return H * (1.0 - np.sqrt(np.maximum(1.0 - x ** k, 0.0)))
+
+
+def _unit(v):
+    return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), _EPS)
 
 
 def _smoothstep(u):
@@ -453,19 +521,81 @@ def _candidates(spec: JunctionSpec, cols: np.ndarray) -> np.ndarray:
     return np.nonzero(inside)[0]
 
 
-def _tube_displacement(spec, P, N, inside_margin):
-    """The fillet displacement of the points ``P`` (with skin normals ``N``): ``(m, 3)``."""
+def tube_closest(points, centre, radii):
+    """Like :func:`tube_distance` but with the position ALONG the centreline too:
+    ``(distance, closest, radius there, arclength of the closest point from the root)``."""
+    pts = np.asarray(points, dtype=np.float64)
+    best = np.full(len(pts), np.inf)
+    closest = np.zeros_like(pts)
+    rad_at = np.zeros(len(pts))
+    arc = np.zeros(len(pts))
+    along = 0.0
+    for a, b, ra, rb in zip(centre[:-1], centre[1:], radii[:-1], radii[1:]):
+        ab = b - a
+        den = float(ab @ ab)
+        t = np.clip(((pts - a) @ ab) / max(den, _EPS), 0.0, 1.0)
+        c = a + t[:, None] * ab
+        r = ra + t * (rb - ra)
+        dd = np.linalg.norm(pts - c, axis=1) - r
+        better = dd < best
+        best = np.where(better, dd, best)
+        closest = np.where(better[:, None], c, closest)
+        rad_at = np.where(better, r, rad_at)
+        arc = np.where(better, along + t * math.sqrt(den), arc)
+        along += math.sqrt(den)
+    return best, closest, rad_at, arc
+
+
+def tube_emergence(spec: JunctionSpec, P, N):
+    """Where the centreline of ``spec`` comes OUT of the skin, read off the skin vertices
+    ``P`` (normals ``N``) around it: ``(arclength, point, radius there)`` of the first sample
+    of the centreline whose axis is no more than half a radius below the skin, or ``None`` when
+    the whole tube is buried (then there is nothing to mould the skin around). The centreline
+    is sampled every ~0.05 fillet widths; the skin height at a sample is the distance to the
+    nearest skin vertex along that vertex's normal (a sample with no skin vertex within two
+    fillet widths and radii counts as deeply buried)."""
+    pts = np.asarray(spec.points)
+    rad = np.asarray(spec.radii)
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
     W = spec.fillet_width
+    n = int(np.clip(cum[-1] / max(0.05 * W, 0.02), 8, 200))
+    s = np.linspace(0.0, cum[-1], n)
+    idx = np.clip(np.searchsorted(cum, s, side="right") - 1, 0, len(seg) - 1)
+    t = (s - cum[idx]) / np.maximum(seg[idx], _EPS)
+    samples = pts[idx] + t[:, None] * (pts[idx + 1] - pts[idx])
+    radius = rad[idx] + t * (rad[idx + 1] - rad[idx])
+    if not len(P):
+        return None
+    d2 = ((samples[:, None, :] - P[None, :, :]) ** 2).sum(axis=2)
+    j = d2.argmin(axis=1)
+    h = ((samples - P[j]) * N[j]).sum(axis=1)
+    h[np.sqrt(d2[np.arange(n), j]) > 2.0 * (W + radius)] = -np.inf
+    up = np.nonzero(h >= -0.5 * radius)[0]
+    if not len(up):
+        return None
+    i = int(up[0])
+    return float(s[i]), samples[i], float(radius[i])
+
+
+def _tube_displacement(spec, P, N, inside_margin, W=None, weight=None):
+    """The fillet displacement of the points ``P`` (with skin normals ``N``): ``(m, 3)``.
+
+    ``W``: the fillet width in effect (capped by the body); ``weight``: a per-point 0..1 factor
+    (the part of the body the root belongs to)."""
+    W = spec.fillet_width if W is None else W
     H = spec.height * W
     k = spec.sharpness
     centre = np.asarray(spec.points)
     radii = np.asarray(spec.radii)
-    D, C, Rc = tube_distance(P, centre, radii, radius=True)
+    D, C, Rc, S = tube_closest(P, centre, radii)
     out = np.zeros_like(P)
     act = D < W
+    if weight is not None:
+        act &= weight > 0.0
     if not act.any():
         return out
-    Pa, Na, Da, Ca, rad_c = P[act], N[act], D[act], C[act], Rc[act]
+    Pa, Na, Da, Ca, rad_c, Sa = P[act], N[act], D[act], C[act], Rc[act], S[act]
     nu = Pa - Ca
     nu /= np.maximum(np.linalg.norm(nu, axis=1, keepdims=True), _EPS)
     cps = (nu * Na).sum(axis=1)                                  # cos of the angle skin-normal / wall-normal
@@ -475,16 +605,31 @@ def _tube_displacement(spec, P, N, inside_margin):
     climb = Na - cps[:, None] * nu                               # up the wall: the skin normal's tangent part
     climb /= np.maximum(np.linalg.norm(climb, axis=1, keepdims=True), 1e-9)
     # only the EXPOSED tube is moulded around: the weight falls to zero as the closest point of
-    # the centreline sinks below the skin (a tube buried under the scalp leaves it alone)
+    # the centreline sinks below the skin (a tube buried under the scalp leaves it alone) ...
     height_c = ((Ca - Pa) * Na).sum(axis=1)
-    reach = np.maximum(rad_c, 0.0) + spec.lead * W
-    expose = _smoothstep(1.0 + height_c / np.maximum(reach, _EPS))
+    tol = np.minimum(np.maximum(rad_c, 0.0), W) + spec.lead * W
+    expose = _smoothstep(1.0 + height_c / np.maximum(tol, _EPS))
+    # ... and the skin never climbs higher than the tube stands above it: the wall above this
+    # vertex is the tube's radius and its axis' height over the skin plus what is left of the
+    # tube beyond the closest point along the way out (a root that grazes the skin from inside on
+    # its way out is a hair high, not a spike of the fillet's height)
+    seg_dir = np.zeros_like(centre)
+    seg_dir[:-1] = np.diff(centre, axis=0)
+    seg_len = np.linalg.norm(seg_dir, axis=1)
+    tang = _unit(seg_dir[np.minimum(np.searchsorted(np.cumsum(seg_len[:-1]), Sa, side="right"),
+                                    len(centre) - 2)])
+    total_len = float(seg_len[:-1].sum())
+    wall = height_c + np.maximum(rad_c, 0.0) + np.maximum(total_len - Sa, 0.0) * np.maximum(
+        (tang * Na).sum(axis=1), 0.0)
+    stand = _smoothstep(wall / max(0.8 * H, _EPS))
     outside = Da > 0.0
     u = np.clip(Da / W, 0.0, 1.0)
-    rho = np.where(outside, W * fillet_remap(u), Da)             # the remaining distance
+    rho = np.where(outside, W * fillet_remap(u), Da)                 # the remaining distance
     lift = np.where(outside, fillet_height(np.maximum(rho, 0.0), W, H, k), H)
     pull = np.where(outside, (Da - rho) * spec.pull, 0.0)
-    wgt = sps * expose
+    wgt = sps * expose * stand
+    if weight is not None:
+        wgt = wgt * weight[act]
     out[act] = (-pull * wgt)[:, None] * away + (lift * wgt)[:, None] * climb
     # an inside vertex is hidden only while it STAYS inside: a tapered or bent tube can leave
     # it outside after it climbs, so bring it back to just under the wall
@@ -528,18 +673,79 @@ def _keep_weight(spec: JunctionSpec, P) -> np.ndarray:
     return w
 
 
-def junction_displacement(spec: JunctionSpec, cage_v, normals, candidates=None):
+# the fillet is capped by the size of the body part it lies on (a head is not a 1.2-unit wide
+# plateau); a root thicker than the part is no root the skin can flow into at all
+WIDTH_CAP = 0.6              # W <= this many radii of the part the root belongs to
+FIT_MIN = 0.02               # a root this close to "too thick" is left out altogether (no 1,000 vertices moved by a hair)
+FIT_FULL, FIT_NONE = 0.7, 1.1     # root radius / part radius: moulded in full up to the first, not at all from the second
+
+
+def resolve_spec(spec: JunctionSpec, frame=None) -> JunctionSpec:
+    """``spec`` with every relative mound (``Mound.scale``) turned into absolute lengths on
+    the body ``frame`` describes (without a frame the numbers stay as they are)."""
+    if frame is None or not any(m.scale for m in spec.mounds):
+        return spec
+    out = []
+    for m in spec.mounds:
+        if m.scale:
+            unit = frame.size(m.scale, near=m.center)
+            m = replace(m, radius=m.radius * unit, height=m.height * unit, scale=None)
+        out.append(m)
+    return replace(spec, mounds=tuple(out))
+
+
+def junction_displacement(spec: JunctionSpec, cage_v, normals, candidates=None, frame=None,
+                          quads=None, smooth=0):
     """``(indices, displacement)``: how ``spec`` moves the cage vertices it touches, before
-    the global limits. Pure."""
+    the global limits. Pure. ``frame``: the body's :class:`~.bodyframe.BodyFrame` (optional):
+    with it the spec only moulds the skin of the part of the body its root lies in (the
+    original arm's armpit is left alone by an extra arm), the fillet is capped by that part's
+    size and mounds with a ``scale`` are resolved. ``quads`` (the cage) with ``smooth`` > 0:
+    the tube's displacement is smoothed over the cage that many rounds
+    (:func:`diffuse_displacement`; mounds, being smooth already, are not)."""
+    spec = resolve_spec(spec, frame)
     cand = _candidates(spec, np.ascontiguousarray(cage_v.T)) if candidates is None else candidates
     if not len(cand) or not spec.active:
         return cand[:0], np.zeros((0, 3))
     P, N = cage_v[cand], normals[cand]
     d = np.zeros_like(P)
-    if spec.tube and spec.fillet_width > 0:
-        d += _tube_displacement(spec, P, N, inside_margin=0.04 * min(spec.radii))
+    owner_w = None
+    owner = None
+    W = spec.fillet_width
+    fit = 1.0
+    exit_info = None
+    if spec.tube and W > 0:
+        exit_info = tube_emergence(spec, P, N)
+        if frame is not None:
+            at = exit_info[1] if exit_info is not None else np.asarray(spec.points)[0]
+            near = np.linalg.norm(P - at, axis=1)
+            contact = P[near < 1.5 * (exit_info[2] if exit_info is not None else max(spec.radii)) + W]
+            owner = frame.resolve_owner(spec.owner, contact if len(contact) else at[None, :])
+            owner_w = frame.owner_weights(P, owner)
+            unit = frame.part_size(owner)
+            W = min(W, WIDTH_CAP * unit)
+            if exit_info is not None:
+                ratio = exit_info[2] / max(unit, _EPS)
+                fit = float(_smoothstep((FIT_NONE - ratio) / (FIT_NONE - FIT_FULL)))
+        if exit_info is not None and W > 0 and fit > FIT_MIN:
+            dt = fit * _tube_displacement(spec, P, N, inside_margin=0.04 * min(spec.radii),
+                                          W=W, weight=owner_w)
+            if smooth > 0 and quads is not None and (dt != 0).any():
+                full = np.zeros_like(cage_v)
+                full[cand] = dt
+                hidden = np.zeros(len(cage_v), dtype=bool)
+                hidden[cand] = tube_distance(P, np.asarray(spec.points), np.asarray(spec.radii))[0] < 0.0
+                dt = diffuse_displacement(cage_v, quads, full, hidden, smooth)[cand]
+            d += dt
     for m in spec.mounds:
-        d += _mound_displacement(m, P, N)
+        w = None
+        if frame is not None:
+            if owner is None:
+                owner = frame.resolve_owner(spec.owner, np.asarray(m.center)[None, :])
+                owner_w = frame.owner_weights(P, owner)
+            w = owner_w
+        dm = _mound_displacement(m, P, N)
+        d += dm if w is None else dm * w[:, None]
     d *= (spec.strength * _keep_weight(spec, P))[:, None]
     limit = spec.move_limit()
     mag = np.linalg.norm(d, axis=1)
@@ -550,7 +756,7 @@ def junction_displacement(spec: JunctionSpec, cage_v, normals, candidates=None):
 
 
 # --------------------------------------------------------------------------
-# validity: no flipped or collapsed quad
+# validity: no flipped, collapsed or stretched quad, no new self-intersection
 
 
 def _quad_vectors(v, q):
@@ -562,29 +768,164 @@ def _touching(quads, vertex_mask) -> np.ndarray:
     return np.nonzero(vertex_mask[quads].any(axis=1))[0]
 
 
+def facing_pairs(cage_v, quads, normals, moved, reach: float, min_dot: float = -0.2):
+    """Pairs ``(v, u, distance)`` of cage vertices that FACE each other across a gap: ``v`` is
+    one of ``moved`` (indices), ``u`` any vertex within ``reach`` whose normal points back at
+    it (``n_v . n_u < min_dot``) and which is not a neighbour of ``v`` (sharing a quad). That is
+    the two cheeks of a cleft, the arm and the flank at an armpit: where a skin that moves
+    toward the opposite skin must keep its gap."""
+    moved = np.asarray(moved)
+    if not len(moved):
+        z = np.zeros(0, dtype=np.int64)
+        return z, z, np.zeros(0)
+    lo, hi = cage_v[moved].min(axis=0) - reach, cage_v[moved].max(axis=0) + reach
+    near = np.nonzero(np.all((cage_v >= lo) & (cage_v <= hi), axis=1))[0]
+    P = cage_v[near]
+    where = np.full(len(cage_v), -1, dtype=np.int64)
+    where[near] = np.arange(len(near))
+    pr = JC.overlapping_pairs(P, P, where[moved], None, grow=0.5 * reach)
+    if not len(pr):
+        z = np.zeros(0, dtype=np.int64)
+        return z, z, np.zeros(0)
+    v, u = near[pr[:, 0]], near[pr[:, 1]]
+    dist = np.linalg.norm(cage_v[v] - cage_v[u], axis=1)
+    keep = (dist < reach) & ((normals[v] * normals[u]).sum(axis=1) < min_dot)
+    v, u, dist = v[keep], u[keep], dist[keep]
+    if len(v):                                   # not neighbours: no quad holds both
+        far = ~JC.share_a_quad(quads, v, u)
+        v, u, dist = v[far], u[far], dist[far]
+    return v, u, dist
+
+
 def limit_displacement(cage_v, quads, disp, min_area_ratio=MIN_AREA_RATIO,
-                       min_normal_dot=MIN_NORMAL_DOT, iterations=LIMIT_ITERATIONS):
+                       min_normal_dot=MIN_NORMAL_DOT, iterations=LIMIT_ITERATIONS, *,
+                       max_area_growth=None, max_edge_growth=None, max_lipschitz=None,
+                       intersections=False, benign=None):
     """Back off the displacement of the vertices of any quad that would flip (its normal
     turns past ``min_normal_dot``) or collapse (its area falls below ``min_area_ratio`` of
-    its own); ``(disp, factor, rounds)`` with ``factor`` the per-vertex scale applied."""
+    its own); ``(disp, factor, rounds)`` with ``factor`` the per-vertex scale applied.
+
+    The S1b guards are opt-in here (``apply_junctions`` turns them on): ``max_area_growth``
+    (a quad's area may not grow past this multiple of its own), ``max_edge_growth`` (nor an
+    edge's length), ``max_lipschitz`` (two neighbours' displacements may differ by at most
+    this many of their edge's lengths: 1 lets an edge double), and ``intersections`` (no pair
+    of triangles may NEW-ly cross each other: the skin is not allowed to pierce the opposite
+    skin of a cleft or an armpit; a pair whose two triangles are both ``benign(points)`` - for
+    instance inside the appendage's own tube, where the slicer's union hides them - is
+    allowed)."""
     moved = np.linalg.norm(disp, axis=1) > 0
     factor = np.ones(len(disp))
     if not moved.any():
         return disp, factor, 0
     qi = _touching(quads, moved)
-    old = _quad_vectors(cage_v, quads[qi])
+    tq = quads[qi]
+    old = _quad_vectors(cage_v, tq)
     old_len = np.linalg.norm(old, axis=1)
-    rounds = 0
-    for rounds in range(1, iterations + 1):
-        new = _quad_vectors(cage_v + disp * factor[:, None], quads[qi])
+    edges = None
+    if max_edge_growth is not None or max_lipschitz is not None:
+        edges = JC.cage_edges(tq)
+        edges = edges[moved[edges].any(axis=1)]
+        e_old = np.maximum(np.linalg.norm(cage_v[edges[:, 0]] - cage_v[edges[:, 1]], axis=1), _EPS)
+
+    def violators(f):
+        """The vertices that must back off for the local limits (quad flip / collapse /
+        growth, edge growth, Lipschitz) with the scale ``f``: a boolean mask."""
+        d = disp * f[:, None]
+        new_v = cage_v + d
+        new = _quad_vectors(new_v, tq)
         new_len = np.linalg.norm(new, axis=1)
         dot = (new * old).sum(axis=1) / np.maximum(new_len * old_len, _EPS)
         bad = (dot < min_normal_dot) | (new_len < min_area_ratio * old_len)
-        if not bad.any():
-            return disp * factor[:, None], factor, rounds - 1
-        corners = np.unique(quads[qi[bad]])
-        factor[corners] *= LIMIT_BACKOFF
+        if max_area_growth is not None:
+            bad |= new_len > max_area_growth * old_len
+        hit = np.zeros(len(disp), dtype=bool)
+        hit[tq[bad].ravel()] = True
+        if edges is not None:
+            if max_edge_growth is not None:
+                e_new = np.linalg.norm(new_v[edges[:, 0]] - new_v[edges[:, 1]], axis=1)
+                hit[edges[e_new > max_edge_growth * e_old].ravel()] = True
+            if max_lipschitz is not None:
+                lip = np.linalg.norm(d[edges[:, 0]] - d[edges[:, 1]], axis=1) / e_old
+                hit[edges[lip > max_lipschitz].ravel()] = True
+        return hit & moved & (f > 0)
+
+    tester = None
+    if intersections:
+        tris = JC.triangulate(quads)
+        mag0 = np.linalg.norm(disp, axis=1)
+        # a pair of triangles can only cross anew if one of them moves: the vertices that
+        # move by more than a hair are the ones to look at (the fringe moves too little to
+        # close a gap that was not already closed)
+        tester = JC.IntersectionTester(cage_v, quads, mag0 > INTERSECTION_MIN_MOVE,
+                                       float(mag0.max()))
+
+    def crossings(f):
+        """The vertices of the triangles that NEWLY cross each other with the scale ``f``."""
+        new_v = cage_v + disp * f[:, None]
+        pairs = tester.pairs(new_v)
+        if len(pairs):                                # crossing already before the move: not ours
+            pairs = pairs[~JC.pairs_cross(cage_v, tris, pairs)]
+        if len(pairs) and benign is not None:
+            cen = new_v[tris[pairs]].mean(axis=2)                           # (k, 2, 3)
+            pairs = pairs[~benign(cen.reshape(-1, 3)).reshape(-1, 2).all(axis=1)]
+        hit = np.zeros(len(disp), dtype=bool)
+        if len(pairs):
+            hit[tris[pairs].ravel()] = True
+        return hit & moved & (f > 0)
+
+    rounds = 0
+    for _outer in range(8 if intersections else 1):
+        for _ in range(iterations):                    # the local limits: cheap, run to the end
+            hit = violators(factor)
+            if not hit.any():
+                break
+            rounds += 1
+            factor[hit] *= LIMIT_BACKOFF
+            factor[factor < 1e-3] = 0.0
+        if tester is None:
+            break
+        hit = crossings(factor)
+        if not hit.any():
+            break
+        rounds += 1
+        # a crossing is a gap closed: back the whole neighbourhood off, not one vertex
+        near = JC.vertex_ring(quads, hit)
+        factor[near & moved & (factor > 0)] *= 0.5
+        factor[factor < 1e-3] = 0.0
+    else:
+        factor[crossings(factor)] = 0.0                # out of rounds: leave those vertices alone
     return disp * factor[:, None], factor, rounds
+
+
+def diffuse_displacement(cage_v, quads, disp, pinned=None, iterations=DIFFUSE_ITERATIONS):
+    """Smooth the displacement over the cage: the part of a harmonic extension of the skin's
+    contact with the tube.
+
+    The raw displacement of a spec is a smooth function of position, but it is defined through
+    skin normals, which jump across a crease (the gluteal cleft, an armpit) where the cage is
+    also much denser (edges of 0.08 next to 0.3): two neighbours then move by very different
+    amounts per edge length (3-4x). The vertices hidden inside the tube (``pinned``) keep the
+    displacement they were given, a vertex that did not move stays where it is (the rim of the
+    zone), and every other moved vertex takes, ``iterations`` times, the average of its
+    neighbours' displacement weighted by 1 / edge length (Jacobi: order independent). That is
+    the fillet's own shape on a cage of any local density: the rise spreads over as many rings
+    as the cage has between the wall and the rim instead of being chopped to what the densest
+    edge allows. Returns the smoothed displacement (a copy)."""
+    d = np.array(disp, dtype=np.float64, copy=True)
+    moved = np.linalg.norm(d, axis=1) > 0
+    if not moved.any() or iterations <= 0:
+        return d
+    e = JC.cage_edges(quads[_touching(quads, moved)])
+    a = np.concatenate([e[:, 0], e[:, 1]])
+    b = np.concatenate([e[:, 1], e[:, 0]])
+    w = 1.0 / np.maximum(np.linalg.norm(cage_v[a] - cage_v[b], axis=1), 1e-6)
+    n = len(d)
+    free = moved if pinned is None else moved & ~np.asarray(pinned)
+    wsum = np.maximum(np.bincount(a, weights=w, minlength=n), _EPS)
+    for _ in range(iterations):
+        num = np.stack([np.bincount(a, weights=w * d[b, c], minlength=n) for c in range(3)], axis=1)
+        d[free] = num[free] / wsum[free, None]
+    return d
 
 
 # --------------------------------------------------------------------------
@@ -592,7 +933,10 @@ def limit_displacement(cage_v, quads, disp, min_area_ratio=MIN_AREA_RATIO,
 
 
 def apply_junctions(base, verts, specs, info: dict | None = None, *,
-                    min_area_ratio=MIN_AREA_RATIO, min_normal_dot=MIN_NORMAL_DOT):
+                    min_area_ratio=MIN_AREA_RATIO, min_normal_dot=MIN_NORMAL_DOT,
+                    max_area_growth=MAX_AREA_GROWTH, max_edge_growth=MAX_EDGE_GROWTH,
+                    max_lipschitz=MAX_LIPSCHITZ, intersections=True, smooth=DIFFUSE_ITERATIONS,
+                    tight_gap=TIGHT_GAP, frame=None):
     """The body vertices ``verts`` (19,158 x 3, the MORPHED control vertices) with the skin
     moulded around every :class:`JunctionSpec` of ``specs``.
 
@@ -603,21 +947,54 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
     gives a mirror-symmetric result on a symmetric body), then capped and checked for
     flipped or collapsed quads. Never feed the result back in as ``verts`` (it would
     be a second junction on the first); ``info`` (a dict, optional) receives ``moved``,
-    ``max_move``, ``limited`` (vertices backed off), ``rounds`` and ``specs``."""
+    ``max_move``, ``limited`` (vertices backed off), ``rounds`` and ``specs``.
+
+    S1b keywords (all backward compatible: a call that passes none of them gets the guarded
+    behaviour; pass ``None`` / 0 to switch one off): ``max_area_growth`` / ``max_edge_growth``
+    (a cage quad's area / an edge's length may not grow past this multiple of its own, 2),
+    ``max_lipschitz`` (two neighbours may not move more than this many edge lengths apart,
+    1.25), ``intersections`` (no pair of triangles may newly cross each other outside the
+    appendage's own tube), ``smooth`` (rounds of :func:`diffuse_displacement` of each spec's
+    tube displacement, 20), ``tight_gap`` (skin within two rings of skin it nearly touches,
+    closer than this many units, 0.04, is not moved), ``frame`` (the body's
+    :class:`~.bodyframe.BodyFrame`; ``None``: built from ``base``, cached; ``False``: none, so
+    no owner protection and no relative sizes). ``min_area_ratio`` / ``min_normal_dot`` as
+    before."""
     specs = [s for s in (specs or ()) if s is not None and s.active]
     if info is not None:
         info.update(moved=0, max_move=0.0, limited=0, rounds=0, specs=len(specs))
     if not specs:
         return verts
+    if frame is False:
+        frame = None
+    elif frame is None:
+        frame = frame_or_none(base, verts)
+    specs = [resolve_spec(s, frame) for s in specs]
     cage_v, cage_q = base.body_cage(verts)
-    normals = vertex_normals(cage_v, cage_q)
+    normals = smooth_normals(cage_v, cage_q, vertex_normals(cage_v, cage_q), NORMAL_SMOOTHING)
     total = np.zeros_like(cage_v)
     limit = 0.0
     cols = np.ascontiguousarray(cage_v.T)
+    tight_w = None
+    if tight_gap and tight_gap > 0:
+        # where two sheets of skin touch (the closed cleft: 0.02 apart) the subdivided surface
+        # crosses itself at the slightest move of the cage around it, though the cage does not:
+        # the skin within two rings of such a place is left where it is (and fades back in)
+        region = np.zeros(len(cage_v), dtype=bool)
+        for spec in specs:
+            region[_candidates(spec, cols)] = True
+        rows = np.nonzero(region)[0]
+        tv, tu, _td = facing_pairs(cage_v, cage_q, normals, rows, tight_gap)
+        if len(tv):
+            tight = np.zeros(len(cage_v), dtype=bool)
+            tight[tv] = True
+            tight[tu] = True
+            tight_w = _smoothstep((JC.ring_distance(cage_q, tight, 4) - 2.0) / 2.0)
     for spec in specs:
-        idx, d = junction_displacement(spec, cage_v, normals, _candidates(spec, cols))
+        idx, d = junction_displacement(spec, cage_v, normals, _candidates(spec, cols), frame,
+                                       quads=cage_q, smooth=smooth)
         if len(idx):
-            total[idx] += d
+            total[idx] += d if tight_w is None else d * tight_w[idx][:, None]
             limit = max(limit, spec.move_limit())
     mag = np.linalg.norm(total, axis=1)
     if limit > 0:
@@ -626,8 +1003,18 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
             total[over] *= (limit / mag[over])[:, None]
     if not (np.linalg.norm(total, axis=1) > 0).any():
         return verts
-    total, factor, rounds = limit_displacement(cage_v, cage_q, total, min_area_ratio,
-                                               min_normal_dot)
+    tubes = [(np.asarray(s.points), np.asarray(s.radii)) for s in specs if s.tube]
+
+    def hidden(points):                      # inside an appendage's own tube: the slicer's union hides it
+        d = np.full(len(points), np.inf)
+        for c, r in tubes:
+            d = np.minimum(d, tube_distance(points, c, r)[0])
+        return d < 0.0
+
+    total, factor, rounds = limit_displacement(
+        cage_v, cage_q, total, min_area_ratio, min_normal_dot,
+        max_area_growth=max_area_growth, max_edge_growth=max_edge_growth,
+        max_lipschitz=max_lipschitz, intersections=intersections, benign=hidden)
     out = np.array(verts, dtype=np.float64, copy=True)
     out[base.body_verts_idx] = cage_v + total
     if info is not None:
@@ -656,6 +1043,47 @@ def ring_tube(vertices, ring_verts: int, rings: int, hug: float = HUG):
     c = ring.mean(axis=1)
     r = np.linalg.norm(ring - c[:, None], axis=2).min(axis=1)
     return c, r * math.cos(math.pi / ring_verts) * hug
+
+
+def fit_radii_to_mesh(points, radii, vertices, hug: float = HUG, percentile: float = 20.0,
+                      reach: float = 1.5):
+    """``radii`` capped by the radius of the REAL appendage mesh ``vertices`` around the
+    centreline ``points`` (the skin that "is inside the tube" must really be hidden by the
+    appendage: a spec that is fatter than the mesh leaves the skin that climbed with it sticking
+    out of a thin root, a limb tapered to fit the torso in particular).
+
+    At each point the mesh vertices within half a segment along the axis are looked at; their
+    distance to the axis, at the ``percentile`` (an elliptical or lumpy section: its inscribed
+    radius, not its mean), times ``hug`` is the radius there. Where the mesh has no vertices
+    (the sunk end of a cut limb) the radius of the nearest point that has them is used, scaled
+    like the spec's own radii. Never larger than the given radius. Returns a tuple."""
+    pts = np.asarray(points, dtype=np.float64)
+    rad = np.asarray(radii, dtype=np.float64)
+    V = np.asarray(vertices, dtype=np.float64)
+    n = len(pts)
+    got = np.full(n, np.nan)
+    for i in range(n):
+        a, b = pts[max(i - 1, 0)], pts[min(i + 1, n - 1)]
+        t = b - a
+        ln = float(np.linalg.norm(t))
+        if ln < _EPS:
+            continue
+        t /= ln
+        half = 0.5 * max(float(np.linalg.norm(pts[i] - a)), float(np.linalg.norm(b - pts[i])))
+        rel = V - pts[i]
+        along = rel @ t
+        perp = np.linalg.norm(rel - along[:, None] * t, axis=1)
+        sel = (np.abs(along) <= half) & (perp < reach * max(rad[i], _EPS) + 0.5)
+        if sel.sum() >= 6:
+            got[i] = float(np.percentile(perp[sel], percentile)) * hug
+    ok = np.isfinite(got)
+    if not ok.any():
+        return tuple(float(r) for r in rad)
+    idx = np.arange(n)
+    for i in np.nonzero(~ok)[0]:                      # no mesh here: the nearest measured one, in proportion
+        j = int(idx[ok][np.abs(idx[ok] - i).argmin()])
+        got[i] = got[j] * rad[i] / max(rad[j], _EPS)
+    return tuple(float(r) for r in np.minimum(rad, got))
 
 
 def rings_for_length(centres, length: float, minimum: int = 3) -> int:
@@ -792,6 +1220,110 @@ def measure_junction(base, verts, shaped, spec: JunctionSpec, levels: int = 1) -
     for tag in ("before", "after"):
         out[f"curvature_step_{tag}"] = _curvature_step(out.pop(f"_kappa_{tag}"), W)
     return out
+
+
+def junction_quality(base, verts, shaped, specs=None, levels=(), frame=None,
+                     intersections: bool = True) -> dict:
+    """What ``shaped`` (the body after :func:`apply_junctions`) did to the skin of ``verts``,
+    as numbers a reviewer or a test can bound. Everything is measured on the cage over the
+    quads and edges the junction touched, and (``levels``) on the Catmull-Clark subdivided
+    body, which is what is rendered and printed:
+
+    * ``moved``, ``max_move`` and ``flipped`` (cage quads whose normal turned past the limit);
+    * stretch (:func:`~.junction_checks.stretch_report`): ``area_growth_max`` /
+      ``area_ratio_min`` (new / old area of a quad), ``edge_growth_max`` / ``edge_ratio_min``,
+      ``lipschitz_max`` / ``lipschitz_p99`` (how differently two neighbours moved, per edge
+      length: 1 lets the edge double);
+    * crossings (``intersections``): ``selfx_before`` / ``selfx_after`` the pairs of triangles
+      of the cage that cross each other, ``selfx_new`` the pairs that cross only after, and
+      ``selfx_new_visible`` those not hidden inside an appendage's own tube (``specs``): the skin
+      piercing the opposite skin of a cleft or an armpit. With ``levels`` the same per level
+      (``L1_selfx_new`` ...) on the subdivided body;
+    * ``by_part`` (a skeleton ``frame``, built from ``base`` when ``None``): for each part of the
+      body (:mod:`.bodyframe`) ``(vertices moved, largest move)``, to see that a root only
+      moulds the skin of the part it belongs to.
+
+    :func:`quality_violations` turns it into a list of broken bounds."""
+    from ..core.subdiv import subdivide_quads
+    cage_v0, cage_q = base.body_cage(verts)
+    cage_v1, _ = base.body_cage(shaped)
+    out = JC.stretch_report(cage_v0, cage_v1, cage_q)
+    moved = np.linalg.norm(cage_v1 - cage_v0, axis=1) > 0
+    qi = _touching(cage_q, moved)
+    if len(qi):
+        old, new = _quad_vectors(cage_v0, cage_q[qi]), _quad_vectors(cage_v1, cage_q[qi])
+        ol, nl = np.linalg.norm(old, axis=1), np.linalg.norm(new, axis=1)
+        out["flipped"] = int((((new * old).sum(axis=1) / np.maximum(ol * nl, _EPS))
+                              < MIN_NORMAL_DOT).sum())
+    else:
+        out["flipped"] = 0
+    tubes = [(np.asarray(sp.points), np.asarray(sp.radii)) for sp in (specs or ()) if sp is not None
+             and sp.tube]
+
+    def hidden(points):
+        d = np.full(len(points), np.inf)
+        for c, r in tubes:
+            d = np.minimum(d, tube_distance(points, c, r)[0])
+        return d < 0.0
+
+    def crossings(v0, v1, q, tag):
+        mv = np.linalg.norm(v1 - v0, axis=1) > 0
+        region = JC.vertex_ring(q, mv)
+        tris = JC.triangulate(q)
+        tester = JC.IntersectionTester(v1, q, region, float(np.linalg.norm(v1 - v0, axis=1).max()))
+        p1 = tester.pairs(v1)
+        p0 = tester.pairs(v0)
+        old_set = set(map(tuple, p0.tolist()))
+        new = np.array([p for p in map(tuple, p1.tolist()) if p not in old_set],
+                       dtype=np.int64).reshape(-1, 2)
+        vis = new
+        if len(new) and tubes:
+            cen = v1[tris[new]].mean(axis=2)
+            vis = new[~hidden(cen.reshape(-1, 3)).reshape(-1, 2).all(axis=1)]
+        out[f"{tag}selfx_before"], out[f"{tag}selfx_after"] = len(p0), len(p1)
+        out[f"{tag}selfx_new"], out[f"{tag}selfx_new_visible"] = len(new), len(vis)
+
+    if intersections and moved.any():
+        crossings(cage_v0, cage_v1, cage_q, "")
+        for lv in levels:
+            sv0, sq = subdivide_quads(cage_v0, cage_q, lv)
+            sv1, _ = subdivide_quads(cage_v1, cage_q, lv)
+            crossings(sv0, sv1, sq, f"L{lv}_")
+    if frame is None:
+        frame = frame_or_none(base, verts)
+    if frame is not None:
+        mag = np.linalg.norm(cage_v1 - cage_v0, axis=1)
+        part = frame.part_scores(cage_v0[moved]).argmin(axis=1)
+        out["by_part"] = {}
+        for i, name in enumerate(frame.parts):
+            sel = part == i
+            if sel.any():
+                out["by_part"][name] = (int(sel.sum()), float(mag[moved][sel].max()))
+    return out
+
+
+def quality_violations(q: dict, area_growth=MAX_AREA_GROWTH, edge_growth=MAX_EDGE_GROWTH,
+                       lipschitz=MAX_LIPSCHITZ, tolerance: float = 1e-6) -> list:
+    """The bounds of :func:`junction_quality` ``q`` that are broken, as readable strings
+    (empty: a valid junction): a flipped quad, area / edge growth or neighbour displacement
+    difference past the guards of :func:`apply_junctions`, a smaller area than
+    ``MIN_AREA_RATIO``, and any NEW crossing of the skin with itself outside the appendage's
+    own tube (cage and every subdivided level measured)."""
+    bad = []
+    if q.get("flipped", 0):
+        bad.append(f"{q['flipped']} flipped cage quads")
+    if q.get("area_growth_max", 1.0) > area_growth + tolerance:
+        bad.append(f"a quad grew {q['area_growth_max']:.2f}x (limit {area_growth})")
+    if q.get("area_ratio_min", 1.0) < MIN_AREA_RATIO - tolerance:
+        bad.append(f"a quad shrank to {q['area_ratio_min']:.2f} of its area")
+    if q.get("edge_growth_max", 1.0) > edge_growth + tolerance:
+        bad.append(f"an edge grew {q['edge_growth_max']:.2f}x (limit {edge_growth})")
+    if q.get("lipschitz_max", 0.0) > lipschitz + tolerance:
+        bad.append(f"neighbours moved {q['lipschitz_max']:.2f} edge lengths apart (limit {lipschitz})")
+    for key, v in q.items():
+        if key.endswith("selfx_new_visible") and v:
+            bad.append(f"{v} new self-intersections outside the tube ({key})")
+    return bad
 
 
 def _curvature_profile(v, q, nrm, d, W):

@@ -13,6 +13,10 @@ For every kind x body it builds the appendage, shapes the skin around it
 * ``dih``: the 95th-percentile crease between neighbouring quads in the fillet zone, before ->
   after, and ``inc``: the 99th percentile of how much the junction INCREASED a crease;
 * ``curv``: the curvature step across the fillet boundary (0 = continuous);
+* ``grow`` / ``lip`` / ``xnew``: the validity numbers of ``junction.junction_quality`` -- the largest
+  growth of a cage quad's area, the largest difference of two neighbours' displacements per edge
+  length, and the new crossings of the skin with itself outside the appendage's own tube (cage /
+  body subdivided once / twice);
 * ``weld``: the share of the appendage's volume inside the body, before -> after (the printability
   report's root-weld number), and the print report's blocking findings.
 
@@ -90,7 +94,7 @@ def main(argv) -> int:
           f"{'flip':>5s}{'join b->a':>12s}", end="")
     for lv in levels:
         print(f"{'  L%d dih95 b->a  inc99' % lv:>28s}", end="")
-    print(f"{'  curv b->a':>14s}{'  weld b->a':>14s}  blocking")
+    print(f"{'  curv b->a':>14s}{'  grow':>6s}{'  lip':>5s}{'  xnew c/1/2':>12s}{'  weld b->a':>14s}  blocking")
     for kn in kind_names:
         for bn in bodies:
             c = Character()
@@ -116,6 +120,9 @@ def main(argv) -> int:
                          f"{z.get('p95_dihedral_deg_after', 0):5.1f} "
                          f"{z.get('dihedral_increase_p99_deg', 0):5.1f}")
             line += f"  {m['curvature_step_before']:5.2f}->{m['curvature_step_after']:5.2f}"
+            qy = J.junction_quality(base, verts, shaped, specs, levels=(1, 2))
+            line += (f"  {qy['area_growth_max']:5.2f}  {qy['lipschitz_max']:4.2f}"
+                     f"  {qy['selfx_new_visible']:2d}/{qy['L1_selfx_new_visible']:2d}/{qy['L2_selfx_new_visible']:2d}")
             try:
                 rb, ra = weld(base, lib, verts, shaped, placed)
                 gb = max(g.root_embed for g in rb.groups.values())
