@@ -35,6 +35,8 @@ puts it on the body)::
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from ..core import math3d as m3
@@ -1055,7 +1057,7 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
                     camber=CAMBER, scallop=None, root_chord=1.4,
                     billow=BILLOW, propatagium=True, bones=True, rows=22,
                     spike=0.10, bone_scale=1.0, root=None, spec=None, claw=None, spur=0.0,
-                    root_taper=None):
+                    root_taper=None, sleeve=None):
     """A patagium stretched over a knuckled forelimb, as a skeleton + pieces.
 
     The sheet is a *fan*: every grid line runs from the arm out to the free
@@ -1233,8 +1235,46 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
     sk.joints["thumb_tip"][1] += 0.5 * float(np.linalg.norm(sk.thumb - sk.wrist))
     if bones:
         parts += _membrane_bones(sk, thickness, spike, spec.get("claw", 0.12) if claw is None else claw,
-                                 height_at, bone_scale, spur)
+                                 height_at, bone_scale, spur, sleeve)
     return sk, parts
+
+
+# The proximal arm of a wing as the muscular sleeve of a shoulder instead of a bone-thin rod
+# (wingroot.py: the body's shoulder anatomy decides how thick). The radius of the upper arm along
+# the humerus, as a fraction of the humerus' own length ``L_h``, at t = 0 (the joint, buried), the
+# belly (where the arm crosses the skin: the deltoid-level swell, held over a plateau so it sits at
+# the skin whichever body it is on), t = 0.75 and the elbow. Read off the wing research
+# (docs/anatomy_wing.md): 0.15 / 0.14 / 0.095 / 0.07 of L_h, i.e. 0.47 / 0.44 / 0.30 / 0.22 units on
+# the bat's 3.16-unit humerus, the size of a human deltoid-level arm (0.45-0.52).
+SLEEVE_KNOTS = ((0.0, 0.150), (0.20, 0.140), (0.45, 0.140), (0.75, 0.095), (1.0, 0.070))
+
+
+@dataclass(frozen=True)
+class Sleeve:
+    """How much thicker than the bone-thin rod the humerus is. ``extra(t, L_h)`` is the radius
+    ADDED to the elbow's (``t`` = 0 at the shoulder joint, 1 at the elbow, so the elbow, the forearm
+    and everything past it are exactly what they were): ``gain`` times the profile
+    ``SLEEVE_KNOTS`` above, relative to its value at the elbow, between the knots a smoothstep
+    (C1: no crease where the plateau ends). ``sides`` is the number of facets round the tube (a
+    sleeve this thick must not read as a nonagon)."""
+
+    gain: float = 1.0
+    sides: int = 14
+
+    def fraction(self, t):
+        t = np.clip(np.asarray(t, dtype=np.float64), 0.0, 1.0)
+        out = np.empty_like(t)
+        ts = [k[0] for k in SLEEVE_KNOTS]
+        fs = [k[1] for k in SLEEVE_KNOTS]
+        for i in range(len(ts) - 1):
+            m = (t >= ts[i]) & (t <= ts[i + 1])
+            u = (t[m] - ts[i]) / (ts[i + 1] - ts[i])
+            out[m] = fs[i] + (fs[i + 1] - fs[i]) * (u * u * (3.0 - 2.0 * u))
+        return out
+
+    def extra(self, t, humerus_length: float):
+        """The radius added to the elbow's at ``t`` along the humerus, in wing units."""
+        return self.gain * humerus_length * (self.fraction(t) - SLEEVE_KNOTS[-1][1])
 
 
 CLAW_RADIUS = 0.028                # of FA: the thumb claw's base radius, below the print floor on purpose
@@ -1268,7 +1308,7 @@ KNUCKLE_BALL = 1.1                 # a knuckle's ball, as a multiple of the fing
 
 def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
                     CLAW: float = 0.12, height_at=None, bone_scale: float = 1.0,
-                    spur: float = 0.0) -> list[Piece]:
+                    spur: float = 0.0, sleeve: Sleeve | None = None) -> list[Piece]:
     """Arm and finger bones: tubes through the (lifted) joints, so they read as
     ridges under the skin, plus joint knobs, needle fingertips and the clawed
     thumb.
@@ -1316,9 +1356,16 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
     fillet = HUMERUS_FILLET * r_elbow * np.exp(-(((t_h - HUMERUS_FILLET_AT) / HUMERUS_FILLET_WIDTH) ** 2))
     # a soft maximum of the spindle and the fillet (a hard one leaves a kink where they cross)
     r_arm[:mid_i + 1] = np.maximum((spindle ** 6 + fillet ** 6) ** (1.0 / 6.0), floor)  # never thinner than a printable bone
+    if sleeve is not None:
+        # a shoulder, not a rod: the upper arm is the muscular sleeve of the shoulder anatomy
+        # (wingroot.py), r_elbow + its profile over the humerus, thickest where the arm crosses the
+        # skin (see Sleeve); the forearm and everything past the elbow are untouched
+        l_h = float(np.linalg.norm(J["elbow"] - J["shoulder"]))
+        r_arm[:mid_i + 1] = np.maximum(r_elbow + sleeve.extra(t_h, l_h), floor)
     u_f = (ts[mid_i:] - ts[mid_i]) / (1.0 - ts[mid_i])
     r_arm[mid_i:] = r_elbow + (R(0.034) - r_elbow) * u_f
-    out.append(Piece("arm", _tube(pp, r_arm, 9), chain=("elbow", "wrist")))
+    out.append(Piece("arm", _tube(pp, r_arm, 9 if sleeve is None else sleeve.sides),
+                     chain=("elbow", "wrist")))
     out.append(Piece("wrist_knob", _ball(J["wrist"] + up, 1.12 * R(0.034), 8, 14), bone="wrist"))
     out.append(Piece("elbow_knob", _ball(J["elbow"] + up, 1.12 * R(0.042), 8, 14), bone="elbow"))
     if spur > 0.0:
@@ -1605,7 +1652,7 @@ def _along(points, fractions):
 
 def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
                      primaries=10, secondaries=14, tertials=7, scapulars=7,
-                     coverts=True, underwing=True, bones=True, root=None, spec=None):
+                     coverts=True, underwing=True, bones=True, root=None, spec=None, sleeve=None):
     """A bird wing as skeleton + pieces: every flight feather (and the scapulars
     and alula) has its own root and tip joint, so the fan opens and closes and
     the whole plumage folds together; each covert is bound to the feather it
@@ -1654,7 +1701,7 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
     if coverts:
         parts += _coverts(sk, layout, bone_of, thickness, height, step, underwing)
     if bones:
-        parts += _feather_bones(sk, height, s)
+        parts += _feather_bones(sk, height, s, sleeve)
         parts.append(_alula_mount(sk, alula_roots, height, s))
     return sk, parts
 
@@ -1927,25 +1974,30 @@ def _alula_mount(sk, roots, height, s) -> Piece:
                  bone="thumb_cmc")
 
 
-def _feather_bones(sk, height, s) -> list[Piece]:
+def _feather_bones(sk, height, s, sleeve: Sleeve | None = None) -> list[Piece]:
     """The arm under the plumage. Buried by the lesser coverts, but it gives the
-    wing a rounded leading edge and the rig something to hold."""
+    wing a rounded leading edge and the rig something to hold. With a ``sleeve`` the humerus
+    is the muscular upper arm of the shoulder anatomy (wingroot.py)."""
     J = sk.joints
     out = []
 
-    def tube(points, r0, r1, per=5, lift=0.02, blunt=0.0):
+    def tube(points, r0, r1, per=5, lift=0.02, blunt=0.0, sleeve=None):
         pts = _polyline([np.array([p[0], height(p[0]) - lift * s, p[2]]) for p in points], per)
         t = np.linspace(0.0, 1.0, len(pts))
         r = r0 + (r1 - r0) * t
+        if sleeve is not None:      # the humerus is the first of the two segments: t_h 0..1 over it
+            t_h = np.clip(t * len(points[:-1]) / 1.0, 0.0, 1.0)
+            l_h = float(np.linalg.norm(np.asarray(points[1]) - np.asarray(points[0])))
+            r = np.where(t * 2.0 <= 1.0, r + sleeve.extra(t_h, l_h), r)
         if blunt:           # the first end rounds off instead of showing a flat-cut rod
             u = np.clip(t / blunt, 0.0, 1.0)
             r = r * (0.35 + 0.65 * u * u * (3.0 - 2.0 * u))
-        return _tube(pts, r, 9)
+        return _tube(pts, r, 9 if sleeve is None else sleeve.sides)
 
     # the arm is the core of the leading edge: thick enough that the marginal rows
     # wrap a solid nose instead of a bare rod, and raised to the middle of the stack
     out.append(Piece("arm", tube([J["shoulder"], J["elbow"], J["wrist"]], NOSE_RADIUS[0] * s,
-                                 NOSE_RADIUS[1] * s, 6, lift=NOSE_LIFT, blunt=0.12),
+                                 NOSE_RADIUS[1] * s, 6, lift=NOSE_LIFT, blunt=0.12, sleeve=sleeve),
                      chain=("elbow", "wrist")))
     out.append(Piece("hand", tube([J["wrist"], J["d3_mcp"], J["d3_tip"]], 0.040 * s,
                                   0.012 * s, 5, lift=0.04), chain=("d3_mcp", "d3_tip")))

@@ -97,10 +97,16 @@ class TailEffect(AnatomyEffect):
 CONSEQUENCES: dict[str, AnatomyEffect] = {
     "wing": AnatomyEffect(
         sliders={
-            # the flight-muscle mass has to be carried on the trunk
-            "measure.measure_bust_circ": 0.75,
+            # the flight-muscle mass has to be carried on the trunk. The chest carries it (the pectoral
+            # slider is the keel); the BACK's share is local relief now, the muscle masses of the wing's
+            # shoulder girdle (wingroot.py: scapular plateau, latissimus fan, trapezius slope, shoulder
+            # boss), not a rib-cage inflation: measure_bust_circ (0.75 before) moved the back 3-4x more
+            # than the chest, 76% of the +4.9 L, a sack with a hard rim, and torso_muscle_dorsi (0.70
+            # before) pushed the posterior axillary line out. The relief adds 0.8 L a side on top of the
+            # +1.2 L these leave.
+            "measure.measure_bust_circ": 0.25,
             "torso.torso_muscle_pectoral": 0.85,
-            "torso.torso_muscle_dorsi": 0.70,
+            "torso.torso_muscle_dorsi": 0.35,
             "measure.measure_shoulder_dist": 0.55,
             "armslegs.upperarm_shoulder_muscle": 0.40,
             "neck.neck_scale_horiz": 0.30,

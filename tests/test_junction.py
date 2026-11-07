@@ -677,12 +677,14 @@ def test_the_skin_meets_the_root_at_a_smaller_angle_and_without_new_creases(worl
     out = c.shaped_body(base, v, placed)
     m = J.measure_junction(base, v, out, spec, levels=2)
     assert m["flipped"] == 0 and m["min_area_ratio"] >= J.MIN_AREA_RATIO - 1e-9
-    # the skin ran into the root at 56-92 degrees from tangent; now it meets it at 15-30 less. The
-    # tail's S1 figure (27 degrees) was bought with 2.5-3.4x stretched edges and 12 new crossings
-    # of the cleft's two cheeks; inside the 2x cap and without crossings the cage gives ~9 there
-    # (the tail sits in the cleft; its anatomy is another track's).
-    need = {"tail": 5.0}.get(text, 15.0)
-    assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - need, m
+    # the skin ran into the root at 56-92 degrees from tangent; now it meets it at 15-30 less. The wing is
+    # the one kind whose skin meets the arm mostly through its SHOULDER anatomy (wingroot.py: a boss that
+    # tilts the skin toward the arm over a distance of two radii, tested in test_wing_root.py: the arm
+    # leaves the skin 12-23 degrees more steeply) and through a narrow fillet kept narrow on purpose (a wide
+    # one stretched the skin 3x and crossed it through itself in the armpit): this measure only sees the
+    # fillet's own quarter-width band, so it gains less there
+    gain = 8.0 if text == "wing" else 15.0
+    assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - gain, m
     # no crease the body did not already have: the 99th percentile of what the junction adds to
     # the crease of an edge, on the twice-subdivided skin (S1: 14), and the 95th percentile of the zone
     assert m["dihedral_increase_p99_deg"] < 10.0, m

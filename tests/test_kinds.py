@@ -573,7 +573,9 @@ def test_the_membrane_root_is_exactly_where_it_always_was_on_the_neutral_body(wo
     for style in ("membrane", "dragon", "feathered"):
         new = K.instantiate_all([K.new_spec("wing", params={"style": style}, base=base)],
                                 base, v0)
-        old = A.back_wings(style).build(base, v0)
+        # the registry wing has the shoulder anatomy's muscular upper arm (wings.Sleeve, S3); with the same
+        # sleeve the legacy builder produces the registry's wing bit for bit: the ROOT is where it always was
+        old = A.back_wings(style, sleeve=K.WING_SLEEVES[style]).build(base, v0)
         for p, (_, mesh) in zip(new, old):
             assert np.array_equal(p.mesh().vertices, mesh.vertices), style
             assert np.array_equal(p.mesh().faces, mesh.faces), style

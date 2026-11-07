@@ -46,6 +46,8 @@ from . import appendages as A
 from . import junction as J
 from . import tailrig as T
 from .appendage_spec import SIDES, AppendageSpec, next_id, valid_id
+from . import wingroot as WR  # noqa: E402  (after the others: the tail track also adds an import after ``junction``)
+from . import wings as W  # noqa: E402
 
 
 class AppendageWarning(UserWarning):
@@ -202,7 +204,7 @@ TAIL_RING_VERTS = 16
 HORN_RING_VERTS = 16
 TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.35, 1.0
 HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
-WING_FILLET, WING_FILLET_HEIGHT = 3.0, 0.4        # the arm is a thin rod: a broad, low boss
+WING_FILLET, WING_FILLET_HEIGHT = 2.0, 0.3        # in elbow radii of the arm (the mounds of the shoulder anatomy carry the bulk, wingroot.py)
 # the scapular mass, as FRACTIONS of the trunk's radius (junction.Mound(scale="trunk"): the core
 # resolves them from the body's own skeleton). In arm lengths (0.55 / 0.07 of a 3 unit arm) it was a
 # pillow 1.7 units wide on any body: the folded wing's 'lobes' and a child's boxy shoulders
@@ -1006,6 +1008,13 @@ class HornKind(_LoftKind):
 
 # -- the wing ----------------------------------------------------------------------------
 
+# the muscular upper arm of the shoulder anatomy (wingroot.py, wings.Sleeve), per style: it reaches
+# 0.14 of the humerus' length in radius where the arm crosses the skin (0.135 / 0.149 / 0.137 on the
+# bat / dragon / feathered wing). The feathered arm is already as thick as a human forearm at the
+# shoulder (0.25-0.33), so it gains about half of what the bat's bone-thin rod does
+WING_SLEEVES = {"membrane": W.Sleeve(gain=1.1), "dragon": W.Sleeve(gain=1.0),
+                "feathered": W.Sleeve(gain=0.5)}
+
 _MEMBRANE_STYLES = ("membrane", "dragon")
 # the DRAGON style differs from the bat in these (wings.DRAGON); a test pins the defaults
 # below to what the builders really use
@@ -1080,6 +1089,7 @@ class WingKind(Kind):
         fillet_param(WING_FILLET),
     )
     fillet_default = WING_FILLET
+    fillet_height = WING_FILLET_HEIGHT
     presets = {"shoulder_blades": {
         "label": "Shoulder blades", "face": "shoulder_blades", "up_hint": A.WING_UP_HINT,
         "roll": A.WING_ROLL, "offset": A.WING_OFFSET, "side": "both"}}
@@ -1090,29 +1100,28 @@ class WingKind(Kind):
         return float(params.get("span", DEFAULT_SPAN)) / DEFAULT_SPAN
 
     def junction(self, placed, controls=None):
-        """The wing arm (shoulder -> elbow, in the pose it is in) as the tube the back's skin
-        flows into, and the scapular mass behind it as a mound. Generic: where the wing's
-        girdle really sits and how much muscle it carries is the wing anatomy track's."""
+        """The skin around the root: the shoulder anatomy's relief (the scapular plateau, the
+        latissimus fan, the trapezius slope and the deltoid-level cap, :mod:`wingroot`) and the arm
+        sleeve as the tube the skin flows into. A wing without an arm piece (``bones`` off) has no
+        junction: there is nothing for the skin to flow into."""
         fillet = float(placed.params.get("fillet", self.fillet_default))
-        if fillet <= 0.0:
+        if fillet <= 0.0 or placed.model is None:
             return None
-        ctl = dict(placed.controls if controls is None else controls)
-        preset = ctl.pop("preset", None)
-        pw = placed.rig
-        pose = pw.rig.pose_from_controls(preset, **ctl) if (ctl or preset) else None
-        joints = pw.joint_positions(pose)
-        sh, el = np.asarray(joints["shoulder"]), np.asarray(joints["elbow"])
-        scale = float(np.cbrt(abs(np.linalg.det(placed.matrix[:3, :3]))))
-        r = _wing_arm_radius(pw) * scale
-        pts = [sh, sh + 0.5 * (el - sh), el]
-        mound = J.Mound(tuple(placed.anchor), radius=WING_MOUND_RADIUS, height=WING_MOUND_HEIGHT,
-                        scale="trunk")
-        return J.JunctionSpec(placed.name, pts, [r * J.HUG] * 3, width=fillet, base_radius=r,
-                              height=WING_FILLET_HEIGHT, mounds=(mound,), owner="trunk")
+        ctl = placed.controls if controls is None else controls
+        return placed.model.spec(ctl, placed.name)
+
+    def layers(self, placed, controls=None):
+        """bone (scapula plate, strut, humerus), muscle (the masses and the arm's belly) and skin
+        (the wing's shell): :meth:`wingroot.WingRoot.layers`; the skin only without an arm piece."""
+        if placed.model is None:
+            return Kind.layers(self, placed, controls)
+        return placed.model.layers(placed.mesh(controls), controls)
 
     def draft_params(self, values):
         if values.get("style") == "feathered":
-            return {"coverts": False, "underwing": False, "bones": False}
+            # the arm stays: it is the sleeve the body's skin flows into (wingroot.py), a few hundred
+            # triangles, and the draft's skin must have the same junction as the final's
+            return {"coverts": False, "underwing": False}
         return {}
 
     def material(self, params):
@@ -1178,19 +1187,30 @@ class WingKind(Kind):
     def build(self, spec, side, values, build_values, pl, ctx):
         controls_raw = spec.controls
         shape = {k: v for k, v in build_values.items() if k != "fillet"}   # not a builder keyword
+        sleeve = WING_SLEEVES[values["style"]]
+        shape["sleeve"] = sleeve                     # the muscular upper arm of the shoulder anatomy
         app = self._engine(side, pl, params=shape,
                            **self._aim(values["style"], pl["aim"], ctx))
         names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
         out = []
+        lm = surface = None
         for idx, pw in app.place_rigs(ctx.base, ctx.verts):
+            if lm is None:                           # the body's girdle, once for the pair
+                lm = WR.landmarks(ctx.base, ctx.verts)
+                surface = WR.BodySurface(*ctx.cage)
             name, letter = names[idx]
             ctrl, notes = self.clean_controls(side_controls(controls_raw, letter),
                                               f"appendage {spec.id!r}: ")
             for note in notes:
                 ctx.warn(note)
+            arm = next((q for q in pw.rig.pieces if q.name == "arm"), None)
+            model = None if arm is None else WR.WingRoot(
+                letter or ("r" if idx else "l"), pw, pw.matrix, lm, surface,
+                WR.arm_profile(arm.mesh.vertices, sleeve.sides, pw.matrix),
+                float(values.get("fillet", self.fillet_default)), values["style"], WING_FILLET_HEIGHT)
             out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
                               anchor=self._surface(ctx, app, idx), matrix=pw.matrix,
-                              params=dict(values), controls=ctrl, rig=pw))
+                              params=dict(values), controls=ctrl, rig=pw, model=model))
         return out
 
 
