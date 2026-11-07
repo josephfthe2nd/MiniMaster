@@ -6,7 +6,8 @@ triangles, one `np.meshgrid` per triangle. That loop, not the shading, was the
 cost: 95,000 `meshgrid` calls for a feathered wing pair. This note records what
 replaced it, how equality with the old output is guarded, what was measured, and
 the building blocks for the draft tier. Design context:
-[appendages_system_design.md](appendages_system_design.md) (D7, track T2).
+[appendages_system_design.md](appendages_system_design.md) (D7, track T2). The consumer of the draft tier,
+the picking and the cancellation is the Character tab ([character_tab.md](character_tab.md)).
 
 | Module | Contents |
 | --- | --- |

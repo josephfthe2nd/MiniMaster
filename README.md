@@ -34,7 +34,7 @@ python -m minimaster
 
 ## The studio
 
-The window is a 3D viewport plus four mode tabs:
+The window is a 3D viewport plus mode tabs:
 
 - **Model** — add primitive shapes (box, wedge, cylinder/cone, capsule,
   icosphere, torus), then stretch and place them: position / rotation /
@@ -50,6 +50,10 @@ The window is a 3D viewport plus four mode tabs:
   height), a base (round / square / none), and a pose; check printability
   (triangle count, dimensions, watertightness, resin volume); export STL or a
   PNG turnaround.
+- **Character** — the realistic Character Lab inside the studio: add, remove
+  and tune wings, tails, horns and extra limbs on a MakeHuman character, see
+  them live, save a `.mmchar`, export an STL with its printability report
+  ([below](#the-character-tab), needs the CC0 assets).
 
 Viewport controls: **drag** orbit · **middle/right-drag** pan · **wheel**
 zoom · **click** select · **g** grab (move the selected shape in the view
@@ -296,6 +300,8 @@ minimaster character -o winged.png --save-character winged.mmchar \
     --add wing:style=feathered,span=15 --add tail:length=8 --add horn
 minimaster character --character winged.mmchar -o again.png \
     --remove horn-1 --add horn:side=left --pose wing-1:fold=0.6 --pose wing-1.r:raise_=20
+minimaster character -o six_arms.stl --size medium --add harvest --add harvest:preset=upper_arms \
+    --pose arm-2:elbow=40,raise_=70 --add tail --pose tail-1:lift=25 --add horn:shape=ram
 ```
 
 ```python
@@ -312,8 +318,23 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   left-hand quad, so a single right wing equals the right wing of a pair, bit for bit, and
   several wings can coexist (`wing-1.l`, `wing-2.r`, ... name their shells and joints).
   The membrane wing's attachment line aims at a waist quad, so it runs to the waist on
-  every body. Tails and horns are sunk into the body by default (tail ~25%, horn ~65% of
+  every body. Tails and horns are sunk into the body by default (tail ~20%, horn ~51% of
   their volume embedded, instead of a hairline weld).
+* **Extra arms and legs are the character's own limb, rotated and welded.** `--add harvest`
+  copies the arm (or `limb=leg`), binds it to a body quad and sinks its narrowed cut end
+  into the torso, so it prints attached and sits clear of the original (presets
+  `lower_arms`, `upper_arms`, `extra_legs`; ids `arm-1`, `leg-1`). It is rigged: `swing`,
+  `raise_`, `twist` and `elbow` (`knee`) pose it about the shoulder with anatomical ranges
+  (`placed.control_range("swing")`), the weld never moves, both bones keep their length, and the
+  right arm is the exact mirror of the left. `scale` makes a smaller pair; `roll` and `up_hint`
+  mean nothing for a limb and are not offered.
+  `--add harvest:preset=upper_arms --pose arm-1:elbow=60,raise_=20`.
+* **Tail and horn.** A tail is posed by `curl`, `droop` (added to its shape), `lift` and `sway`
+  (`--pose tail-1:lift=25,sway=-20`); a horn has four `shape`s (`curved`, `ram`, `spiral`,
+  `antelope`). Both end in a rounded tip of `tip_radius` (0.09 / 0.08 units, 0.3 mm at "medium")
+  instead of a point 0.04-0.07 mm across, so the printability report no longer warns about it
+  (`tip_radius=0` is the old point). See the T3 section of
+  [docs/appendages_system_design.md](docs/appendages_system_design.md).
 * **Body adaptation is derived, never saved.** The adapted body (broader chest for
   wings, ...) is `your sliders + what the enabled appendages ask for`, recomputed every
   time (`Character.effective()`); the document stores only the switch and the cap
@@ -325,8 +346,30 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   with a warning when something is built from them. (A program older than this change
   loads a version 2 file and its body, but would drop the appendages if it saved it.)
 
-The STL export of appendages is part of the print integration; today a character with
-appendages renders to PNG and exports its body to STL.
+#### The Character tab
+
+The same character, edited in the studio. The **Character** tab (the last one) shows the
+realistic figure in its own picture pane and lets you **add** a wing, tail, horn or extra limb
+from a menu generated from the kind registry, **remove / duplicate** it, **tune** it with a
+property grid generated from the kind's parameters (ranges, steps, `when=` conditions) and the
+**live range** of each pose control on the placed appendage, **place it by clicking the body**,
+switch its side, undo and redo (Ctrl+Z / Ctrl+Y), save and open `.mmchar`, and **export the STL
+with the printability report** shown in the panel (blocking findings stop it until "Export anyway").
+
+![the Character tab](docs/images/character_tab.png)
+
+While you drag, a draft (a body proxy and cluster proxies of the posed appendages, ≥ 20 fps for
+orbit / pose / body drags and ≥ 10 fps for shape parameters at 900×800, measured through the real
+sliders) answers at once; 150 ms after you stop a cancellable worker thread renders the full picture
+(the angel, 900×800, cold: 0.6-0.7 s). All the logic is a tkinter-free module
+(`minimaster/character/lab.py`) tested without a display; the panel only turns widgets into calls on
+it. [docs/character_tab.md](docs/character_tab.md) has the design, how the tab shares the window
+with the studio's viewport, the numbers and the limits.
+
+```bash
+xvfb-run -a python tools/character_smoke.py --measure   # boot, drive the tab, screenshots, timings
+python tools/lab_bench.py                               # the headless timings
+```
 
 ## Licensing
 
@@ -389,6 +432,9 @@ minimaster/
   templates/   shipped .mmp starter scenes (regenerable)
   viewport.py  tk Canvas painter's-algorithm viewport with picking
   panels.py    Model / Rig / Pose / Export tabs
+  character_panel.py   the Character tab (widgets -> calls on character/lab.py)
+  character/lab.py     the tab's tk-free core: document edits, undo, caches, preview tiers, export
+  character/imageview.py   tk Canvas + PhotoImage showing a rendered picture, camera input, overlay
   app.py       the studio window: menus, undo, mode-aware refresh
 ```
 
@@ -399,6 +445,8 @@ pip install -e .[dev]
 python -m pytest                       # 139 tests, all headless
 python tools/make_templates.py         # regenerate starter templates
 xvfb-run -a python tools/gui_smoke_test.py   # drive the GUI end-to-end
+xvfb-run -a python tools/character_smoke.py  # ... and the Character tab
+xvfb-run -a python -m pytest tests/test_character_panel.py   # its tk tests (skipped without tkinter / a display)
 ```
 
 `examples/` holds a ready-to-print goblin scout (`.mmp` + STL) and an

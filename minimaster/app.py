@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .core.raycast import raycast_meshes
+from .character_panel import CharacterPanel
 from .export import ExportError, export_stl
 from .panels import ExportPanel, ModelPanel, PartsPanel, PosePanel, RigPanel
 from .parts import load_part, place_part
@@ -53,6 +54,7 @@ class MiniMasterApp(tk.Tk):
         right = ttk.Frame(self, width=360)
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
+        self._right = right
         self.notebook = ttk.Notebook(right)
         self.notebook.pack(fill="both", expand=True)
         self.model_panel = ModelPanel(self.notebook, self)
@@ -60,6 +62,8 @@ class MiniMasterApp(tk.Tk):
         self.rig_panel = RigPanel(self.notebook, self)
         self.pose_panel = PosePanel(self.notebook, self)
         self.export_panel = ExportPanel(self.notebook, self)
+        # the realistic Character Lab: its own picture pane (see _swap_stage), loaded on first use
+        self.character_panel = CharacterPanel(self.notebook, self)
         self._mode_by_tab: dict[str, str] = {}
         for panel, mode_name, label in (
             (self.model_panel, "model", "Model"),
@@ -67,6 +71,7 @@ class MiniMasterApp(tk.Tk):
             (self.rig_panel, "rig", "Rig"),
             (self.pose_panel, "pose", "Pose"),
             (self.export_panel, "export", "Export"),
+            (self.character_panel, "character", "Character"),
         ):
             self.notebook.add(panel, text=label)
             self._mode_by_tab[str(panel)] = mode_name
@@ -108,7 +113,27 @@ class MiniMasterApp(tk.Tk):
     def _on_tab_changed(self, _e=None):
         if self.mode() != "parts":
             self.cancel_placement()
+        self._swap_stage(self.mode() == "character")
         self.refresh()
+
+    def _swap_stage(self, character: bool):
+        """The left pane shows the studio Viewport, or the Character tab's picture while that
+        tab is selected. Only the two panes are packed and unpacked: no studio widget moves."""
+        panel = self.character_panel
+        if character:
+            view = panel.view                      # created on first use
+            if self.viewport.winfo_manager():
+                self.viewport.pack_forget()
+            if not view.winfo_manager():
+                view.pack(side="left", fill="both", expand=True, before=self._right)
+            self.update_idletasks()
+            panel.activate()
+        else:
+            panel.deactivate()
+            if panel.existing_view is not None and panel.existing_view.winfo_manager():
+                panel.existing_view.pack_forget()
+            if not self.viewport.winfo_manager():
+                self.viewport.pack(side="left", fill="both", expand=True, before=self._right)
 
     def _viewport_select_shape(self, name):
         if self.mode() in ("model", "parts"):
@@ -144,6 +169,9 @@ class MiniMasterApp(tk.Tk):
         self.refresh()
 
     def undo(self, _e=None):
+        if self.mode() == "character":
+            self.character_panel.undo()
+            return
         self._abort_grab()
         prev = self.undo_stack.undo(self.scene.to_json())
         if prev is not None:
@@ -151,6 +179,9 @@ class MiniMasterApp(tk.Tk):
             self.refresh()
 
     def redo(self, _e=None):
+        if self.mode() == "character":
+            self.character_panel.redo()
+            return
         self._abort_grab()
         nxt = self.undo_stack.redo(self.scene.to_json())
         if nxt is not None:
@@ -170,7 +201,7 @@ class MiniMasterApp(tk.Tk):
         self.mutate(apply)
 
     def duplicate_selected(self, _e=None):
-        if self.selected_shape is None:
+        if self.mode() == "character" or self.selected_shape is None:
             return
 
         def apply(scene):
@@ -180,7 +211,7 @@ class MiniMasterApp(tk.Tk):
         self.mutate(apply)
 
     def mirror_selected(self, _e=None):
-        if self.selected_shape is None:
+        if self.mode() == "character" or self.selected_shape is None:
             return
         shape = self.selected_shape_obj()
         if shape is None:
@@ -313,7 +344,9 @@ class MiniMasterApp(tk.Tk):
         return True
 
     def _escape(self, _e=None):
-        if self._placement is not None:
+        if self.mode() == "character":
+            self.character_panel.escape()
+        elif self._placement is not None:
             self.cancel_placement()
         elif self.viewport.grabbing:
             self.viewport.cancel_grab()
@@ -352,6 +385,9 @@ class MiniMasterApp(tk.Tk):
 
     def refresh(self):
         mode = self.mode()
+        if mode == "character":          # the studio scene is not on screen: nothing to redraw
+            self._update_status()
+            return
         items, joints, bones, show_joints = self._viewport_content()
         group_shapes: set[str] = set()
         if mode == "parts":
@@ -379,6 +415,9 @@ class MiniMasterApp(tk.Tk):
 
     def _update_status(self):
         mode = self.mode()
+        if mode == "character":
+            self.set_status(self.character_panel.status_text())
+            return
         bits = [f"{self.scene.name}"]
         if self.path:
             bits.append(self.path.name)
@@ -476,7 +515,14 @@ class MiniMasterApp(tk.Tk):
         return messagebox.askokcancel(
             "MiniMaster", "Discard the current scene?", parent=self)
 
+    def _show_studio(self) -> None:
+        """A File command that acts on the studio scene: bring that scene on screen first (while
+        the Character tab is open it is hidden, and these used to reset or export it unseen)."""
+        if self.mode() == "character":
+            self.notebook.select(self.model_panel)
+
     def new_blank(self):
+        self._show_studio()
         if not self._confirm_discard():
             return
         self.cancel_placement()
@@ -488,6 +534,7 @@ class MiniMasterApp(tk.Tk):
         self.viewport.frame_content()
 
     def new_from_template(self, name: str):
+        self._show_studio()
         if not self._confirm_discard():
             return
         self.cancel_placement()
@@ -499,6 +546,9 @@ class MiniMasterApp(tk.Tk):
         self.viewport.frame_content()
 
     def open_dialog(self):
+        if self.mode() == "character":
+            self.character_panel.load_dialog()
+            return
         path = filedialog.askopenfilename(
             parent=self, filetypes=[("MiniMaster project", "*.mmp"), ("All", "*.*")])
         if not path:
@@ -517,6 +567,9 @@ class MiniMasterApp(tk.Tk):
         self.viewport.frame_content()
 
     def save(self):
+        if self.mode() == "character":
+            self.character_panel.save()
+            return
         if self.path is None:
             self.save_as()
             return
@@ -524,6 +577,9 @@ class MiniMasterApp(tk.Tk):
         self.set_status(f"saved {self.path}")
 
     def save_as(self):
+        if self.mode() == "character":
+            self.character_panel.save_dialog()
+            return
         path = filedialog.asksaveasfilename(
             parent=self, defaultextension=".mmp",
             filetypes=[("MiniMaster project", "*.mmp")])
@@ -534,6 +590,7 @@ class MiniMasterApp(tk.Tk):
         self.set_status(f"saved {self.path}")
 
     def export_stl_dialog(self, options: dict):
+        self._show_studio()
         path = filedialog.asksaveasfilename(
             parent=self, defaultextension=".stl", filetypes=[("STL", "*.stl")])
         if not path:

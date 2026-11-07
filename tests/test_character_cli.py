@@ -128,12 +128,13 @@ def test_a_body_only_character_is_written_exactly_as_before(tmp_path):
     (["--add", "wing:style=feathered,gull=0.2"], "only applies when style"),
     (["--add", "wing:span=99"], "outside the range"),
     (["--add", "tail:side=up"], "unknown side"),
-    (["--add", "harvest:scale=2"], "does not use 'scale'"),
+    (["--add", "harvest:roll=30"], "does not use 'roll'"),
     (["--add", "tail:oops"], "key=value"),
     (["--remove", "wing-9"], "no appendage 'wing-9' to remove"),
     (["--add", "tail", "--pose", "wing-1:fold=1"], "no appendage 'wing-1' to pose"),
     (["--add", "wing", "--pose", "wing-1:flod=1"], "did you mean 'fold'"),
-    (["--add", "tail", "--pose", "tail-1:fold=1"], "no controls"),
+    (["--add", "horn", "--pose", "horn-1:fold=1"], "no controls"),
+    (["--add", "tail", "--pose", "tail-1:fold=1"], "has no control 'fold'"),
 ])
 def test_mistakes_are_refused_clearly(tmp_path, capsys, argv, message):
     rc = main(["character", "-o", str(tmp_path / "x.stl"), *argv])

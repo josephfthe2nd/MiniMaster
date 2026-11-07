@@ -372,6 +372,43 @@ def _segment_distance(pts, a, b):
     return np.linalg.norm(pts - (a + t[:, None] * ab), axis=1)
 
 
+# Upper-arm and thigh length (shoulder -> elbow, hip -> knee) of the NEUTRAL body, in scene
+# units: what the lengths of a harvest (radius, trim, sink) are given in. A test recomputes
+# them from the neutral body, so a changed base mesh cannot drift unnoticed.
+LIMB_REFERENCE_LENGTH = {"arm": 2.4423469356466336, "leg": 4.0260352512777695}
+
+
+# how much of the upper bone the narrowed root of a harvested limb takes (see limbrig.taper_root)
+NECK_LENGTH = 0.45
+
+
+def _is_mirror_image(a, b, tol: float = 1e-9) -> bool:
+    """Is ``b`` the x-mirror image of ``a`` as a set of points (in any vertex order)?"""
+    a, b = np.asarray(a), np.asarray(b)
+    if a.shape != b.shape:
+        return False
+    m = a * np.array([-1.0, 1.0, 1.0])
+    # order both by their coordinates rounded to 1e-6 (a mirrored point rounds the same, so
+    # the two sorted lists pair off point for point) and compare; the few points that
+    # straddle a rounding edge are looked up by distance instead
+    ia, ib = np.lexsort(np.round(m.T[::-1] / 1e-6)), np.lexsort(np.round(b.T[::-1] / 1e-6))
+    off = np.abs(m[ia] - b[ib]).max(axis=1)
+    return all(np.linalg.norm(b - m[ia[k]], axis=1).min() <= tol for k in np.nonzero(off > tol)[0])
+
+
+@dataclass
+class HarvestInfo:
+    """What :func:`harvest_limb` knows about the cut it made.
+
+    ``root_loop`` are the vertex indices (into the returned mesh) of the rim of the cut at
+    the chain's first joint, ``root_pole`` the vertex that closes it, ``root_center`` their
+    mean. A rig pins exactly these so the end that is welded into the torso never moves."""
+
+    root_loop: np.ndarray
+    root_pole: int
+    root_center: np.ndarray
+
+
 def harvest_region(base, chain, verts=None, radius=1.15, trim=0.0):
     """Cut a closed shell out of the body around a bone chain.
 
@@ -381,7 +418,10 @@ def harvest_region(base, chain, verts=None, radius=1.15, trim=0.0):
     ``trim`` along it (``trim`` shaves the root so the copy starts below the
     shoulder). The cut is fan-capped, so the result is a printable solid.
     """
-    v = base.verts if verts is None else verts
+    return harvest_limb(base, chain, verts, radius=radius, trim=trim)[0]
+
+
+def _harvest_cut(base, chain, v, radius, trim):
     body_v, body_q = base.body_cage(v)
     pts = [joint_position(base, n, v) for n in chain]
 
@@ -410,7 +450,42 @@ def harvest_region(base, chain, verts=None, radius=1.15, trim=0.0):
     if extra:
         verts = np.vstack([verts, verts[np.asarray(extra, dtype=np.int64)]])
     hv, hf = cap_boundaries(verts, local)
-    return Mesh(hv, hf)
+    # the root cut is the boundary loop nearest the chain's first joint; cap_boundaries
+    # appended one pole per loop, in the order boundary_loops lists them
+    loops = boundary_loops(local)
+    root = int(np.argmin([np.linalg.norm(verts[lp].mean(axis=0) - pts[0]) for lp in loops]))
+    loop = np.asarray(loops[root], dtype=np.int64)
+    info = HarvestInfo(root_loop=loop, root_pole=len(verts) + root,
+                       root_center=verts[loop].mean(axis=0))
+    return Mesh(hv, hf), info
+
+
+# A cut whose boundary loop revisits a vertex caps into a non-manifold edge (the fan pole joins
+# that vertex twice). It is a property of WHERE the cylinder meets the body's quads, so a body
+# that fails at one radius closes at a slightly different one: 6 of 500 random bodies failed
+# the default extra-leg cut, 0.2% of them the first version's.
+_CUT_RETRY = (1.0, 0.97, 1.03, 0.94, 1.06, 0.91, 1.09)
+
+
+def harvest_limb(base, chain, verts=None, radius=1.15, trim=0.0):
+    """:func:`harvest_region` plus a :class:`HarvestInfo` about its root cut:
+    ``(Mesh, HarvestInfo)``. The mesh is exactly what ``harvest_region`` returns -- unless that
+    cut does not close into a manifold solid on this body, in which case the radius (and the
+    trim with it) is nudged by a few percent until it does."""
+    v = base.verts if verts is None else verts
+    first = None
+    for k in _CUT_RETRY:
+        try:
+            mesh, info = _harvest_cut(base, chain, v, radius * k, trim * k)
+        except ValueError:
+            if first is None:
+                raise
+            continue
+        if first is None:
+            first = (mesh, info)
+        if mesh.integrity_report()["watertight"]:
+            return mesh, info
+    return first
 
 
 # --------------------------------------------------------------------------
@@ -440,41 +515,125 @@ def _loft(rings, close=True) -> Mesh:
     return mesh
 
 
+def _transport(basis, old_dir, new_dir):
+    """``basis`` carried along from direction ``old_dir`` to ``new_dir`` by the smallest
+    rotation between them (a parallel-transport frame: the ring does not spin about the
+    path). ``_frame`` picks its reference axis from the direction and switches it at a
+    threshold, which twists the rings by 90-160 degrees in one segment of a bent tube."""
+    axis = np.cross(old_dir, new_dir)
+    s = float(np.linalg.norm(axis))
+    c = float(old_dir @ new_dir)
+    if s < 1e-12:
+        return basis
+    k = axis / s
+    kx = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return (np.eye(3) + s * kx + (1.0 - c) * (kx @ kx)) @ basis
+
+
+# the rounded end of a blunt tube: rings on a quarter sphere of the tip radius (degrees from
+# the last ring's plane), then the loft's fan cap closes the last, small one
+_TIP_CAP = (32.0, 62.0, 82.0)
+
+
+def _round_tip(rings, pos, direction, basis, radius, minor, ring_verts) -> None:
+    """Append the rings of a rounded end to ``rings``: ``pos`` is the centre of the last
+    ring, ``radius`` its (major) radius, ``minor`` the ratio of the minor axis."""
+    for deg in _TIP_CAP:
+        phi = np.radians(deg)
+        rings.append(_ring(pos + direction * radius * np.sin(phi),
+                           radius * np.cos(phi), radius * minor * np.cos(phi), basis, ring_verts))
+
+
 def make_tail(length=6.0, base_radius=0.45, segments=12, ring_verts=10,
-              curl=0.55, droop=0.9) -> Mesh:
-    """A tapered, curling tail. +Z is outward from the attachment point."""
+              curl=0.55, droop=0.9, *, tip_radius=None, lift=0.0, sway=0.0) -> Mesh:
+    """A tapered, curling tail. +Z is outward from the attachment point.
+
+    ``curl`` bends the path about the local Y axis and ``droop`` about the local X axis,
+    both growing linearly toward the tip (the first version's names; on the default tail
+    a positive ``curl`` raises the end and a positive ``droop`` lowers it).
+
+    ``tip_radius`` is the radius at the end of the taper. ``None`` is the first version's law
+    (``base_radius * (1 - t) ** 0.85 + 0.02``: a point, 0.07 mm across at 32 mm); a number
+    gives ``tip_radius + (base_radius - tip_radius) * (1 - t) ** 0.85`` closed by a rounded
+    cap, which is a tip a printer can make. (A number also carries the rings along the path
+    by parallel transport; ``None`` keeps the first version's ring frames, which twist by
+    up to 90-160 degrees in one segment of a bent tail, bit for bit.)
+
+    ``lift`` (up) and ``sway`` (toward +X) are degrees of total bend, spread evenly along
+    the length, in the vertical and the lateral plane: raise or swing the whole tail from
+    its base. Zero (the default) is bit-for-bit the first version.
+    """
     basis = np.eye(3)
     rings = []
     pos = np.zeros(3)
     direction = np.array([0.0, 0.0, 1.0])
     step = length / segments
+    n = segments + 1                            # rings, each one a rotation
+    last_pos = last_dir = last_basis = prev_dir = None
     for i in range(segments + 1):
         t = i / segments
-        r = base_radius * (1.0 - t) ** 0.85 + 0.02
+        if tip_radius is None:
+            r = base_radius * (1.0 - t) ** 0.85 + 0.02
+        else:
+            r = tip_radius + (base_radius - tip_radius) * (1.0 - t) ** 0.85
         # bend progressively: droop away from the body and curl sideways
         ang = np.array([droop * t * 0.9, curl * t * 0.7, 0.0]) * step
+        if lift or sway:
+            ang = ang + np.array([-np.radians(sway) / n, np.radians(lift) / n, 0.0])
         rot = _euler(ang)
         direction = rot @ direction
-        b = _frame(direction)
+        if tip_radius is None or last_basis is None:
+            b = _frame(direction)
+        else:               # the rounded tail carries its rings along (no twist band)
+            b = _transport(last_basis, last_dir, direction)
         rings.append(_ring(pos, r, r * 0.92, b, ring_verts))
+        last_pos, last_dir, last_basis, last_r = pos, direction, b, r
         pos = pos + direction * step
+    if tip_radius is not None:
+        _round_tip(rings, last_pos, last_dir, last_basis, last_r, 0.92, ring_verts)
     return _loft(rings)
 
 
 def make_horn(length=2.2, base_radius=0.42, segments=8, ring_verts=8,
-              curve=1.1, twist=0.0) -> Mesh:
+              curve=1.1, twist=0.0, *, tip_radius=None, turns=0.0) -> Mesh:
+    """A tapered horn. ``curve`` bends it progressively (a spiral when large) and ``twist``
+    bends it the other way. ``turns`` (default 0: the bend grows toward the tip) makes it a
+    helix instead: the bend is constant along the horn and its plane turns about the horn's
+    own axis that many times from base to tip (a corkscrew, a lyre at less than one turn).
+    ``tip_radius`` is the radius at the end (``None``: the first version's point,
+    ``base_radius * (1 - t) ** 1.25 + 0.012``; a number: ``tip_radius + (base_radius -
+    tip_radius) * (1 - t) ** 1.25`` closed by a rounded cap, with the rings carried along the
+    path by parallel transport; ``None`` keeps the first version's ring frames)."""
     basis = np.eye(3)
     rings = []
     pos = np.zeros(3)
     direction = np.array([0.0, 0.0, 1.0])
     step = length / segments
+    last_pos = last_dir = last_basis = None
     for i in range(segments + 1):
         t = i / segments
-        r = base_radius * (1.0 - t) ** 1.25 + 0.012
-        rot = _euler(np.array([curve * t, twist * t, 0.0]) * step)
+        if tip_radius is None:
+            r = base_radius * (1.0 - t) ** 1.25 + 0.012
+        else:
+            r = tip_radius + (base_radius - tip_radius) * (1.0 - t) ** 1.25
+        if turns:
+            # a helix: the bend is the same all along, and its plane turns with the length
+            phi = 2.0 * np.pi * turns * t
+            a0, a1 = curve * step * np.cos(phi) - twist * step * np.sin(phi), \
+                curve * step * np.sin(phi) + twist * step * np.cos(phi)
+        else:
+            a0, a1 = curve * t * step, twist * t * step
+        rot = _euler(np.array([a0, a1, 0.0]))
         direction = rot @ direction
-        rings.append(_ring(pos, r, r, _frame(direction), ring_verts))
+        if tip_radius is None or last_basis is None:
+            b = _frame(direction)
+        else:
+            b = _transport(last_basis, last_dir, direction)
+        rings.append(_ring(pos, r, r, b, ring_verts))
+        last_pos, last_dir, last_basis, last_r = pos, direction, b, r
         pos = pos + direction * step
+    if tip_radius is not None:
+        _round_tip(rings, last_pos, last_dir, last_basis, last_r, 1.0, ring_verts)
     return _loft(rings)
 
 
@@ -852,6 +1011,76 @@ class Appendage:
                 mesh = builder(**self.params).transform(
                     self._anchor_frame(body_v, body_q, idx, pt, base))
             out.append((idx, mesh))
+        return out
+
+    def place_limbs(self, base, verts=None):
+        """``[(idx, LimbRig)]`` for a harvested limb on the sides to build: the character's
+        own arm or leg, copied, bound to the body quad ``anchor_face`` and sunk, with a rig
+        (:mod:`limbrig`) to pose it.
+
+        The copy's shoulder joint goes to the quad's surface point plus ``offset`` along the
+        limb's own axis (negative = back into the torso); ``scale`` scales it about that
+        joint. ``params`` are ``radius`` and ``trim`` of :func:`harvest_limb` and ``neck``
+        (:func:`limbrig.taper_root`: how much of its width the cut end keeps; 1 = as cut).
+        Everything that is a LENGTH (radius, trim, the sink) is given for the neutral body and
+        scaled by the ratio of this body's upper arm (leg) to the neutral one, so the same
+        record cuts the same limb and welds it as deeply on a child, a tall body or a heavy one.
+        The right side is cut from the right limb with the left/right markers swapped and
+        carries the mirrored controls; on a symmetric body it is the left one reflected,
+        vertex for vertex, so a pair is an exact mirror pair (and a lone right limb is the
+        pair's right limb).
+        """
+        if self.kind != "harvest" or self.anchor_face is None:
+            raise ValueError("place_limbs needs a harvest bound to a body quad (anchor_face)")
+        from .limbrig import LimbRig
+        v = base.verts if verts is None else verts
+        body_v, body_q = base.body_cage(v)
+        limb = "leg" if "leg" in str(self.chain[0]) else "arm"
+        left_chain = list(self.chain)
+        right_chain = [mirror_joint_name(c) for c in left_chain]
+
+        def cut(chain):
+            s_joint, e_joint, h_joint = (joint_position(base, n, v) for n in chain)
+            ls = float(np.linalg.norm(e_joint - s_joint)) / LIMB_REFERENCE_LENGTH[limb]
+            kw = dict(self.params)
+            kw["radius"] = float(kw.get("radius", 1.15)) * ls
+            kw["trim"] = float(kw.get("trim", 0.0)) * ls
+            neck = float(kw.pop("neck", 1.0))
+            mesh, info = harvest_limb(base, chain, v, **kw)
+            if neck < 1.0:
+                from .limbrig import taper_root
+                mesh = taper_root(mesh, s_joint, e_joint, info.root_loop, info.root_pole,
+                                  fraction=neck,
+                                  length=NECK_LENGTH * float(np.linalg.norm(e_joint - s_joint)))
+            return mesh, info, (s_joint, e_joint, h_joint), ls
+
+        left = cut(left_chain)
+        out = []
+        for idx in self._indices():
+            if idx == 0:
+                mesh, info, (s_joint, e_joint, h_joint), ls = left
+            else:
+                mesh, info, (s_joint, e_joint, h_joint), ls = cut(right_chain)
+                lm = left[0]
+                if _is_mirror_image(lm.vertices, mesh.vertices):
+                    # a symmetric body: the right limb IS the left one reflected, with the
+                    # same vertex numbering and the winding flipped (cut from the right arm it
+                    # has the same vertices but its quads may split along the other diagonal)
+                    mesh = Mesh(lm.vertices * np.array([-1.0, 1.0, 1.0]), lm.faces[:, ::-1])
+                    info = left[1]
+            anchor = self._face_anchor(body_v, body_q, idx,
+                                       np.asarray(self.up_hint, dtype=np.float64), base)
+            target, _ = anchor.resolve(body_v)
+            axis = h_joint - s_joint
+            axis = axis / max(float(np.linalg.norm(axis)), 1e-12)
+            # the sink scales with the limb: scaled about the shoulder joint, a bigger limb's
+            # cut end would otherwise leave the torso (weld lost beyond scale ~1.5)
+            pivot = target + self.offset * ls * self.scale * axis
+            place = lambda p: pivot + self.scale * (np.asarray(p, dtype=np.float64) - s_joint)  # noqa: E731
+            placed = Mesh(place(mesh.vertices), mesh.faces)
+            out.append((idx, LimbRig(placed, pivot, place(e_joint), place(h_joint), limb=limb,
+                                     mirrored=idx == 1, root_loop=info.root_loop,
+                                     root_pole=info.root_pole)))
         return out
 
     def build(self, base, verts=None):

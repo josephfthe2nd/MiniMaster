@@ -1,6 +1,6 @@
 # Dynamic appendages — design (v2, after independent review)
 
-Status: **T1a (document, placement, anatomy layer, kind registry, CLI) and T1b (print integration, printability report) are implemented** — see section 6; tracks T2 (renderer, see `docs/renderer.md`), T3 and T4 follow. Goal: the user adds, removes
+Status: **T1a (document, placement, anatomy layer, kind registry, CLI), T1b (print integration, printability report), T2 (renderer, see `docs/renderer.md`), T3 (the remaining kinds: harvested limbs, tail and horn controls) and T4 (the Character tab, see `docs/character_tab.md`) are implemented** — see sections 6, 6c and 6d. Goal: the user adds, removes
 and tunes appendages (wings, tails, horns, extra arms, anything later) on a realistic character in
 the running app, sees the result, and prints it.
 
@@ -237,3 +237,53 @@ Open after T1b: a real-slicer check of the union assumption; the base auto-widen
 base under a 32 mm figure is not what a tabletop user expects; the report's `levels` argument builds the body as the print
 will (a subdivided body shifts the tail's share from ~3% to ~2%); harvested arms are blocked by the root rule until T1a/T3 place
 them body-relative and sink them.
+
+## 6c. T3 status: harvested limbs, tail and horn controls (implemented)
+
+Files: `limbrig.py` (new: the limb rig), `kinds.py` (`HarvestKind`, `TailKind`, `HornKind`, `Placed.limb` /
+`Placed.repose`), `appendages.py` (additive: `harvest_limb`, `Appendage.place_limbs`, `make_tail` / `make_horn`
+keywords), `print_report.py` (the tube law follows `tip_radius`, four lines); tests `tests/test_limbs.py` and the
+changes listed at the end. Everything is reachable from the document and the CLI
+(`--add harvest:preset=upper_arms --pose arm-1:elbow=60`).
+
+| Item | State |
+| --- | --- |
+| **Harvested limbs make sense** | A record is a place on the body and the pose the limb starts in. Presets: `lower_arms` (a second pair below the original), `upper_arms` (raised above it), `extra_legs` (splayed out from the waist); the first version's `shoulder_socket` / `hip_socket` still build. The copy is the character's own limb, bound to a body quad, its shoulder joint sunk along the limb axis and the limb rotated about it by the pose controls; `scale` is honoured (about the shoulder joint), `roll` and `up_hint` are **not offered** (the `twist` control is the roll, the pose is the direction). Ids name the limb: `arm-1`, `leg-1`. |
+| **It prints** | Measured on the neutral, tall, short, child and heavy bodies: the cut end (the rim of the cut) lies inside the body 100% (heavy: >= 95%), the limb is 18-34% buried (the printability rule is 5% / 8%, so no root-weld finding), and the share lying in the ORIGINAL limb is 0% for lower arms and legs and 6-18% for upper arms (they start at the same shoulder; reported, not hidden). The first version's copy had 8-13% "embedded", almost all of it the original arm (about 1.5% was in the torso) and its cut end hung outside. The report is clean (no blocking finding) for arm, leg, tail and horn pairs at "medium" on all five bodies. |
+| **Why a narrow root** | The harvested cut is as wide as the limb (an arm 1.1 units, a thigh 2.6) and ragged; a leg's cannot be buried in a torso 2.6 wide. `taper_root` draws the first 45% of the upper bone in toward the axis (`neck`, default 0.5 of the width at the cut): a continuous map, so the shell stays closed and outward, and invisible inside the torso. `neck=1` is the limb as cut. |
+| **Robust across bodies** | Every length of a harvest (`radius`, `trim`, the sink) is given for the NEUTRAL limb and scaled by the character's own upper arm / thigh over the neutral one (`LIMB_REFERENCE_LENGTH`, with a guard test); an absolute sink was 1.6 units on a 24-unit body and on a 13-unit one. The cut differs per body (1,276 faces tall, 2,004 neutral): the rig is built from whatever was cut, every time. |
+| **Rig** | `LimbRig`: an `Armature` (root, shoulder, elbow, hand), `bodymesh.skin_weights` for the two moving bones (0.24 ms) plus a **pinned** weight for the cut end (1.0 up to the farthest rim vertex and a tenth of the upper bone beyond it, blended out over 55%), `bodymesh.pose_body_mesh` (0.3 ms). Controls in degrees, zero = the harvested pose: `raise_` (abduction), `swing` (about the axis through the raised bone and the forward axis, so it means the same hanging and held out), `twist` (about the bone), `elbow` / `knee` (a hinge about a FIXED anatomical axis: forward for an arm, back for a leg; read off the nearly straight donor leg it would flip). Ranges (`control_range`, `Placed.control_range`) are anatomical and depend on the others: `raise_` -42..138 on the neutral arm, the elbow from straight to 145 degrees total, `swing` narrower as the arm is held out. Out-of-range values are held at the range and named in a warning. |
+| **Pose guarantees** (tested) | At every corner of the control cube, on three bodies and every preset: watertight and outward, finite, the cut-end vertices exactly unmoved (the weld stays), both bone lengths preserved, volume within 0.25-1.1 of the rest (single controls at their limits: 85-99%; linear blend skinning loses volume at a twist, at the extremes of several controls together up to 62%). |
+| **Mirror** | The right limb is cut from the right arm (leg) with the `l-`/`r-` markers swapped (`mirror_joint_name`) and carries the mirrored rotations. On a symmetric body it IS the left one reflected, vertex for vertex (same numbering, winding flipped): the cut from the right arm has the same vertices but its quads may split along the other diagonal, so a mirrored copy is used when the point sets match to 1e-9; an asymmetric body (a sided slider) keeps each side's own limb. A lone right limb equals the pair's right one. |
+| **Tail** | Controls `curl` and `droop` ADD to the shape parameters of the same name (same units; the sum stays in the parameter's range, which `control_range` computes from the record), `lift` and `sway` bend the whole tail from its base in degrees (up, toward +X). Implemented as a parametric re-evaluation of the loft in the same placement frame (1.3 ms); no joint rig, nothing consumes one. |
+| **Tips** | `tip_radius` (tail default 0.09, horn 0.08; 0 = the first version's point) makes the end a rounded cap of that radius with the law `tip + (base - tip)(1-t)^e`, the base radius exactly the parameter. At "medium" the default tail tip is 0.32 mm across (was 0.07) and the horn 0.30 mm (was 0.04): the report no longer warns `tube-tip`, also on the tall body (the smallest mm per unit). The look: bounds within 0.35 units of the pointed ones. The cost: a thicker taper, so the embedded share falls from 25% to 20% (tail) and 65% to 51% (horn), both far above the 5% rule. A number for `tip_radius` also carries the rings along the path by parallel transport: the first version's ring frame switches its reference axis at a threshold and twists the rings by 90-160 degrees in one segment of a bent tube (a skewed band; on a lifted tail the thickness probe read 0.02 mm there, 0.49 mm now); `tip_radius=0` keeps the old mesh bit for bit, twist included. |
+| **Horn shapes** | `shape` = `curved` (the first version's horn, the default), `ram`, `spiral`, `antelope`: the same `make_horn` with other numbers, declared with `when` so each carries its own defaults. `turns` (new) makes the bend a helix; without it the bend grows toward the tip (a spiral). |
+| **Property tests** | Every ParamSpec at its lo and hi builds a watertight, outward, finite solid for harvest (arm, leg), tail and horn (all four shapes); every control at its limits for limbs and tail; pairs mirrored in every pose; the report clean for the default arm, leg, tail and horn pairs on five bodies. |
+
+Not done / limits (also in the work report): the extra legs hang from the waist (a leg is too wide to bury at the
+hip) and splay out, they do not reach the base; the CLI hands the report ready-made shells, so it cannot see a
+tube's tip (the library path with `Appendage` objects can, and the tests use it); the preset face ids are quads of the
+neutral body (guard test); a limb of an asymmetric body is not mirrored; a `knee` on an arm is named and ignored; `turns` at 0 and at 0.05 are different constructions (a growing spiral, then a constant-bend helix), awkward for a slider.
+
+## 6d. T4 status: the Character tab (implemented)
+
+Files: `minimaster/character/lab.py` (tk-free core), `character/imageview.py`, `character_panel.py`, the wiring in `app.py` (49 added lines and
+one changed one, in 13 hunks: the tab, `_swap_stage`, mode checks in undo / redo / escape / refresh / status / open / save), `tests/test_lab.py`, `tests/test_character_panel.py`, `tools/lab_bench.py`,
+`tools/character_smoke.py`, and `docs/character_tab.md` (usage, design, numbers, limits). No existing test
+changed.
+
+| Item | State |
+| --- | --- |
+| **D1** UI home | done: a "Character" tab, the last one. **The left pane is swapped** (Viewport <-> ImageView) while it is selected: the least invasive of the options considered, no studio widget moves and `tools/gui_smoke_test.py` is unchanged and passes. Assets are loaded when the tab is first opened; without them the tab says so. |
+| **D9** undo | done: `scene.UndoStack` over JSON snapshots of the character; one step per drag (same control within 0.6 s, or `begin_gesture` / `end_gesture` around a slider press / release); selection is not in the history. |
+| **D7 step 3** image view | done: Canvas + `PhotoImage`, grid and anchor markers as canvas items (the grid cut where the figure is), the Viewport's gestures, click-to-pick through the id buffer of the full body + appendage proxies (`quad = triangle % 13378`). |
+| **D7 step 4** tiers | done: draft on the UI thread (`BodyProxy` + `ClusterProxy`, half resolution on large panes), final on a worker (latest-wins slot, generation counter, `CancelToken`, frozen snapshot in, PPM bytes out, `queue.Queue` polled by `after(15)`, 150 ms debounce). Beyond the design, the draft takes a shortcut by gesture (body drag: re-place by anchor displacement; parameter drag: build one side and mirror; pose drag: pose one side and mirror), each only in the draft. Caches by content: weights -> vertices, spec + body -> built appendage (bounded 192 MB), pose -> mesh. |
+| Document operations | add (kind / preset, the Add menu is generated from the registry), remove, duplicate, rename, enable, set parameter / control / placement field / side / preset / anchor (validated against `ParamSpec` range and `when=`, the PLACED appendage's `control_range`, `placement_keys`, `SIDES`), body macros and sliders, anatomy switch and cap, load / save, export through `assemble_character(reference=)` + `appendage_report` (a blocking report stops the export unless forced; the STL equals the CLI's byte for byte). All headless in `test_lab.py`; the panel reaches the same methods (`test_a_sequence_through_the_panel_equals_the_headless_core`). |
+| Measured (acceptance) | tk, 900x806, through the panel's sliders: orbit 37-42 fps, pose drag 28-29, body drag 28-32 (>= 20); shape-parameter drag 13.5-17 (>= 10); final of the angel cold 0.59-0.69 s (< 1 s); cancel while rendering 8-86 ms. **Not met:** cancel during the first ~0.35 s of a cold angel final is up to 340 ms (the wing build has no checkpoints), and the worst single Tk timer gap while the worker renders was 6-15 ms above nominal in three runs (p99 <= 10 ms; target 10 ms). See `docs/character_tab.md`. |
+
+Found on the way: `Character.from_dict` raises `AttributeError` on a JSON list (the lab turns it into a message);
+the tab's first draft shape-drag measured 7 fps because the overlay asked the appendage for its anchor and so forced
+the exact build on every frame; `tk.Variable.__del__` can run on the preview worker through the cyclic collector
+(deferred to the UI thread in the panel). Open: a checkpoint inside `kind.instantiate` / the wing builders (T3's
+files) would close the cancel gap; HiDPI and native Windows / macOS Tk are untested; a click places the anchor but
+not the orientation.

@@ -462,10 +462,11 @@ def _deformed(rest: Mesh, posed: Mesh) -> bool:
 # tails and horns: diameter along the length, analytically
 
 # kind -> (builder, exponent, floor, minor-axis factor). ``radius(t) = base_radius * (1 - t)
-# ** exponent + floor``; the cross-section is an ellipse whose minor semi-axis is ``minor`` x
-# the radius. The law is the builder's own (appendages.make_tail / make_horn); the tests
-# compare it with the built mesh, so a changed builder cannot drift unnoticed. A new tube kind
-# registers its law here.
+# ** exponent + floor``; with a ``tip_radius`` param (the registry's rounded tip) it is
+# ``tip + (base_radius - tip) * (1 - t) ** exponent`` instead. The cross-section is an ellipse
+# whose minor semi-axis is ``minor`` x the radius. The law is the builder's own
+# (appendages.make_tail / make_horn); the tests compare it with the built mesh, so a changed
+# builder cannot drift unnoticed. A new tube kind registers its law here.
 TUBE_LAWS = {"tail": ("make_tail", 0.85, 0.02, 0.92), "horn": ("make_horn", 1.25, 0.012, 1.0)}
 
 
@@ -482,6 +483,10 @@ def tube_diameters(kind: str, params: dict, scale: float = 1.0, n: int = 2001):
         base_radius = inspect.signature(getattr(appendages, builder)).parameters[
             "base_radius"].default
     t = np.linspace(0.0, 1.0, n)
+    tip = params.get("tip_radius")
+    if tip:       # a registry tail / horn with a rounded tip: radius = tip + (base - tip) (1-t)^e
+        return (2.0 * minor * (float(tip) + (float(base_radius) - float(tip)) * (1.0 - t) ** expo)
+                * float(scale))
     return 2.0 * minor * (float(base_radius) * (1.0 - t) ** expo + floor) * float(scale)
 
 

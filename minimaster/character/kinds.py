@@ -31,6 +31,7 @@ file.
 
 from __future__ import annotations
 
+import copy
 import difflib
 import math
 import warnings
@@ -157,6 +158,9 @@ PRESET_POINTS = {
     "temples": (0.85, 8.55, 0.05),           # up and out on the skull
     "shoulder_socket": (2.0, 4.2, 0.15),     # the side of the chest, under the shoulder
     "hip_socket": (1.5, 0.4, 0.15),          # the outer hip
+    "lower_arms": (1.239, 2.97, 0.884),      # the front of the flank at the waist, below the arm
+    "upper_arms": (1.441, 4.364, 0.906),     # the upper chest, in front of the shoulder
+    "extra_legs": (1.268, 3.063, 0.216),     # the flank at the waist (legs are too wide for the hip)
 }
 PRESET_FACES = {
     "shoulder_blades": 10296,
@@ -165,6 +169,9 @@ PRESET_FACES = {
     "temples": 12116,
     "shoulder_socket": 7954,
     "hip_socket": 10647,
+    "lower_arms": 10411,
+    "upper_arms": 7974,
+    "extra_legs": 10349,
 }
 # WING_ROOT minus the centroid of the "waist" quad on the neutral body: the end of a
 # membrane wing's attachment line is "the waist quad plus a little way into the back"
@@ -177,6 +184,10 @@ WING_ROOT_OFFSET = (0.04479999999999995, -0.076125, 0.12734999999999996)
 TAIL_SINK = -0.6
 HORN_SINK = -0.55
 HARVEST_SINK = -0.5      # along the limb axis: a harvested limb has no surface normal
+TAIL_TIP = 0.09          # radius at the end of a tail (the first version's was 0.02: a point)
+HORN_TIP = 0.08          # and of a horn (0.012)
+HARVEST_TRIM = 0.6       # shaves the root of the copy (units of the neutral limb)
+HARVEST_NECK = 0.5       # the cut end keeps this much of the limb's width (limbrig.taper_root)
 
 
 # --------------------------------------------------------------------------
@@ -255,14 +266,22 @@ class Placed:
     kind: "Kind"
     side: str                      # "" (midline), "l" or "r"
     anchor: np.ndarray             # where it joins the body: the bound quad's surface point
-    matrix: np.ndarray | None      # the 4x4 placement (wings), else None
+    matrix: np.ndarray | None      # the 4x4 placement (wings, tails, horns), else None
     params: dict                   # the cleaned, applicable parameters it was built from
     controls: dict                 # the effective pose controls of this side
     rig: object = None             # a PlacedWing for wings
-    static: Mesh | None = None     # the finished mesh of a kind without controls
+    static: Mesh | None = None     # the mesh under the spec's own controls (loft kinds, limbs)
+    limb: object = None            # a limbrig.LimbRig for a harvested arm or leg
+    repose: object = None          # controls -> Mesh: a kind that re-evaluates its loft
 
     def mesh(self, controls: dict | None = None) -> Mesh:
         """The mesh under ``controls`` (default: the spec's own for this side)."""
+        if controls is None and self.static is not None:
+            return self.static
+        if self.limb is not None:
+            return self.limb.pose(self.controls if controls is None else controls)
+        if self.repose is not None:
+            return self.repose(self.controls if controls is None else controls)
         if self.rig is None:
             return self.static
         c = dict(self.controls if controls is None else controls)
@@ -275,15 +294,26 @@ class Placed:
 
     @property
     def control_names(self) -> tuple:
+        """The pose controls this appendage answers to (a leg has ``knee`` where an arm has
+        ``elbow``)."""
+        if self.limb is not None:
+            return tuple(self.limb.control_names)
         return tuple(c.key for c in self.kind.controls)
 
     def control_range(self, name: str, controls: dict | None = None):
         """``(lo, hi)`` this placed appendage allows ``name`` right now (a placed wing
-        allows less than a free one, and less as it folds), or ``None`` if it has no
-        such control."""
-        if self.rig is None or name not in self.control_names:
+        allows less than a free one, and less as it folds; a limb's swing depends on how
+        far it is raised; a tail's curl on the curl it was built with), or ``None`` if it
+        has no such control."""
+        if name not in self.control_names:
             return None
         state = self.controls if controls is None else controls
+        if self.limb is not None:
+            return self.limb.control_range(name, state)
+        if self.repose is not None:
+            return self.kind.control_range(name, state, self.params)
+        if self.rig is None:
+            return None
         return self.rig.rig.control_range(name, float(state.get("fold", 0.0)))
 
     @property
@@ -321,6 +351,7 @@ class Kind:
     controls: tuple = ()
     presets: dict = {}                 # name -> placement defaults
     default_side = "center"
+    pose_presets = False               # does ``--pose ID:preset=NAME`` mean anything?
     placement_keys = ("anchor", "scale", "roll", "offset", "up_hint")   # what it honours
     anatomy_key = ""                   # creature_anatomy.CONSEQUENCES key (default: id)
     paired = False                     # is a symmetric pair its typical installation?
@@ -381,10 +412,10 @@ class Kind:
 
     # -- controls -----------------------------------------------------------------------
 
-    def control_range(self, name: str, state: dict | None = None):
-        """``(lo, hi)`` the control ``name`` takes, given the other controls ``state``
-        (a free wing's range; a PLACED one's is narrower, see ``Placed.control_range``),
-        or ``None`` if this kind has no such control."""
+    def control_range(self, name: str, state: dict | None = None, params: dict | None = None):
+        """``(lo, hi)`` the control ``name`` takes, given the other controls ``state`` and
+        the record's cleaned ``params`` (a free wing's range; a PLACED one's is narrower,
+        see ``Placed.control_range``), or ``None`` if this kind has no such control."""
         return None
 
     def clean_controls(self, controls: dict, owner: str = ""):
@@ -412,6 +443,11 @@ class Kind:
 
     def default_preset(self, values: dict) -> str:
         return next(iter(self.presets))
+
+    def id_stem(self, params: dict) -> str:
+        """What a new record's id is named after (``"<stem>-<n>"``): the kind, or for
+        an extra limb the limb (``arm-1``, ``leg-1``)."""
+        return self.id
 
     def resolve_placement(self, spec: AppendageSpec, values: dict, ctx: BuildContext) -> dict:
         """The record's placement with the preset's values filled in, and the anchor
@@ -535,30 +571,90 @@ def _vec(value, default):
 # -- tails and horns ---------------------------------------------------------------------
 
 
-class _LoftKind(Kind):
-    """A tapered tube swept out of the body: static geometry, no controls."""
+def _tip(values: dict):
+    """The builders' ``tip_radius``: the radius, or ``None`` (a point) for 0."""
+    r = float(values["tip_radius"])
+    return r if r > 0.0 else None
 
-    def build(self, spec, side, values, build_values, pl, ctx):
-        app = self._engine(side, pl, params=dict(build_values))
-        out = []
-        names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
-        for idx, mesh in app.place_meshes(ctx.base, ctx.verts):
-            name, letter = names[idx]
-            out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
-                              anchor=self._surface(ctx, app, idx), matrix=None,
-                              params=dict(values), controls={}, static=mesh))
-        return out
+
+class _NumericControls:
+    """``clean_controls`` for a kind whose pose controls are plain numbers: the ones it has,
+    finite, are used; the rest are named in a note and stay in the record."""
 
     def clean_controls(self, controls, owner=""):
-        return {}, ([f"{owner}{self.id} has no pose controls; {sorted(controls)} kept but ignored"]
-                    if controls else [])
+        if not self.controls:
+            return {}, ([f"{owner}{self.id} has no pose controls; {sorted(controls)} kept but "
+                         "ignored"] if controls else [])
+        out, notes = {}, []
+        names = [c.key for c in self.controls]
+        for key, value in controls.items():
+            if key not in names:
+                near = difflib.get_close_matches(str(key), names, n=1)
+                notes.append(f"{owner}{self.id} has no control {key!r}; kept in the file but "
+                             f"ignored" + (f" (did you mean {near[0]!r}?)" if near
+                                           else f" (it has: {', '.join(names)})"))
+            elif (isinstance(value, (int, float)) and not isinstance(value, bool)
+                  and math.isfinite(value)):
+                out[key] = float(value)
+            else:
+                notes.append(f"{owner}control {key} = {value!r} is not a finite number; ignored")
+        return out, notes
+
+
+class _LoftKind(_NumericControls, Kind):
+    """A tapered tube swept out of the body. Its pose controls (a tail's) re-evaluate the
+    loft with other bend values and place it with the same frame: there is no joint rig,
+    nothing consumes one, and a loft is 1-7 ms."""
+
+    def builder_args(self, build_values: dict, controls: dict) -> dict:
+        """The keyword arguments of the ``appendages`` builder for these parameters and
+        pose controls."""
+        raise NotImplementedError
+
+    def build(self, spec, side, values, build_values, pl, ctx):
+        app = self._engine(side, pl, params={})
+        body_v, body_q = ctx.cage
+        builder = A.BUILDERS[self.id]
+        names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
+        out = []
+        for idx in app._indices():
+            name, letter = names[idx]
+            frame = app._anchor_frame(body_v, body_q, idx, app._point(idx), ctx.base)
+            ctrl = {}
+            if self.controls:               # a kind without controls was reported once already
+                ctrl, notes = self.clean_controls(side_controls(spec.controls, letter),
+                                                  f"appendage {spec.id!r}: ")
+                for note in notes:
+                    ctx.warn(note)
+
+            def repose(controls, frame=frame):
+                return builder(**self.builder_args(build_values, controls)).transform(frame)
+
+            out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
+                              anchor=self._surface(ctx, app, idx), matrix=frame,
+                              params=dict(values), controls=ctrl, static=repose(ctrl),
+                              repose=repose))
+        return out
 
 
 class TailKind(_LoftKind):
+    """A tail: a tapered tube with a rounded tip, bound to the quad below the sacrum.
+
+    Pose controls re-evaluate the loft: ``curl`` and ``droop`` ADD to the parameters of the
+    same name (same units, so 0 is the tail as built; the sum stays inside the parameter's
+    range), ``lift`` (up) and ``sway`` (toward +X) bend the whole tail from its base, in
+    degrees. ``tip_radius`` is the radius at the end: the first version's tail ended in a
+    point 0.07 mm across at 32 mm, below what a printer resolves; the default is a rounded
+    end 0.3 mm across."""
+
     id = "tail"
     label = "Tail"
     default_side = "center"
     paired = False
+    controls = (ControlSpec("curl", "Curl (added to the shape)", 0.0),
+                ControlSpec("droop", "Droop (added to the shape)", 0.0),
+                ControlSpec("lift", "Lift (degrees, up)", 0.0),
+                ControlSpec("sway", "Sway (degrees, toward +X)", 0.0))
     params = (
         ParamSpec("length", "Length", "float", 6.0, 1.0, 20.0, 0.1),
         ParamSpec("base_radius", "Base radius", "float", 0.45, 0.1, 2.0, 0.01),
@@ -566,6 +662,9 @@ class TailKind(_LoftKind):
         ParamSpec("ring_verts", "Ring vertices", "int", 10, 6, 24, 1),
         ParamSpec("curl", "Curl", "float", 0.55, -2.0, 2.0, 0.01),
         ParamSpec("droop", "Droop", "float", 0.9, -2.0, 2.0, 0.01),
+        ParamSpec("tip_radius", "Tip radius", "float", TAIL_TIP, 0.0, 0.4, 0.005,
+                  help="radius at the end of the taper, which is rounded; 0 = the first "
+                       "version's point (0.07 mm across at 32 mm: below what a printer makes)"),
     )
     presets = {"tail_base": {"label": "Tail base (below the sacrum)", "face": "tail_base",
                              "up_hint": (0.0, 1.0, 0.0), "offset": TAIL_SINK,
@@ -577,20 +676,70 @@ class TailKind(_LoftKind):
     def material(self, params):
         return material_named("skin")
 
+    def builder_args(self, build_values, controls):
+        c = {k: float(controls.get(k, 0.0)) for k in ("curl", "droop", "lift", "sway")}
+        # a tail outside its ranges facets into a zigzag that overlaps itself (watertight, so the
+        # gate never sees it): the document and CLI path clamp as the panel does
+        for k in c:
+            lo, hi = self.control_range(k, None, build_values)
+            c[k] = min(max(c[k], lo), hi)
+        return dict(length=build_values["length"], base_radius=build_values["base_radius"],
+                    segments=build_values["segments"], ring_verts=build_values["ring_verts"],
+                    curl=build_values["curl"] + c["curl"], droop=build_values["droop"] + c["droop"],
+                    tip_radius=_tip(build_values), lift=c["lift"], sway=c["sway"])
+
+    def control_range(self, name, state=None, params=None):
+        params = params or {}
+        if name in ("curl", "droop"):
+            base = float(params.get(name, self.param(name).default))
+            return (-2.0 - base, 2.0 - base)          # the sum stays inside the parameter's range
+        if name == "lift":
+            return (-60.0, 90.0)
+        if name == "sway":
+            return (-90.0, 90.0)
+        return None
+
+
+# the horn shapes: parameters per variant (the first row is the first version's horn).
+# Every variant is make_horn with other numbers; ``turns`` makes it a helix.
+HORN_SHAPES = {
+    #            length base_r  curve  twist  turns  segments ring_verts
+    "curved":   (2.2,   0.42,   1.1,   0.0,   0.0,   8,       8),     # short, curved: the default
+    "ram":      (4.2,   0.55,   2.1,   0.6,   0.0,  16,      12),     # thick, curling back
+    "spiral":   (4.5,   0.34,   1.2,   0.0,   3.0,  36,      12),     # a slender corkscrew
+    "antelope": (5.2,   0.28,   0.7,   0.0,   1.0,  28,      12),     # long, slim, a lyre
+}
+
+
+def _horn_param_specs() -> tuple:
+    out = [ParamSpec("shape", "Shape", "choice", "curved", choices=tuple(HORN_SHAPES),
+                     help="curved | ram | spiral | antelope: sets the defaults below")]
+    for key, label, col, lo, hi, step, typ in (
+            ("length", "Length", 0, 0.3, 12.0, 0.1, "float"),
+            ("base_radius", "Base radius", 1, 0.08, 1.5, 0.01, "float"),
+            ("segments", "Segments", 5, 3, 40, 1, "int"),
+            ("ring_verts", "Ring vertices", 6, 5, 24, 1, "int"),
+            ("curve", "Curve", 2, -3.0, 3.0, 0.01, "float"),
+            ("twist", "Twist", 3, -3.0, 3.0, 0.01, "float"),
+            ("turns", "Turns", 4, -4.0, 4.0, 0.05, "float")):
+        for shape, row in HORN_SHAPES.items():
+            out.append(ParamSpec(key, label, typ, row[col], lo, hi, step, when=("shape", (shape,))))
+    out.append(ParamSpec("tip_radius", "Tip radius", "float", HORN_TIP, 0.0, 0.3, 0.005,
+                         help="radius at the end, which is rounded; 0 = the first version's "
+                              "point (0.04 mm across at 32 mm)"))
+    return tuple(out)
+
 
 class HornKind(_LoftKind):
+    """A horn: ``shape`` picks a variant (curved, ram, spiral, antelope), each the same
+    tapered tube swept along a bend; ``tip_radius`` rounds the end to a printable size.
+    No pose controls (a horn does not move)."""
+
     id = "horn"
     label = "Horn"
     default_side = "both"
     paired = True
-    params = (
-        ParamSpec("length", "Length", "float", 2.2, 0.3, 12.0, 0.1),
-        ParamSpec("base_radius", "Base radius", "float", 0.42, 0.08, 1.5, 0.01),
-        ParamSpec("segments", "Segments", "int", 8, 3, 30, 1),
-        ParamSpec("ring_verts", "Ring vertices", "int", 8, 5, 24, 1),
-        ParamSpec("curve", "Curve", "float", 1.1, -3.0, 3.0, 0.01),
-        ParamSpec("twist", "Twist", "float", 0.0, -3.0, 3.0, 0.01),
-    )
+    params = _horn_param_specs()
     presets = {"temples": {"label": "Temples (up and out on the skull)", "face": "temples",
                            "up_hint": (0.0, 1.0, 0.0), "offset": HORN_SINK, "side": "both"}}
 
@@ -599,6 +748,12 @@ class HornKind(_LoftKind):
 
     def material(self, params):
         return material_named("bone")
+
+    def builder_args(self, build_values, controls):
+        return dict(length=build_values["length"], base_radius=build_values["base_radius"],
+                    segments=build_values["segments"], ring_verts=build_values["ring_verts"],
+                    curve=build_values["curve"], twist=build_values["twist"],
+                    turns=build_values["turns"], tip_radius=_tip(build_values))
 
 
 # -- the wing ----------------------------------------------------------------------------
@@ -618,6 +773,7 @@ class WingKind(Kind):
     default_side = "both"
     paired = True
     controls = tuple(ControlSpec(*c) for c in _WING_POSE_LABELS)
+    pose_presets = True
     params = (
         ParamSpec("style", "Style", "choice", "membrane", choices=("membrane", "dragon", "feathered"),
                   essential=True, help="bat, dragon or bird/angel wing"),
@@ -679,7 +835,7 @@ class WingKind(Kind):
 
     # -- controls --------------------------------------------------------------------------
 
-    def control_range(self, name, state=None):
+    def control_range(self, name, state=None, params=None):
         from .wingrig import control_range
         if name not in {c.key for c in self.controls}:
             return None
@@ -758,19 +914,34 @@ LIMB_CHAINS = {"arm": ("l-shoulder", "l-elbow", "l-hand"),
                "leg": ("l-upper-leg", "l-knee", "l-ankle")}
 
 
-class HarvestKind(Kind):
+class HarvestKind(_NumericControls, Kind):
     """An extra arm or leg cut out of the character's own body (``Appendage`` 'harvest').
 
-    The copy is the character's own limb, so it matches their build; it is placed on the
-    quad it is bound to and SUNK along its own axis. It honours the anchor and the sink
-    only: the old scale / roll / up_hint had no effect on a harvest, and the property grid
-    must not offer controls that do nothing (``placement_keys``)."""
+    The copy is the character's own limb, so it matches their build and re-harvests on every
+    body. It is bound to a body quad, sunk along its own axis so its cut end is buried in
+    the torso, and posed by a :class:`~minimaster.character.limbrig.LimbRig` about the
+    shoulder (hip) joint: ``raise_``, ``swing``, ``twist`` and ``elbow`` (``knee`` for a
+    leg). A preset is a place on the body AND the pose the limb starts in (``lower_arms``
+    hang below the original pair, ``upper_arms`` are raised above it).
+
+    Honoured placement: ``anchor`` and ``offset`` (the sink along the limb axis) and
+    ``scale`` (about the shoulder joint; a smaller second pair). NOT offered:
+    ``roll`` (the ``twist`` control is the roll about the limb) and ``up_hint`` (the
+    direction is the pose). Lengths (``radius``, ``trim``, the sink) are in units of the
+    neutral body's limb and scale with the character's own limb (``LIMB_REFERENCE_LENGTH``).
+    """
 
     id = "harvest"
     label = "Extra limb"
     default_side = "both"
     paired = True
-    placement_keys = ("anchor", "offset")
+    placement_keys = ("anchor", "scale", "offset")
+    pose_presets = False
+    controls = (ControlSpec("swing", "Swing (forward)", 0.0),
+                ControlSpec("raise_", "Raise (away from the body)", 0.0),
+                ControlSpec("twist", "Twist about the limb", 0.0),
+                ControlSpec("elbow", "Elbow flex", 0.0),
+                ControlSpec("knee", "Knee flex", 0.0))
     params = (
         ParamSpec("limb", "Limb", "choice", "arm", choices=("arm", "leg"), essential=True,
                   help="copy the character's arm or leg"),
@@ -778,41 +949,90 @@ class HarvestKind(Kind):
                   when=("limb", ("arm",))),
         ParamSpec("radius", "Reach around the bones", "float", 1.5, 0.9, 2.5, 0.05,
                   when=("limb", ("leg",))),
-        ParamSpec("trim", "Trim at the root", "float", 0.6, 0.0, 2.0, 0.05),
+        ParamSpec("trim", "Trim at the root", "float", HARVEST_TRIM, 0.0, 2.0, 0.05),
+        ParamSpec("neck", "Root thickness", "float", HARVEST_NECK, 0.2, 1.0, 0.05,
+                  help="how much of its width the cut end keeps (1 = the limb as cut): "
+                       "a narrow root fits inside the torso"),
     )
     presets = {
-        "shoulder_socket": {"label": "Shoulder socket (extra arm)", "face": "shoulder_socket",
-                            "offset": HARVEST_SINK, "side": "both"},
-        "hip_socket": {"label": "Hip socket (extra leg)", "face": "hip_socket",
+        "lower_arms": {"label": "Lower arms (a second pair below the original)",
+                       "face": "lower_arms", "offset": -2.0, "side": "both",
+                       "params": {"limb": "arm"},
+                       "controls": {"raise_": 10.0, "swing": 10.0, "elbow": 10.0}},
+        "upper_arms": {"label": "Upper arms (a second pair raised above the original)",
+                       "face": "upper_arms", "offset": -1.8, "side": "both",
+                       "params": {"limb": "arm"},
+                       "controls": {"raise_": 65.0, "swing": -5.0, "elbow": -15.0}},
+        "extra_legs": {"label": "Extra legs (a second pair splayed out from the waist)",
+                       "face": "extra_legs", "offset": -2.6, "side": "both",
+                       "params": {"limb": "leg"},
+                       "controls": {"raise_": 45.0, "swing": -10.0, "knee": 20.0}},
+        # the first version's presets: a straight copy at the original's own shoulder
+        # (it overlaps the original arm); kept so older documents still build
+        "shoulder_socket": {"label": "Shoulder socket (legacy: overlaps the original arm)",
+                            "face": "shoulder_socket", "offset": HARVEST_SINK, "side": "both"},
+        "hip_socket": {"label": "Hip socket (legacy)", "face": "hip_socket",
                        "offset": HARVEST_SINK, "side": "both"},
     }
 
     def default_preset(self, values):
-        return "hip_socket" if values.get("limb") == "leg" else "shoulder_socket"
+        return "extra_legs" if values.get("limb") == "leg" else "lower_arms"
 
     def material(self, params):
         return material_named("skin")
 
+    def control_range(self, name, state=None, params=None):
+        """The range of ``name`` for a typical limb of the kind (an arm unless ``params``
+        say leg); a placed limb knows its own (``Placed.control_range``)."""
+        if name not in {c.key for c in self.controls}:
+            return None
+        from . import limbrig
+        return limbrig.typical_geometry((params or {}).get("limb", "arm")).control_range(
+            name, state)
+
     def build(self, spec, side, values, build_values, pl, ctx):
+        if not pl["scale"] > 0.0:
+            raise SpecError(f"scale = {pl['scale']:g} must be positive")
         chain = LIMB_CHAINS[values["limb"]]
-        params = {"radius": build_values["radius"], "trim": build_values["trim"]}
+        params = {k: build_values[k] for k in ("radius", "trim", "neck")}
         app = self._engine(side, pl, chain=chain, params=params)
         names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
         out = []
         try:
-            meshes = app.place_meshes(ctx.base, ctx.verts)
+            rigs = app.place_limbs(ctx.base, ctx.verts)
         except ValueError as exc:          # e.g. "selected no faces": this body has no such limb
             raise SpecError(f"cannot cut the {values['limb']} out of this body ({exc})") from None
-        for idx, mesh in meshes:
+        for idx, rig in rigs:
             name, letter = names[idx]
+            owner = f"appendage {spec.id!r}: "
+            ctrl, notes = self.clean_controls(side_controls(spec.controls, letter), owner)
+            for key in list(ctrl):
+                if key not in rig.control_names:      # an elbow on a leg, a knee on an arm
+                    notes.append(f"{owner}control {key!r} does not apply to {self._article(rig)}"
+                                 f" (it has {', '.join(rig.control_names)}); ignored")
+                    del ctrl[key]
+            canon = {("elbow" if k == "knee" else k): val for k, val in ctrl.items()}
+            for key in ("raise_", "twist", "elbow", "swing"):    # swing's range depends on raise_
+                if key in canon:
+                    lo, hi = rig.geometry.control_range(key, canon)
+                    if not lo - 1e-9 <= canon[key] <= hi + 1e-9:
+                        notes.append(f"{owner}control {key} = {canon[key]:g} is outside "
+                                     f"[{lo:.0f}, {hi:.0f}] for this limb: using "
+                                     f"{min(max(canon[key], lo), hi):.0f}")
+            for note in notes:
+                ctx.warn(note)
             out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
                               anchor=self._surface(ctx, app, idx), matrix=None,
-                              params=dict(values), controls={}, static=mesh))
+                              params=dict(values), controls=ctrl, limb=rig,
+                              static=rig.pose(ctrl)))
         return out
 
-    def clean_controls(self, controls, owner=""):
-        return {}, ([f"{owner}harvest has no pose controls; {sorted(controls)} kept but ignored"]
-                    if controls else [])
+    @staticmethod
+    def _article(rig) -> str:
+        return "a leg" if rig.limb == "leg" else "an arm"
+
+    def id_stem(self, params):
+        return "leg" if params.get("limb") == "leg" else "arm"
 
 
 # --------------------------------------------------------------------------
@@ -922,6 +1142,11 @@ def new_spec(kind_id: str, existing=(), *, side: str | None = None, params: dict
             raise ValueError(f"{kind_id} has no parameter {key!r}; it has "
                              f"{', '.join(sorted(known))}" + (f" (did you mean {near[0]!r}?)"
                                                               if near else ""))
+    # a preset may imply parameters (the extra_legs preset is for limb=leg)
+    for key, val in (kind.presets.get(preset) or {}).get("params", {}).items() if preset else ():
+        if key in params and params[key] != val:
+            raise ValueError(f"preset {preset!r} is for {key}={val!r}, not {key}={params[key]!r}")
+        params.setdefault(key, val)
     values = kind.defaults(**{k: v for k, v in params.items()
                               if any(q.key == k and q.essential for q in kind.params)})
     for key, raw in list(params.items()):
@@ -976,9 +1201,12 @@ def new_spec(kind_id: str, existing=(), *, side: str | None = None, params: dict
         raise ValueError(f"{spec_id!r} is not a valid id (letters, digits, '-' and '_')")
     if spec_id is not None and any(e.id == spec_id for e in existing):
         raise ValueError(f"there already is an appendage called {spec_id!r}")
-    return AppendageSpec(id=spec_id or next_id(kind_id, existing), kind=kind_id,
+    # a preset is a pose as well as a place: the limb starts in the position its name says,
+    # unless the caller says what the controls are (an empty dict means "none")
+    start_controls = copy.deepcopy(p.get("controls", {})) if controls is None else dict(controls)
+    return AppendageSpec(id=spec_id or next_id(kind.id_stem(params), existing), kind=kind_id,
                          side=side or p.get("side", kind.default_side), params=params,
-                         controls=dict(controls or {}), placement=placement, name=name)
+                         controls=start_controls, placement=placement, name=name)
 
 
 def _scalar(text: str):
@@ -1058,7 +1286,7 @@ def pose_from_text(text: str, specs) -> tuple:
     kind = KINDS.get(spec.kind)
     values = parse_kv(rest, "control=value")
     if kind is not None:
-        names = {c.key for c in kind.controls} | ({"preset"} if kind.controls else set())
+        names = {c.key for c in kind.controls} | ({"preset"} if kind.pose_presets else set())
         for key in values:
             if key not in names:
                 near = difflib.get_close_matches(key, sorted(names), n=1)
@@ -1096,6 +1324,6 @@ def format_kinds() -> str:
             lines.append(f"  {p.key:<14s}{rng:<26s} default {p.default!s:<8s}{when}")
         if kind.controls:
             lines.append("  pose controls: " + ", ".join(c.key for c in kind.controls)
-                         + ", preset (see --pose)")
+                         + (", preset" if kind.pose_presets else "") + " (see --pose)")
         lines.append("")
     return "\n".join(lines).rstrip()

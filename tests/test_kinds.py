@@ -82,9 +82,16 @@ def test_wing_defaults_are_what_the_builders_really_use(style):
 def test_loft_defaults_are_what_the_builders_really_use(kind_id, fn):
     kind = K.KINDS[kind_id]
     real = _builder_defaults(fn)
-    assert set(kind.defaults()) == set(real)
+    # the registry adds the horn's ``shape``; the builders' own ``tip_radius`` stays None =
+    # the first version's point (a legacy Appendage is untouched) while the registry's
+    # default is rounded; the tail's ``lift`` / ``sway`` are pose controls, not parameters
+    registry_only = {"tail": set(), "horn": {"shape"}}[kind_id]
+    builder_only = {"tail": {"lift", "sway"}, "horn": set()}[kind_id]
+    assert set(kind.defaults()) - registry_only == set(real) - builder_only
     for key, value in kind.defaults().items():
-        assert value == pytest.approx(real[key]), key
+        if key in real and key != "tip_radius":
+            assert value == pytest.approx(real[key]), key
+    assert real["tip_radius"] is None and kind.defaults()["tip_radius"] > 0     # blunt by default
 
 
 def test_when_selects_the_parameters_of_a_style():
@@ -182,8 +189,13 @@ def test_new_spec_places_by_preset_and_picks_ids():
     assert K.new_spec("horn").placement["offset"] == K.HORN_SINK
     # the extra limb's preset follows its limb
     leg = K.new_spec("harvest", params={"limb": "leg"})
-    assert leg.placement["preset"] == "hip_socket"
-    assert K.new_spec("harvest").placement["preset"] == "shoulder_socket"
+    assert leg.placement["preset"] == "extra_legs"
+    assert K.new_spec("harvest").placement["preset"] == "lower_arms"
+    # ... and a preset implies its limb
+    assert K.new_spec("harvest", preset="extra_legs").params == {"limb": "leg"}
+    assert K.new_spec("harvest", preset="upper_arms").params == {"limb": "arm"}
+    with pytest.raises(ValueError, match="is for limb='leg'"):
+        K.new_spec("harvest", preset="extra_legs", params={"limb": "arm"})
     assert K.new_spec("tail", spec_id="my-tail").id == "my-tail"
 
 
@@ -202,8 +214,9 @@ def test_new_spec_is_strict_because_a_person_typed_it():
         K.new_spec("wing", side="up")
     with pytest.raises(ValueError, match="preset"):
         K.new_spec("wing", preset="elbow")
-    with pytest.raises(ValueError, match="does not use 'scale'"):      # a harvest ignores scale
-        K.new_spec("harvest", scale=2.0)
+    with pytest.raises(ValueError, match="does not use 'roll'"):       # a harvest has no roll ...
+        K.new_spec("harvest", roll=30.0)
+    assert K.new_spec("harvest", scale=0.8).placement["scale"] == 0.8  # ... but honours scale
     with pytest.raises(ValueError, match="already"):
         K.new_spec("tail", [K.new_spec("tail")], spec_id="tail-1")
     with pytest.raises(ValueError, match="not a valid id"):
@@ -240,6 +253,8 @@ def test_pose_text_goes_to_shared_or_one_side():
     with pytest.raises(ValueError, match="did you mean 'fold'"):
         K.pose_from_text("wing-1:flod=1", [wing])
     with pytest.raises(ValueError, match="no controls"):
+        K.pose_from_text("horn-1:fold=1", [K.new_spec("horn")])
+    with pytest.raises(ValueError, match="has no control 'fold'"):
         K.pose_from_text("tail-1:fold=1", [K.new_spec("tail")])
     with pytest.raises(ValueError, match=r"\.l or \.r"):
         K.pose_from_text("wing-1.x:fold=1", [wing])
@@ -275,6 +290,7 @@ def test_unknown_kinds_params_styles_and_controls_are_skipped_with_a_warning(wor
         {"id": "wing-1", "kind": "wing", "params": {"style": "gryphon"}},
         {"id": "tail-1", "kind": "tail", "params": {"length": 7.0, "wobble": 3},
          "controls": {"fold": 1}},
+        {"id": "horn-1", "kind": "horn", "controls": {"fold": 1}},
         {"id": "wing-2", "kind": "wing", "side": "left", "params": {"style": "membrane"},
          "controls": {"levitate": 1, "fold": 0.5, "preset": "hover"}},
     ]})
@@ -282,8 +298,9 @@ def test_unknown_kinds_params_styles_and_controls_are_skipped_with_a_warning(wor
     with pytest.warns(K.AppendageWarning) as caught:
         placed = doc.instantiate_appendages(base, v0)
     text = " | ".join(str(w.message) for w in caught)
-    assert [p.name for p in placed] == ["tail-1", "wing-2.l"]
-    for word in ("gizzard", "gryphon", "wobble", "has no pose controls", "levitate", "hover"):
+    assert [p.name for p in placed] == ["tail-1", "horn-1", "wing-2.l"]
+    for word in ("gizzard", "gryphon", "wobble", "has no pose controls", "levitate", "hover",
+                 "tail has no control 'fold'"):
         assert word in text, word
     assert doc.to_dict() == before                 # the document is untouched
 
@@ -688,26 +705,37 @@ def test_tails_and_horns_are_sunk_into_the_body(world):
     base, _, v0 = world
     body = quads_to_mesh(*base.body_cage(v0))
 
-    def embedded(kind, **placement):
-        spec = K.new_spec(kind)
+    def embedded(kind, params=None, **placement):
+        spec = K.new_spec(kind, params=params)
         spec.placement.update(placement)
         return [_embedded(p.mesh(), body) for p in K.instantiate_all([spec], base, v0)]
 
-    tail, = embedded("tail")
-    horns = embedded("horn")
+    # the first version's pointed tail and horn (tip_radius 0)
+    point = {"tip_radius": 0.0}
+    tail, = embedded("tail", point)
+    horns = embedded("horn", point)
     assert 0.22 <= tail <= 0.28, tail
     assert all(0.58 <= h <= 0.70 for h in horns), horns
-    assert embedded("tail", offset=0.0)[0] < 0.02 and max(embedded("horn", offset=0.0)) < 0.01
+    assert embedded("tail", point, offset=0.0)[0] < 0.02 and max(embedded("horn", point,
+                                                                       offset=0.0)) < 0.01
+    # the default has a rounded, thicker end and untwisted rings: more volume outside, so a
+    # smaller share inside (measured 19.8% / 51%); the windows still reject the neighbouring
+    # sinks (-0.5: 16.5%, -0.7: 22.9% for the tail; -0.45: 44%, -0.65: 59% for the horn)
+    tail, = embedded("tail")
+    horns = embedded("horn")
+    assert 0.18 <= tail <= 0.215, tail
+    assert all(0.49 <= h <= 0.55 for h in horns), horns
 
 
 @assets
 def test_tail_and_horn_presets_equal_the_legacy_placement_plus_the_sink(world):
     base, _, v0 = world
-    tail = K.instantiate_all([K.new_spec("tail")], base, v0)[0]
+    # (tip_radius 0 is the first version's pointed shape; the default is rounded)
+    tail = K.instantiate_all([K.new_spec("tail", params={"tip_radius": 0.0})], base, v0)[0]
     old = A.Appendage("tail", anchor_point=K.PRESET_POINTS["tail_base"],
                       offset=K.TAIL_SINK).build(base, v0)[0][1]
     assert np.array_equal(tail.mesh().vertices, old.vertices)
-    horns = K.instantiate_all([K.new_spec("horn")], base, v0)
+    horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0})], base, v0)
     olds = A.Appendage("horn", anchor_point=K.PRESET_POINTS["temples"], mirror=True,
                        offset=K.HORN_SINK).build(base, v0)
     assert [p.name for p in horns] == ["horn-1.l", "horn-1.r"]
@@ -740,7 +768,9 @@ def test_tails_and_horns_follow_the_body(world):
 def test_a_harvested_limb_is_placed_on_its_quad_and_sunk_along_its_axis(world, limb):
     base, _, v0 = world
     chain = K.LIMB_CHAINS[limb]
-    spec = K.new_spec("harvest", params={"limb": limb}, side="left", base=base)
+    # the harvested pose (controls={}: no preset pose) and the limb as cut (neck 1: untapered)
+    spec = K.new_spec("harvest", params={"limb": limb, "neck": 1.0}, side="left", base=base,
+                      controls={})
 
     def build(v, offset):
         spec.placement["offset"] = offset
@@ -778,15 +808,26 @@ def test_a_harvested_arm_follows_the_body(world):
 
 
 @assets
-def test_a_harvested_limb_has_no_scale_roll_or_up_hint(world):
+def test_a_harvested_limb_scales_about_its_shoulder_and_has_no_roll_or_up_hint(world):
+    """scale is honoured (about the shoulder joint, which the sink and the pose pivot on);
+    roll and up_hint have no meaning for a limb (the twist control is its roll, the pose is
+    its direction) and stay dead, and are not offered."""
     base, _, v0 = world
-    plain = K.new_spec("harvest", side="left")
-    odd = K.new_spec("harvest", side="left")
-    odd.placement.update(scale=3.0, roll=77.0, up_hint=[0.3, 0.3, 0.9])
-    a = K.instantiate_all([plain], base, v0)[0].mesh()
-    b = K.instantiate_all([odd], base, v0)[0].mesh()
-    assert np.array_equal(a.vertices, b.vertices)                  # dead fields stay dead ...
-    assert K.KINDS["harvest"].placement_keys == ("anchor", "offset")   # ... and are not offered
+    plain = K.new_spec("harvest", side="left", controls={})
+    odd = K.new_spec("harvest", side="left", controls={})
+    odd.placement.update(roll=77.0, up_hint=[0.3, 0.3, 0.9])
+    big = K.new_spec("harvest", side="left", controls={})
+    big.placement["scale"] = 1.5
+    a, o, b = (K.instantiate_all([sp], base, v0)[0] for sp in (plain, odd, big))
+    assert np.array_equal(a.mesh().vertices, o.mesh().vertices)         # dead fields stay dead
+    pivot = a.limb.joints_rest["shoulder"]
+    surface = a.anchor                                                   # where the quad is
+    pivot_b = b.limb.joints_rest["shoulder"]
+    # the sink scales with the limb (it used not to: the weld was lost beyond scale ~1.5)
+    assert np.allclose(pivot_b - surface, 1.5 * (pivot - surface), atol=1e-9)
+    assert np.allclose(b.mesh().vertices - pivot_b, 1.5 * (a.mesh().vertices - pivot), atol=1e-9)
+    assert b.mesh().volume() == pytest.approx(1.5 ** 3 * a.mesh().volume(), rel=1e-9)
+    assert K.KINDS["harvest"].placement_keys == ("anchor", "scale", "offset")
 
 
 # -- every parameter at its limits ----------------------------------------------------------------
@@ -839,3 +880,16 @@ def test_every_kind_builds_on_every_body(world):
 def test_a_face_that_is_not_a_cage_quad_is_an_error_not_a_traceback(bad):
     with pytest.raises(ValueError, match="not a cage quad"):
         K.new_spec("tail", face=bad)
+
+
+@assets
+def test_a_tail_control_outside_its_range_is_clamped_on_the_document_path(world):
+    """lift=1e9 / curl=5 used to build a zigzag that overlaps itself (still watertight); the
+    panel clamped, the document and CLI path did not."""
+    base, _, v0 = world
+    wild = K.new_spec("tail", controls={"lift": 1e9, "curl": 5.0, "sway": -400.0})
+    edge = K.new_spec("tail", controls={"lift": 90.0, "curl": 2.0 - K.KINDS["tail"].param("curl").default,
+                                        "sway": -90.0})
+    a = K.instantiate_all([wild], base, v0)[0].mesh()
+    b = K.instantiate_all([edge], base, v0)[0].mesh()
+    assert np.allclose(a.vertices, b.vertices)

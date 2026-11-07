@@ -114,7 +114,8 @@ A *record* asks its **kind** for its size and whether a pair is typical (`Kind.l
 `Kind.paired` in `minimaster.character.kinds`; the kind ids `wing`, `tail`, `horn`, `harvest`
 are the keys of `CONSEQUENCES` and `PAIRED_KINDS`, which still serve the older
 `Appendage` objects). Only the placement keys a kind honours scale its load: a harvested
-limb ignores `scale`, so it no longer costs anatomy either.
+limb honours `scale` (about its shoulder joint: a smaller second pair), so a smaller pair costs
+proportionally less anatomy; `roll` and `up_hint`, which it does not honour, cost nothing.
 
 ## The honest physics
 

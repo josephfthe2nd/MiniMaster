@@ -425,13 +425,14 @@ def test_a_record_the_registry_knows_sets_its_own_load():
     assert ca.appendage_load(scaled) == pytest.approx(3.0)
 
 
-def test_a_harvested_limb_costs_the_same_whatever_its_dead_scale_says():
-    """A harvest ignores scale (the old class even multiplied the anatomy by it): the
-    kind owns that decision."""
+def test_a_harvested_limb_costs_anatomy_by_its_scale():
+    """A harvest honours ``scale`` now (about its shoulder joint: a smaller second pair), so
+    a smaller pair costs less body adaptation, like every kind that honours it."""
     a = K.new_spec("harvest")
     b = K.new_spec("harvest")
-    b.placement["scale"] = 5.0
-    assert ca.appendage_load(a) == ca.appendage_load(b) == pytest.approx(1.0)
+    b.placement["scale"] = 0.5
+    assert ca.appendage_load(a) == pytest.approx(1.0)
+    assert ca.appendage_load(b) == pytest.approx(0.5)
     assert ca.appendage_load(A.Appendage("harvest", mirror=True, scale=5.0)) == pytest.approx(5.0)
 
 
