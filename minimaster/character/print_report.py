@@ -64,6 +64,12 @@ ASSUMPTION = "assumes the slicer unions overlapping shells (every shell is check
 # through its arm (its hand starts outboard of the torso and is 0% embedded).
 # (in the order they are measured: the arm first, because a firm arm settles the question).
 ROOT_PIECES = ("arm", "hand", "propatagium", "membrane")
+# The root collar (collar.py) is a thin transition sheet that the slicer unions with the body and the
+# appendage: it is checked as a shell (closed, outward) and counted in the connection and the volume,
+# but it is NOT a root (it is embedded by construction, so a tail that only touches the skin would
+# otherwise pass the weld rule through it) and its own thickness is not a printable feature (the
+# union is as thick as the body and the tail).
+COLLAR_PIECE = "collar"
 
 
 @dataclass(frozen=True)
@@ -722,6 +728,7 @@ def _geometry(shells, body: Solid, link_cache: dict, rules: PrintRules) -> _Geom
         solids = [Solid(m) for _, m in items]
         zmin[g] = min(float(m.vertices[:, 2].min()) for _, m in items)
         roots = [k for k, n in enumerate(names) if piece_of(n) in ROOT_PIECES] \
+            or [k for k, n in enumerate(names) if piece_of(n) != COLLAR_PIECE] \
             or list(range(len(names)))
         root_share[g] = _root_embedding(items, roots, body, rules)
         # the links of a group are shape-only, so a mirrored twin may share them -- but a
@@ -749,6 +756,8 @@ def _thickness(shells, rest, rules: PrintRules) -> _Thickness:
         return seen[key]
 
     for n, m in shells:
+        if piece_of(n) == COLLAR_PIECE:
+            continue
         r = rest_by.get(n, m)
         out_rest[n] = probe(r, rules.rays_per_shell)
         if r is not m and _deformed(r, m):
@@ -903,8 +912,11 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
                     frac, rules.block_part_fraction))
 
             # -- thickness at this size -------------------------------------------------
-            t_all = np.concatenate([th.rest[n][0] for n in members]) * mm_per_unit
-            w_all = np.concatenate([th.rest[n][1] for n in members])
+            solid_members = [n for n in members if n in th.rest]
+            t_all = (np.concatenate([th.rest[n][0] for n in solid_members]) * mm_per_unit
+                     if solid_members else np.zeros(0))
+            w_all = (np.concatenate([th.rest[n][1] for n in solid_members])
+                     if solid_members else np.zeros(0))
             if len(t_all):
                 rep.thin_p5_mm = _percentile(t_all, w_all, 0.05)
                 rep.thin_below_min = _share_below(t_all, w_all, rules.min_feature_mm)
@@ -922,12 +934,12 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
                         f"{100 * rep.thin_below_thin:.0f}% of its area is thinner than "
                         f"{rules.thin_feature_mm:g} mm at this size: fragile",
                         rep.thin_below_thin, rules.warn_area_thin))
-            posed = [n for n in members if n in th.posed]
+            posed = [n for n in solid_members if n in th.posed]
             if posed:
                 tp = np.concatenate([(th.posed[n] if n in th.posed else th.rest[n])[0]
-                                     for n in members]) * mm_per_unit
+                                     for n in solid_members]) * mm_per_unit
                 wp = np.concatenate([(th.posed[n] if n in th.posed else th.rest[n])[1]
-                                     for n in members])
+                                     for n in solid_members])
                 rep.posed_below_min = _share_below(tp, wp, rules.min_feature_mm)
                 if rep.posed_below_min > rules.warn_posed_area_thin:
                     findings.append(Finding(

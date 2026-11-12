@@ -448,6 +448,13 @@ class Character:
         document says ``anatomy["junction"] = false`` (written only then)."""
         return bool(self.anatomy.get("junction", True))
 
+    @property
+    def collar_enabled(self) -> bool:
+        """Do the appendages that have one (a tail) get their root collar (``collar.py``)? On unless
+        the document says ``anatomy["collar"] = false`` (written only then), and never when the
+        skin junction is off (``--no-junction`` leaves the skin as it was, with nothing to meet)."""
+        return self.junction_enabled and bool(self.anatomy.get("collar", True))
+
     def shaped_body(self, base, verts, placed, info: dict | None = None):
         """The body vertices the character is meshed, rendered and printed with: ``verts``
         (the UNDEFORMED morphed vertices the appendages were placed on) with the skin moulded

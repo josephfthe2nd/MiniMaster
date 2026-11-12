@@ -191,6 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument("--junction", action="store_true",
                         help="switch the skin junction back on in a loaded character that "
                              "has it off; saved with --save-character")
+    p_char.add_argument("--no-collar", action="store_true",
+                        help="no root collar (the transition shell where the skin meets a "
+                             "tail, tangent to both); --no-junction switches it off too; "
+                             "saved with --save-character")
+    p_char.add_argument("--collar", action="store_true",
+                        help="switch the root collar back on in a loaded character that has "
+                             "it off; saved with --save-character")
     p_char.add_argument("--layers", metavar="bone,muscle,skin",
                         help="PNG only: draw the anatomical layers of the appendages that have "
                              "them (a tail: its caudal vertebrae, muscle sleeve and skin) instead "
@@ -418,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if command == "character":
+        from .character import collar as collar_mod
         from .character import mhbase, portrait, printprep
 
         if args.list_kinds:
@@ -482,7 +490,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {val!r} is not a number", file=sys.stderr)
                 return 2
         if args.remove or args.add or args.pose or args.no_anatomy \
-                or args.anatomy_cap is not None or args.no_junction or args.junction:
+                or args.anatomy_cap is not None or args.no_junction or args.junction \
+                or args.no_collar or args.collar:
             from .character import kinds
             try:
                 for spec_id in args.remove:
@@ -506,6 +515,10 @@ def main(argv: list[str] | None = None) -> int:
                 doc.anatomy["junction"] = False
             elif args.junction:
                 doc.anatomy.pop("junction", None)
+            if args.no_collar:
+                doc.anatomy["collar"] = False
+            elif args.collar:
+                doc.anatomy.pop("collar", None)
         if args.save_character:
             doc.save(args.save_character)
             print(f"wrote {args.save_character}")
@@ -550,6 +563,9 @@ def main(argv: list[str] | None = None) -> int:
         # placed on the undeformed ``verts``; everything that MESHES the body (the picture, the
         # STL, the printability report) uses ``body_verts``
         body_verts = doc.shaped_body(base, verts, placed)
+        if (placed and args.subdivide < collar_mod.MIN_LEVEL and doc.collar_enabled
+                and any(p.kind.collar_profile(p) is not None for p in placed)):
+            print("note: the root collar needs a subdivided body (--subdivide 1 or 2); it is not drawn at level 0")
         if out.suffix.lower() == ".png":
             if args.layers:
                 from .character import ecorche
@@ -566,6 +582,12 @@ def main(argv: list[str] | None = None) -> int:
                 # appendages come out in the MakeHuman frame (Y up); the renderer is Z up
                 shells += [portrait.Shell(p.mesh().transform(portrait.MH_TO_Z_UP), p.material)
                            for p in placed]
+                # the root collars (collar.py): fitted to the body as it is meshed here
+                shells += [portrait.Shell(m.transform(portrait.MH_TO_Z_UP), mat)
+                           for _, _, m, mat in collar_mod.collar_shells(
+                               base, body_verts, placed, levels=args.subdivide,
+                               skin=collar_mod.skin_from_shell(shells[0].mesh),
+                               enabled=doc.collar_enabled)]
             fit = None
             if args.face:
                 import numpy as _np
@@ -592,14 +614,24 @@ def main(argv: list[str] | None = None) -> int:
             if placed:
                 # one named shell per rig piece for a wing (the unit the printability
                 # report names), one per tail/horn; MakeHuman frame in, Z-up out
+                # (a tail's root collar is one more piece of its group: unioned with the tail
+                # by the slicer, counted in the connection and the gate, not in the weld or the
+                # thickness of the appendage)
+                collars: dict = {}
+                for owner, cname, cmesh, _ in collar_mod.collar_shells(
+                        base, body_verts, placed, levels=args.subdivide,
+                        skin=collar_mod.skin_from_shell(shells[0][1]),
+                        enabled=doc.collar_enabled):
+                    collars.setdefault(owner.name, []).append((cname, cmesh))
                 for p in placed:
                     if p.rig is not None:
                         ctl = dict(p.controls)
                         preset = ctl.pop("preset", None)
                         app_shells.append([(f"{p.name}/{n}", m)
-                                           for n, m in p.rig.piece_meshes(preset, **ctl)])
+                                           for n, m in p.rig.piece_meshes(preset, **ctl)]
+                                          + collars.get(p.name, []))
                     else:
-                        app_shells.append([(p.name, p.mesh())])
+                        app_shells.append([(p.name, p.mesh())] + collars.get(p.name, []))
                 shells = shells + printprep.appendage_print_shells(app_shells)
             mesh, rep = printprep.assemble_character(
                 shells, size=args.size, height=args.height,

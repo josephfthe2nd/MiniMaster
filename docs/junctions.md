@@ -625,6 +625,14 @@ of `Keep` can chain several, as the tail does.
 
 ![the tail's skin flowing into its root](images/tail_before_after.png)
 
+## The exact seam: the root collar
+
+The cage displacement cannot make the skin meet a root tangentially (a cage quad is 0.28 units, a root 0.4-0.6 across: 38-102 degrees
+from tangent above): the last step is a closed shell on the appendage's own geometry whose rim lies on the shaped skin, tangent to it, and
+that rises along the wall to join it tangentially: [collar.md](collar.md) (`collar.py`, the tail only for now: `Kind.collar_profile`).
+It is built from the skin AFTER `apply_junctions`, fitted to the body as it is meshed, and switched off by `--no-junction`, `--no-collar`
+and the tail's parameter `collar = 0`.
+
 ## Seen from the lab, and its limits
 
 * The Character tab draws, picks and exports the shaped skin. During a **body-slider or shape drag the draft

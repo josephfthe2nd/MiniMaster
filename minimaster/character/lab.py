@@ -666,10 +666,12 @@ class LabDocument:
         return self._edit(Change("body", None, "reset"), apply)
 
     def set_anatomy(self, enabled: bool | None = None, cap: float | None = None,
-                    clamp: bool = False, junction: bool | None = None) -> None:
+                    clamp: bool = False, junction: bool | None = None,
+                    collar: bool | None = None) -> None:
         """The body-adaptation switch and its cap (the layer itself is derived, never saved),
         and ``junction``: does the skin mould around the appendages' roots (``junction.py``;
-        saved only when switched off)."""
+        saved only when switched off) and ``collar``: does a tail get its root collar (``collar.py``;
+        likewise)."""
         if cap is not None:
             cap = _number("anatomy cap", cap, 0.0, 2.0, clamp)
 
@@ -683,6 +685,11 @@ class LabDocument:
                     self.character.anatomy.pop("junction", None)
                 else:
                     self.character.anatomy["junction"] = False
+            if collar is not None:
+                if collar:
+                    self.character.anatomy.pop("collar", None)
+                else:
+                    self.character.anatomy["collar"] = False
 
         self._edit(Change("body", None, "anatomy"), apply, ("anatomy",))
 
@@ -1119,6 +1126,7 @@ class Engine:
         self._built = Cache(48, BUILT_CACHE_BYTES, lambda b: b.nbytes())
         self._shells = Cache(4)                 # body key -> full-detail body shells
         self._shaped = Cache(6)                 # (body key, junction digest) -> BodyState (skin moulded)
+        self._collars = Cache(16)               # (shaped body key, spec key, controls, levels) -> [(name, Mesh, material)]
         self._last_draft: dict = {}             # spec key -> (BodyState, Built): for the re-place
         self._lock = threading.Lock()
 
@@ -1188,6 +1196,43 @@ class Engine:
                              body.notes)
 
         return self._shaped.get_or_build(key, shape)
+
+    def collars(self, character: Character, shaped: BodyState, builts, levels: int, skin_mesh) -> list:
+        """The root collars (``collar.py``) of the built appendages that have one: ``[(spec,
+        placed, name, Mesh, material)]`` in the MakeHuman frame. Final quality and export only (the
+        draft proxy of a drag skips them: it says so). Fitted to the body as it is MESHED at
+        ``levels`` (``skin_mesh``: that body's Z-up mesh, the one the picture or the STL carries),
+        cached by the shaped body, the spec, the pose and the level, so an unchanged character
+        costs nothing and a pose drag re-fits one tail."""
+        from . import collar as CO
+        if not character.collar_enabled:
+            return []
+        skin = None
+        out = []
+        for spec, built in builts:
+            for placed in built.placed:
+                profile = placed.kind.collar_profile(placed)
+                if profile is None:
+                    continue
+                ctl = self.side_controls(spec, placed)
+                key = (shaped.key, spec_key(spec), placed.name, controls_key(ctl), int(levels),
+                       profile.digest())
+
+                def build(placed=placed, ctl=ctl):
+                    nonlocal skin
+                    if skin is None:
+                        skin = CO.skin_from_shell(skin_mesh)
+                    self.stats["collar"] += 1
+                    try:
+                        return CO.collar_pieces(self.resources.base, shaped.verts, placed, ctl,
+                                                levels=levels, skin=skin)
+                    except (ValueError, KeyError, IndexError, FloatingPointError,
+                            np.linalg.LinAlgError):
+                        return []         # the picture and the print still come out without it
+
+                for name, mesh, material in self._collars.get_or_build(key, build):
+                    out.append((spec, placed, name, mesh, material))
+        return out
 
     # -- appendages --------------------------------------------------------------------------
 
@@ -1343,6 +1388,10 @@ class Engine:
         # skin of the rest pose; everything else (orbit, add, remove) is cached or built once.
         shaped = body if mode in ("body", "shape") else self.shaped_state(character, body, items)
         shells[0] = Shell(proxy.mesh(shaped.verts), sh.SKIN)
+        if character.collar_enabled and any(
+                p.kind.collar_profile(p) is not None for _, b, _, _ in items for p in b.placed):
+            notes.append("the root collar (the transition where the skin meets the tail) is drawn in "
+                         "the final render only")
         scene = _scene(shells, owners, notes)
         scene.body = shaped
         return scene
@@ -1413,8 +1462,8 @@ class Engine:
         return self._shells.get_or_build((body.key, eye_color, levels), build)
 
     def final_scene(self, character: Character, check=None, levels: int = 0) -> Scene:
-        """Full-detail body (eyes included) + the full appendages, posed."""
-        from .portrait import Shell
+        """Full-detail body (eyes included) + the full appendages, posed, with their root collars."""
+        from .portrait import MH_TO_Z_UP, Shell
         body = self.body_state(character)
         eye = str(character.materials.get("eye_color", "#5b7c8d"))
         notes: list = []
@@ -1435,6 +1484,17 @@ class Engine:
                     check()
                 mesh = built.posed(i, self.side_controls(spec, placed), self.stats)
                 shells.append(Shell(mesh, placed.material))
+                owners.append((spec.id, placed.side))
+        if builts:
+            if check:
+                check()
+            from . import collar as CO
+            if levels < CO.MIN_LEVEL and character.collar_enabled and any(
+                    p.kind.collar_profile(p) is not None for _, b in builts for p in b.placed):
+                notes.append("the root collar needs a subdivided body (levels 1 or 2); it is not drawn at level 0")
+            for spec, placed, _, cmesh, cmat in self.collars(character, shaped, builts, levels,
+                                                             shells[0].mesh):
+                shells.append(Shell(cmesh.transform(MH_TO_Z_UP), cmat))
                 owners.append((spec.id, placed.side))
         self.stats["final_scene"] += 1
         return _scene(shells, owners, notes)
@@ -1535,6 +1595,11 @@ class Engine:
         shells = printprep.character_print_shells(res.base, shaped.verts, levels=levels)
         figure = list(shells)
         app_shells = []
+        collars: dict = {}
+        if builts:
+            for _, placed, cname, cmesh, _ in self.collars(character, shaped, builts, levels,
+                                                           shells[0][1]):
+                collars.setdefault(placed.name, []).append((cname, cmesh))
         for spec, built in builts:
             for placed in built.placed:
                 if check:
@@ -1543,9 +1608,10 @@ class Engine:
                 if placed.rig is not None:
                     preset = ctl.pop("preset", None)
                     app_shells.append([(f"{placed.name}/{n}", m)
-                                       for n, m in placed.rig.piece_meshes(preset, **ctl)])
+                                       for n, m in placed.rig.piece_meshes(preset, **ctl)]
+                                      + collars.get(placed.name, []))
                 else:
-                    app_shells.append([(placed.name, placed.mesh())])
+                    app_shells.append([(placed.name, placed.mesh())] + collars.get(placed.name, []))
         if app_shells:
             shells = shells + printprep.appendage_print_shells(app_shells)
         try:

@@ -94,7 +94,7 @@ def test_loft_defaults_are_what_the_builders_really_use(kind_id, fn):
     # skull and the skin boss to the legacy builder's parameters, and its numbers are the research's
     # (a 1.6 long horn of base radius 0.17 on the neutral head, radius and length scale with the head),
     # not the first version's 2.2 / 0.42: the legacy builder keeps its own defaults, test_limbs.py)
-    registry_only = {"tail": {"fillet", "vertebrae", "crest"}, "horn": {"shape", "fillet", "rings", "tilt", "boss"}}[kind_id]
+    registry_only = {"tail": {"fillet", "collar", "vertebrae", "crest"}, "horn": {"shape", "fillet", "rings", "tilt", "boss"}}[kind_id]
     builder_only = {"tail": {"lift", "sway", "flare_length"}, "horn": {"flare_length"}}[kind_id]
     assert set(kind.defaults()) - registry_only == set(real) - builder_only
     anatomical = {"horn": {"length", "base_radius", "segments", "curve", "twist", "turns"}}.get(kind_id, set())

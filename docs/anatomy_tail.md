@@ -233,7 +233,7 @@ Existing tests that had to change, and why (no assertion was loosened to make so
   radius is the only bone number calibrated (n = 1: one plate). No cross-section or MRI of an animal tail exists in the library.
   At print scale (1 unit = 1.9 mm) every layer above is under 0.1 mm; what shows is the placement, the axis, the flare, the
   taper, the bend and the sacral rise.
-* **The seam** between the tail's shell and the moulded skin is still a seam: the cage is 0.28 units a quad and the root is 0.6
+* **The seam** (now bridged by the root collar, [collar.md](collar.md): the tail's `collar` parameter, 1 by default) between the tail's shell and the moulded skin was a seam: the cage is 0.28 units a quad and the root is 0.6
   across, so the fillet is 2 - 3 quads wide; subdividing twice rounds it but the intersection of the two meshes wanders by
   about 0.04 units (a few pixels in a close-up: `images/tail_bodies.png` is at two levels). The skin meets the tail at 42 - 53 degrees
   from tangent (it was 64 - 91), not at 0. Making that seam invisible needs vertices the cage does not have (or normal blending across the

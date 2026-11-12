@@ -522,6 +522,20 @@ class Kind:
         with a root the skin should mould around overrides this."""
         return None
 
+    def collar_profile(self, placed):
+        """The :class:`~.collar.CollarProfile` of this appendage's root collar (the transition shell
+        on the appendage's own geometry that meets the shaped skin tangentially, ``collar.py``), or
+        ``None`` (the default: no collar). A kind that wants one returns a profile."""
+        return None
+
+    def collar_axis(self, placed, controls: dict | None = None):
+        """``(points, radii)`` of the tube the collar grows around (root first, the first points
+        inside the body): by default the junction spec's centreline, or ``None``."""
+        spec = placed.junction(controls)
+        if spec is None or not spec.tube:
+            return None
+        return spec.points, spec.radii
+
     def layers(self, placed, controls: dict | None = None) -> dict:
         """``{layer name: Mesh}`` of one placed appendage (see :meth:`Placed.layers`); the base
         class only has the skin."""
@@ -810,6 +824,9 @@ class TailKind(_LoftKind):
                        "skin is 1 + flare times the base radius, easing out over about two radii "
                        "(0 = a straight tube)"),
         fillet_param(TAIL_FILLET),
+        ParamSpec("collar", "Root collar", "float", 1.0, 0.0, 2.0, 0.05,
+                  help="the transition shell where the skin meets the tail, tangent to both (collar.py): "
+                       "1 = the default size, 0 = none"),
         ParamSpec("vertebrae", "Caudal vertebrae", "int", 0, 0, 60, 1,
                   help="0 = by the length (round(48 L / H): 17 on the default tail)"),
         ParamSpec("crest", "Dorsal ridge", "float", 0.0, 0.0, 1.5, 0.05,
@@ -923,6 +940,17 @@ class TailKind(_LoftKind):
             return None
         return T.junction_spec(placed.name, placed.model.model(controls), placed.model.frame,
                                fillet, self.fillet_height)
+
+    def collar_profile(self, placed):
+        """The root collar (``collar.py``): wide on the back and the flanks, where the rump's contour runs
+        into the tail, a crease on the underside against the thigh (the references: the dorsal line of a
+        kangaroo and a cat is tangent-continuous with the tail, the ventral side meets the thigh in a
+        crease). ``collar`` scales it; 0 switches it off."""
+        k = float(placed.params.get("collar", 1.0))
+        if k <= 0.0:
+            return None
+        from . import collar as CO
+        return CO.CollarProfile(strength=k, up=(0.0, 1.0, 0.0))
 
     def layers(self, placed, controls=None):
         return placed.model.layers(controls)
