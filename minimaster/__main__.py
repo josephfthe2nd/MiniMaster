@@ -138,8 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_char.add_argument("--size", choices=sorted(SIZE_PRESETS_CHAR),
                         help="print size category")
     p_char.add_argument("--height", type=float, help="print height in mm")
-    p_char.add_argument("--subdivide", type=int, default=0,
-                        help="Catmull-Clark levels before export")
+    p_char.add_argument("--subdivide", type=int, default=None,
+                        help="Catmull-Clark levels of the body (default: 1 when an appendage has a root "
+                             "collar, which needs a subdivided body, else 0)")
     p_char.add_argument("--no-base", action="store_true")
     p_char.add_argument("--azimuth", type=float, default=18.0)
     p_char.add_argument("--elevation", type=float, default=5.0)
@@ -563,8 +564,14 @@ def main(argv: list[str] | None = None) -> int:
         # placed on the undeformed ``verts``; everything that MESHES the body (the picture, the
         # STL, the printability report) uses ``body_verts``
         body_verts = doc.shaped_body(base, verts, placed)
-        if (placed and args.subdivide < collar_mod.MIN_LEVEL and doc.collar_enabled
-                and any(p.kind.collar_profile(p) is not None for p in placed)):
+        if args.subdivide is None:
+            # a character with a root collar is meshed at level 1 unless asked otherwise: the collar needs a
+            # subdivided body, and at the cage level every root was the bare pipe in a flange
+            args.subdivide = collar_mod.default_levels(placed, doc.collar_enabled)
+            if args.subdivide:
+                print(f"note: the body is subdivided once (--subdivide {args.subdivide}) for the root collars; "
+                      "--subdivide 0 draws the bare cage without them")
+        elif (placed and args.subdivide < collar_mod.MIN_LEVEL and collar_mod.wants_collar(placed, doc.collar_enabled)):
             print("note: the root collar needs a subdivided body (--subdivide 1 or 2); it is not drawn at level 0")
         if out.suffix.lower() == ".png":
             if args.layers:

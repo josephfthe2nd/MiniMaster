@@ -1465,7 +1465,9 @@ class TestThreadedLab:
             assert lb.scheduler.wait_idle(60)
             finals = [f for f in frames if f.tier == "final"]
             assert len(finals) == 1 and finals[0].gen == lb.scheduler.gen
-            scene = lb.engine.final_scene(lb.doc.character)
+            # (the final frame is meshed at Lab.final_levels(): 1 with a tail's root collar since round 4)
+            assert lb.final_levels() == 1
+            scene = lb.engine.final_scene(lb.doc.character, levels=lb.final_levels())
             want = portrait.render_portrait(scene.shells, size=(240, 300), azimuth=lb.view.azimuth,
                                             elevation=lb.view.elevation, fit=lb.view.fit,
                                             background=L.BACKGROUND)

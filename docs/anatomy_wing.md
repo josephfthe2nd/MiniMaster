@@ -1,291 +1,352 @@
 # The wing's root: a shoulder girdle, a muscular upper arm and the skin over both
 
-Tracks S3 (round 1) and S6b (round 2b) of the anatomical junctions ([junctions.md](junctions.md) has the skin mechanism it
-builds on, [collar.md](collar.md) the root collar, [appendages_system_design.md](appendages_system_design.md) the appendage
-system). The complaint was that the appendages "seem placed onto the model", "slapped over skin". For the wing that was
-literally true: a 0.2-unit bone-thin rod left the corner of the back through a flat patch of skin. Round 1 gave it a shoulder
-girdle and a muscular sleeve but kept the first placement; its critic scored location 4, bone 3.5, muscle 5, skin 5: the
-joint sat 0.9 units inside the torso, the arm left through the human deltoid at 57-62 degrees (46 on the heavy body), and the
-shaped back showed a round bullseye between the shoulder blades and a ridge from the shoulder to the spine. Round 2b moves
-the joint, rebuilds the masses so the back has no ring, gives the arm a root collar and versions everything a saved wing
-renders differently.
+Tracks S3 (round 1), S6b (round 2b) and S7 (round 4) of the anatomical junctions ([junctions.md](junctions.md) has the skin
+mechanism it builds on, [collar.md](collar.md) the root collar, [appendages_system_design.md](appendages_system_design.md) the
+appendage system). The complaint was that the appendages "seem placed onto the model", "slapped over skin". For the wing that
+was literally true: a 0.2-unit bone-thin rod left the corner of the back through a flat patch of skin. Round 1 gave it a
+shoulder girdle and a muscular sleeve; round 2b moved the joint onto the ribs under the shoulder blade, removed the bullseye and
+the ridge from the back and gave the arm a root collar. The round-3 review (verdict "revise": location 6, bone 5, muscle 4,
+skin 4) found five things round 4 answers here:
 
-What a wing root is, in every winged body the references show: a **skeletal joint on a girdle** (a scapula plate on the ribs,
-a strut to the sternum), a **mass of muscle gathered over the girdle** that wraps the proximal arm two to three times thicker
-than the bone, and **one skin sheet** that rolls over both and flows tangentially into the arm. The code has all three, each
-derived from the same numbers, and exposes them as layers:
+* **B4, documents**: a file written by c808d60 (the tree the user was last shown) whose wing a person had edited loaded with the
+  bone-thin rod instead of the muscular arm it had shown. Fixed (section 6).
+* **B5, the muscle layer**: one egg-shaped shield a side, with holes the bone showed through, torn edges, its scapular pad running
+  from the lumbar region to the neck and poking 0.48 out of the skin there; the test that should have seen it measured pads it
+  built itself, without their rims. Rebuilt as anatomical sheets laid under the moulded skin (section 2), measured on six bodies.
+* **The bone path**: the joint sat on the ribs under the medial blade and the buried humerus ran 0.8 units up through the human
+  scapula. The joint is on the blade now (placement version 3, section 1) and the bone layer is a coherent girdle.
+* **The mound**: "a plain human trapezius with a tube in it"; restored a rounded mound behind and above the root (section 3).
+* **Honest numbers**: the join angle the docs quoted was measured inside the arm; the join is now measured where it is seen
+  (section 5), plus the stowed heavy wing, the collar's on/off threshold and the sliders' extremes.
 
 ```python
-placed.layers()   # {"bone": Mesh, "muscle": Mesh, "skin": Mesh}   (MakeHuman frame, under the spec's own pose)
-placed.layers({"preset": "folded"})
-placed.model      # wingroot.WingRoot: .masses(c) .muscles(skin) .bones(skin) .spec(c) .joints(c) .exit_angle(c) .collar_up(c)
+placed.layers()                 # {"bone", "muscle", "skin"}, the muscles under the skin this wing's junction moulds
+placed.kind.layers_on(placed, shaped)   # ... under the skin of a body shaped with every appendage (the ecorche view)
+placed.model                    # wingroot.WingRoot: .masses(c) .sheets(c) .muscles(skin) .bones(skin) .spec(c) .joints(c)
+                                #   .exit_angle(c) .collar_strength(c) .moulded(c, shaped)
+wingroot.visible_join(plain, skin, S, E, r, k)  # the join one sees, on a ring k root radii round the arm
 ```
 
 Files: `minimaster/character/wingroot.py` (the anatomy), `wings.py` (`Sleeve`: the arm's base), `kinds.py` (`WingKind`:
-placement versions, the model, the junction, the collar, the layers), `appendages.py` (`WING_SOCKET_*`, `WING_*_V2`),
-`creature_anatomy.py` (the body adaptation), `tools/wing_root_view.py`, `tools/wing_root_report.py`, `tests/test_wing_root.py`.
+placement versions, the model, the junction, the collar profile, the layers, the stow root), `appendages.py` (`WING_SOCKET_*`,
+`WING_SLIDE`, `Appendage.slide`, `wing_arm_axis`), `creature_anatomy.py` (the body adaptation), `tools/wing_root_view.py`,
+`tools/wing_root_report.py`, `tests/test_wing_root.py`, `tests/fixtures/wing_c808d60/`.
 
-![HEAD c808d60 (top) and S6b (bottom), neutral man, body subdivided twice: rear, three-quarter rear, side](images/wing_root_s6b_before_after.png)
+![835af09 (round 3) and round 4 (this track with the core's round-4 collar), level 2: neutral man, heavy man, child; rear, three-quarter, side](images/wing_root_r4_skin.png)
 
-## 1. Where the joint is (the placement's second version)
+![round 4 on the core + tail + wing merged tree, level 2: slim woman, tall man, short man (bat) and the neutral man's angel; rear, three-quarter, side, top](images/wing_root_r4_skin_bodies.png)
 
-| | first version (round 1, `back_wings()`) | second version (every new record) |
-|---|---|---|
-| joint | the anchor quad's point sunk **0.9 units** straight in, under the posterolateral corner of the back | **on the ribs under the shoulder blade**: the back's skin point at **x = 0.48 shx**, **y = spine-1 + 0.50 Lt** (the level of the scapular spine), sunk **0.50 s** straight in (`appendages.WING_SOCKET_*`, `wingroot.socket_anchor`) |
-| span axis | `WING_UP_HINT` (1, 1.4, -0.45) | `WING_UP_HINT_V2` (1, 1.4, -0.6): 5 degrees further back |
-| where the arm leaves the back | x 0.83-1.12 shx (beyond the human shoulder joint on the child and the woman), through the human deltoid | **x 0.72-0.76 shx, y 0.64-0.70 Lt** on every body: over the upper blade, medial to the acromion, 0.8-1.6 units clear of the human arm |
-| angle to the plain skin | 28-47 degrees (heavy 28) | **57-64** (heavy 45, female 57) |
-| angle after the shoulder anatomy | 57-62 (heavy 46) | **69-81** at rest on the neutral, tall and short bodies (tall dragon 68.5); 63-71 child and female; 60-61 heavy (table in section 5) |
-| upper arm | the thick sleeve for every body (a 0.46 radius on a child too) | the sleeve scaled with the body (`kinds.wing_sleeve`: 0.46 neutral, 0.32 child, 0.63 tall) and `muscle` |
+## 1. Where the joint is (the placement's third version)
+
+| | version 1 (`back_wings()`, pinned records) | version 2 (S6b) | version 3 (every new record) |
+|---|---|---|---|
+| socket | the anchor quad 0.9 units in | the back's skin point at **x 0.48 shx, y spine-1 + 0.50 Lt**, sunk 0.50 s | the same socket |
+| joint | the socket | the socket, **on the ribs under the blade**: 0.59 deep on the neutral man | the socket **slid out along the arm's own axis by 0.30 s** (0.20 s for the feathered wing), the frame's orientation kept: **on the blade**, 0.30 deep (0.39 feathered) |
+| where the arm leaves the back | x 0.83-1.12 shx, through the human deltoid | x 0.71-0.80 shx, y 0.64-0.67 Lt | the same point and angle (the line is the same) |
+| buried humerus | ~1 unit | 0.70 (neutral) / 0.85 (heavy) | 0.35 / 0.49 (feathered 0.47 / 0.55) |
 
 `s = shx / 1.72` (the body size: 1.17 on the neutral man, 0.83 on the child, 1.47 tall), `shx` the x of `joint-l-shoulder`,
-`Lt = neck.y - spine-1.y`. The numbers came from a ray-cast search (no wing builds) over socket x 0.40-0.56 shx, y 0.25-0.55 Lt,
-depth 0.40-0.70 s and 28 span hints on six bodies, scored by the smallest plain exit angle, the crossing's x and the clearance
-of the human arm's Keep spheres; the least sweep that reaches about 70 degrees after shaping won. A steeper arm needs the wing
-swept further back: the most vertical candidates (exit 75 on every body) aimed the humerus straight back and turned the
-whole spread wing 45 degrees backward; this one turns it 5. The full-figure front and top silhouettes stay as they were, the
-wings sit 0.9 units higher on the back.
+`Lt = neck.y - spine-1.y`.
 
-The skin point is resolved in `WingKind.resolve_placement` to the cage quad it lies on and the weights of its corners, so the
-placement engine binds it like any quad anchor (the right wing is the exact mirror) and everything that reads the anchor
-without building (the lab's markers, `Engine.anchor_points`, the collar's patch) sees the same point.
+**Why slide, and why along the arm.** The round-3 review measured the version-2 joint at 0.29 of the back-to-front depth,
+at the rib surface under the medial blade: the humerus then had to run up through the human scapula and supraspinatus to reach
+the skin. A bird's and a bat's shoulder joint lie just under the skin at the top of the thorax, the proximal humerus wrapped in
+muscle (wing/A07 pigeon skeleton, A17 and A18 flying fox: "the shoulder joints sit just outside the top of the ribcage"). A
+shallower sink at the same socket (the cheap fix) moved the exit medially and laid the arm flatter on the back (plain exit
+62 -> 50 degrees on the neutral man, 39 -> 36 on the heavy one, under the collar's threshold; scratchpad
+`junction/S7_wing_out/probe_depth1.jsonl`). Sliding the joint out along the arm's own rest axis with the frame kept
+(`Appendage.slide`, `appendages.wing_arm_axis`) leaves the line, the exit point and the angle exactly where version 2 had them
+(neutral 0.743/0.644 -> 0.739/0.643, plain angle 62.3 -> 63.1) and halves the buried humerus. The wing as a whole sits 0.35
+units further out along its arm. The feathered arm is slimmer and longer: slid 0.30 s, 3.8% of it lay in a body printed without
+the junction (the print report blocks under 5%); slid 0.20 s, 6.2% (12.2% with the junction).
+
+| body (membrane) | joint x/shx, y/Lt | joint depth (units, s) | blade depth | head radius | buried | exit x/shx, y/Lt | plain angle |
+|---|---|---|---|---|---|---|---|
+| neutral | 0.61, 0.57 | 0.30, 0.25 | 0.40 | 0.18 | 0.35 | 0.74, 0.64 | 63.1 |
+| child | 0.61, 0.59 | 0.20, 0.24 | 0.28 | 0.12 | 0.23 | 0.74, 0.66 | 60.4 |
+| heavy | 0.61, 0.57 | 0.33, 0.28 | 0.40 | 0.18 | 0.49 | 0.79, 0.67 | 46.3 |
+| tall | 0.61, 0.57 | 0.38, 0.26 | 0.50 | 0.25 | 0.44 | 0.74, 0.64 | 62.4 |
+| short | 0.61, 0.57 | 0.27, 0.25 | 0.36 | 0.16 | 0.31 | 0.74, 0.64 | 64.1 |
+| slim woman | 0.61, 0.59 | 0.20, 0.20 | 0.33 | 0.15 | 0.21 | 0.71, 0.65 | 65.2 |
+
+The anchor (`Placed.anchor`) stays the skin point over the socket: the collar's patch and the lab's framing are centred on it.
 
 ## 2. The layers
 
-**Bone** (hidden; `WingRoot.bones`): the `scapula` plate under the scapular plateau, the `furcula` strut from the joint
-forward to beside the sternum, the `humerus` (the arm's own rings at 0.30 of the skin radius, a ball for the head).
+![the muscle and bone layers without the body, 835af09 (top, the round-3 critic's render) and round 4 (bottom)](images/wing_root_r4_layers.png)
 
-**Muscle** (`WingRoot.muscles`): five masses and the arm's belly. Round 2b changed them (table: left side; heights in s).
+![round 4's muscle and bone layers on six figures: neutral, heavy, child, slim woman, the angel, the folded bat (its deltoid reads as a round disc: section 8)](images/wing_root_r4_ecorche_bodies.png)
 
-| mass | where | footprint (long x wide) | height | was (round 1) |
+### Muscle: anatomical sheets under the moulded skin
+
+Round 3 drew each mass as a pad: a lens over a footprint projected along ONE normal, its top the plain skin plus the relief. Where
+a ray missed the skin (the scapular footprint ran over the top of the shoulder) the point kept its place in the air: the 0.48 poke
+at the neck; its pole fans were wound against its rings: the holes. Round 4 draws the muscles a dissection shows
+(`wingroot.SHEETS`, `CAP_SHEET`), each an OUTLINE on the back in the body's own units read off **wing/H06** (Sobotta, superficial
+back) and **H05** (Gray 409), with its shoulder joints, C7 and the inferior scapular angles as landmarks (the grid overlay:
+scratchpad `junction/S7_wing_out/h06_grid.png`):
+
+| sheet (layer, outermost first) | outline (x / shx, y / Lt) | thickness at the belly | reference |
+|---|---|---|---|
+| `deltoid` (0): the wing's deltoid, the cap the arm leaves through | the boss' footprint round the root | 0.10 s + its relief | H24's shoulder mound, H22 |
+| `trapezius` (1): the kite | from the nape (1.18) down the spine to T12 (-0.56), out to the acromion (0.97, 0.82), its free border along the scapular spine and down to T12 | 0.05 s + relief | H06, H05 |
+| `latissimus` (2): the sheet over the inferior angle to the axilla | upper border at y 0, lateral border along the flank | 0.05 s + relief | H06 |
+| `scapular` (3): infraspinatus / teres, below the spine (the root leaves through it) | spine root (0.43, 0.53) to (0.87, 0.75), the lateral border, the inferior angle (0.50, -0.03) | 0.12 s + relief | H06's infraspinous window, H03 |
+| `supraspinatus` (3): the fossa above the spine | (0.41, 0.87) .. (0.97, 0.82) down to the spine | 0.10 s + relief | H04, H07 |
+| `rhomboid` (4): spines of C7-T5 to the medial border, under the trapezius | (0.01, 0.96) .. (0.45, 0.56) .. (0.51, 0.05) | 0.08 s + relief | H07, H06 (its window) |
+
+The surface they lie under (`WingRoot.moulded`, `MouldedSkin`): the body moulded by this wing's own junction (or by every
+appendage's, `layers_on`, the hook the tail track's `ecorche.layer_shells` calls), subdivided once. `MouldedSkin.from_behind`
+casts rays from behind (+Z) onto it: a seed on the backmost back-facing vertex of a grid cell, then the tangent plane solved for
+the ray, three times. A sheet's spoke ends where the back ends (a ray finding no back-facing skin), bisected to the outline of the
+body (a ring-wise cut drew a sawtooth on the flank). The top of every sheet is the skin's thickness (`SKIN_T`, 0.06, wing/H08)
+under the skin, rounding 0.025 lower at its edge so the bellies read; where an outer sheet covers it, under that sheet's
+thickness too (the deeper muscle passes UNDER the trapezius, as in H06); its bottom is its own lens of thickness plus the relief
+of the mass of its name (the `scapular` mass thickens the `scapular` sheet: the skin's relief IS muscle). Every lens is closed and
+wound one way (`_lens`: the round-3 fans were wound against the rings).
+
+**Measured** (`tests/test_wing_root.py::test_the_muscle_lies_a_skin_thickness_under_the_shaped_skin`, six bodies, the pipeline's
+shaped skin subdivided once and twice; every vertex of every sheet as the ecorche lays it and as `Placed.layers()` lays it):
+
+```
+body      level  nearest muscle vertex to the skin   skin over the relief -> first muscle straight in: hit / p50 / p90 / max
+neutral   1 / 2  -0.058 / -0.053                     100% / 0.070 / 0.084 / 0.127   100% / 0.067 / 0.083 / 0.128
+child     1 / 2  -0.057 / -0.054                     100% / 0.067 / 0.079 / 0.089   100% / 0.064 / 0.077 / 0.088
+heavy     1 / 2  -0.051 / -0.043                     100% / 0.069 / 0.084 / 0.098   100% / 0.065 / 0.081 / 0.122
+tall      1 / 2  -0.056 / -0.048                     100% / 0.073 / 0.088 / 0.143   100% / 0.069 / 0.087 / 0.139
+short     1 / 2  -0.056 / -0.051                     100% / 0.068 / 0.083 / 0.100   100% / 0.066 / 0.081 / 0.097
+slim woman 1 / 2 -0.056 / -0.052                      99% / 0.068 / 0.084 / 0.155    98% / 0.065 / 0.081 / 0.156
+```
+
+Nothing of the muscle comes within 0.04 of the skin (round 3: 0.48 OUTSIDE it); and from the skin the masses raise, a ray straight
+in meets muscle one skin thickness down (the skin is the envelope of the muscle, not of fat or air): median 0.064-0.073.
+
+### Bone: the blade, its spine, the clavicle, the humerus
+
+![the dissection (skin windowed, level 2) and the bone layer, neutral man](images/wing_root_r4_dissection.png)
+
+* `scapula`: the blade of THIS body (`SCAPULA_BLADE`, from **wing/H03** Gray 204 and **H01** Albinus: the medial border 0.37 /
+  0.53 of the biacromial width apart at the spine's root / the inferior angle, height 0.44 of it), laid `SCAPULA_DEPTH` = 0.34 s
+  under the PLAIN skin (the relief over it is muscle), 0.05 s thick; its **spine** (`SCAPULA_SPINE`) rising from the medial border
+  across the blade (22.7-24.9 degrees, H03) to the **acromion** at the top of the shoulder, 0.08 s under the skin; and the
+  **glenoid**: a rim on the blade round the rest joint, under the head (the joint does not move when the arm turns about it).
+* `clavicle`: the strut of the girdle, from the acromion OVER the top of the rib cage to the manubrium beside the midline, 0.08 s
+  under the skin all the way (a bird's coracoid and furcula brace its shoulder against the sternum, **wing/A02, A07**; round 3's
+  strut ran from the joint THROUGH the chest).
+* `humerus`: the arm's own rings at 0.30 of the sleeve's radius (pose with the skin), from inside its head, which sits on the
+  joint (round 3 put the head 1.2 radii out along the arm, under the skin of nothing).
+
+Measured on six bodies (`test_the_joint_sits_on_the_blade_and_the_humerus_leaves_it_through_muscle_only`): the blade's top lies
+between 1.6 head radii under the joint's centre and half a head radius over it (the head sits in its glenoid ON the blade); the
+humerus from the head's surface to where it crosses the skin meets no bone; every bone vertex is inside the skin (at least 0.02),
+the clavicle within 0.35 s of it. With the version-2 joint (no slide) the joint is 0.2 under the blade and the test fails
+(the mutation run below).
+
+## 3. The relief (the masses) and the mound behind and above the root
+
+`PERMANENT_MASSES` (left side; heights in s) and the boss (`CAP`):
+
+| mass | where | footprint (long x wide) | height | round 3 |
 |---|---|---|---|---|
-| `scapular` (infraspinatus / teres plateau, under the root) | 0.56 shx, spine-1 + 0.22 Lt, 9 deg off vertical | 0.80 Lt x 0.46 shx | 0.105 | 0.52 shx, +0.12 Lt, 0.85 Lt x 0.40 shx, 0.16 |
-| `rhomboid` (rhomboid / middle trapezius, NEW) | 0.30 shx, +0.40 Lt, running up-medially | 0.24 Lt x 0.17 shx | 0.06 | - |
-| `latissimus` (fan to the flank) | 0.66 shx, -0.55 Lt | 0.80 Lt x 0.32 shx | 0.10 | 0.13 |
-| `trapezius` (slope from the neck to the root) | 0.34 shx, +0.74 Lt, along the 30-degree slope | 0.30 Lt x 0.15 shx | 0.07 | 0.26 shx, +0.60 Lt, 0.62 Lt x 0.34 shx, 0.11 (it crossed the midline) |
-| `deltoid` (the shoulder boss: the "rounded shoulder mound behind and above the root", wing/H24) | from the skin over the joint to the crossing and 0.9 sleeve radii beyond | half the run + 0.9 r x 1.7 r (r: the sleeve's radius at the skin) | up to 0.24, by how shallow the arm leaves, **minus what the other masses raise at its crest** | up to 0.34, in units of s, on top of the plateau |
-| `sleeve` (the arm's belly) | the humerus' rings | the skin minus 0.06 | - | - |
+| `scapular` (infraspinatus / teres) | 0.66 shx, +0.28 Lt, along the lateral border | 0.46 Lt x 0.34 shx | 0.14 | 0.56, +0.22, 0.80 Lt x 0.46 shx (lumbar region to the neck), 0.105 |
+| `rhomboid` | 0.30 shx, +0.40 Lt | 0.24 Lt x 0.17 shx | 0.06 | same |
+| `latissimus` | 0.66 shx, -0.55 Lt | 0.80 Lt x 0.32 shx | 0.10 | same |
+| `trapezius` (slope) | 0.34 shx, +0.74 Lt | 0.30 Lt x 0.15 shx | 0.07 | same |
+| `supraspinatus` (NEW: the wing's elevators above the scapular spine) | 0.66 shx, +0.80 Lt, along the spine | 0.30 Lt x 0.18 shx | 0.15 | - |
+| `deltoid` (the boss) | from the skin over the joint to the crossing and 1.0 r beyond, its crest moved 0.8 r half up the back and half the way the arm leaves | 2.2 r wide | up to 0.30 (by how shallow the arm leaves; half of it for an arm lying along the back), less what the others raise at its crest | up to 0.24, crest on the run |
 
-**Why the bullseye and the ridge.** Every mound is a smoothstep bump, concave over its outer half: its edge draws a dark ring
-under the renderer's light. Round 1's two trapezius masses (0.26 shx from the midline, 0.34 shx wide) met across the spine and,
-with the two plateaus below them, enclosed an unraised island between the shoulder blades: the ring read as a bullseye. The boss
-ran from the skin over a joint 0.9 units deep (its skin point medial) to a crossing at the posterolateral corner: the ridge from
-the shoulder to the spine. And the junction ADDS mounds, so the boss on the plateau stood 0.48 units high (the folded wing's
-lobe). Found by rendering with one mass removed at a time (scratchpad `junction/S6b_out/drop_sheet.png`). Fixed by: a trapezius
-that stops short of the midline, a rhomboid mass that fills the interscapular region from the blade toward the spine (the
-groove stays open at both ends, so it reads as the spinal furrow, not a basin), lower and wider masses (the edge's curvature
-goes with height / radius^2), a short boss on the root (the joint is under the blade now), and `wingroot.envelope`: the boss
-stands its height over the skin the permanent masses leave. Largest move on the neutral man 0.23-0.33 units (0.48 before).
+TAKEAWAYS wing checklist 2 / **wing/H24** (Winged Victory, side): "a rounded shoulder mound rises behind and above the root". Round
+2b had lowered every mass to remove the bullseye; the critic: "a plain human trapezius with a tube set into it; find the middle".
+Tried on renders (scratchpad `junction/S7_wing_out/mound_sheet*.png`, `m2_sheet.png`, `m3_sheet.png`): a supraspinatus mass
+behind and above the root, a taller boss, its crest lifted up the back and toward the side the arm leans over. The side views show
+the arm growing out of the flank of a shoulder mound; no ring, no ridge on six bodies (`cmp` sheets). Relief: 0.46 L the pair on
+the neutral man (0.84 heavy), against 0.97 at 835af09, of which 0.29 L was the ridge the junction raised over the buried humerus
+running 0.7 units under the skin (gone with the joint on the blade) and the rest the plateau over the whole back.
 
-**Pad = envelope.** `wingroot.pad_mesh(..., acting=masses)` builds each pad's top from the SUM of every mound acting on that
-patch (the skin the junction makes), not from the pad's own mound. Measured against the shaped, subdivided skin on the neutral
-man: median 0.056, p90 under 0.075 (the skin's thickness is 0.06); each pad on its own mound (round 1's construction): p90 0.14.
-The fillet that climbs the arm lies over the arm's sleeve, not over a pad (`test_the_muscle_lies_a_skin_thickness_under_the_shaped_skin`).
+## 4. The junction, the collar profile
 
-**The sleeve** (`wings.Sleeve`): the humerus' radius is the elbow's plus `gain x L_h x (f(t) - f(1))`, `f` through 0.150 /
-0.146 / 0.134 / 0.104 / 0.070 at t = 0 / 0.15 / 0.30 / 0.60 / 1. Round 1's plateau to 0.45 read as a drumstick on a thin
-forearm once the joint moved up and more of the arm showed; now it tapers from the skin to the elbow like a real upper arm
-(0.14 of the humerus where it leaves the back at t 0.15-0.30), round (32 facets: 14 drew a zigzag at the collar's top edge),
-and the feathered arm's buried end is no longer blunted under a sleeve (it narrowed the arm just where it leaves the skin).
-`kinds.wing_sleeve(style, muscle, s)`: the style's gain x `muscle` x (s / 1.17)^2, clipped to 0.6-1.3: the wing is not scaled
-with the body but the shoulder it grows from is.
+`WingRoot.spec`: the masses as `Mound`s (displaced backwards), the arm as the tube the skin flows into (the arm's own axis carried
+by the pose; from 0.15 of the humerus for the feathered arm, `TUBE_START`: its rounded buried end is narrower than its tube and the
+skin over the heavy man's shoulder was called hidden), Keep spheres round the human upper arm, `owner="trunk"`, `join_guard=False`.
 
-## 3. The junction and the root collar
+**The collar** (`collar.py`, the core's; `WingKind.collar_profile`): width 1.1 root radii on the open side (the side the arm comes
+FROM: toward the spine and down), 0.35 on the side it leans over, 0.55 up the arm, sunk 0.2, `collar` scales it.
 
-`WingRoot.spec`: the masses as `Mound`s (displaced backwards, `-Z`), the arm as the tube the skin flows into, Keep spheres round
-the human upper arm, `owner="trunk"`, `join_guard=False`.
+* **It ramps in** (`WingRoot.collar_strength`): nothing at a plain exit of 40 degrees or less (`COLLAR_MIN_EXIT`), all of it from
+  45 (`COLLAR_FULL_EXIT`), a smoothstep between; under a fifth of a collar (the ramp times the `collar` slider,
+  `WING_COLLAR_MIN_STRENGTH`) is none: a weaker one kept only a fragment of its ring on the round-4 core (heavy man, arm lowered:
+  strength 0.07 kept 10% of the ring with a 93-degree crease, 0.11 35% / 47 degrees, 0.17 63% / 25, 0.30 89% / 14;
+  `S7_wing_tools/partial_collar.py`), so the collar appears at 41.4 degrees a fifth of its height high (0.04 units on the heavy
+  man) instead of as a frayed fragment. Round 3 cut at a hard 43 degrees, with the heavy
+  dragon collared at 44.7 and the heavy feathered folded wing not at 40.4: a pose or a slider moving the exit by a degree switched
+  the collar on or off. With version 3 the rest exits are 44.7-67.5 (heavy dragon 44.7: strength 0.99) and the folded ones 12-35.
+* **It climbs the arm**: measured now (`test_the_collar_climbs_the_arm`): the collar's top 0.38-0.44 root radii up the arm past the
+  crossing with the round-3 construction, 0.33-0.34 with the core's round-4 one (a collar 0.05 high: 0.03-0.12; the round-3
+  mutation M11 survived).
+* **The feathered collar's crossings and the tall body's acute-side tear** (round-3 B2, B3) are the construction's: with the
+  core's round-4 `collar.py` and this track's anatomy merged (scratchpad `junction/S7_wing_merge`), every collared row of
+  neutral, heavy, child, tall and slim woman x bat, dragon, angel x rest, swing -45, raise -20, fold 0.5 is watertight with
+  **0 self-crossings** (45 rows, `S7_wing_out/creport_merge.jsonl`), so the profile keeps its numbers. With the round-3
+  construction alone they stay as the review measured them.
 
-* **The tube lies on the arm's own axis**, the rest ring centres carried by the pose (the humerus' skin follows the rig's `elbow`
-  bone), not the shoulder -> elbow line of the joints: the feathered arm is lifted 0.2-0.25 wing units off that line into the
-  feather stack, a tube on it lay half outside the arm and the core's conform step cut it away (the feathered wing's skin met
-  its arm at 98 -> 88 degrees; now 102 -> 68).
-* **Fillet** 2.0 elbow radii wide, **0.45** high (0.3 in round 1): 0.6 met the join better (101 -> 66) but backed off 8 cage
-  quads on the neutral man in the validity pass.
-* **`join_guard=False`**: the masses are the body's anatomy. The core's guard compares the skin's join with the tube before and
-  after; on an arm leaving obliquely the masses tilt the skin on the acute side and the tall body's feathered junction was
-  dropped WHOLE. The seam is the collar's job.
-* **No arm (`bones=false`)**: round 1 had no model and no junction. Now the model is built on `wingroot.virtual_arm_profile`
-  (the rest humerus of the rig with the feathered arm's radius) and the junction is the masses alone: no tube (no arm skin to
-  flow into: the coverts cover the root), no collar, layers with a humerus under the coverts.
+## 5. Numbers: the join one sees
 
-**The collar** (`collar.py`, `WingKind.collar_profile`): width 1.1 root radii on the open side, 0.35 on the side the arm leans
-over, 0.55 up the arm, sunk 0.2, `collar` scales it (0 = off). At 1.3 the hidden skirts of the two collars met under the skin
-of a child's spine (40 crossing pairs, a print-report warning); at 1.1 they stay apart on every body tested. Choices made on renders:
-
-* **The open side** (`profile.up`, per placed wing: `WingRoot.collar_up`) is the side the arm comes FROM: minus its direction along
-  the skin, toward the spine and down, where the back runs into the arm over the boss (wing/H22, A12). `collar.py` cuts the
-  acute side further where the wall leans over the skin.
-* **Skin-coloured.** The back's skin climbs the arm and the wing's own integument begins on the arm above a tangent join
-  (a skin-to-membrane boundary, anatomically fine). An arm-coloured collar would put the colour step at the rim, on the flat of
-  the back, a painted ring.
-* **The wall is the arm piece only** (`Kind.collar_wall`, a hook added to `kinds.Kind` and used by `collar_pieces` and
-  `join_report`): the membrane, the fingers and the feathers are not what the skin meets, and casting the collar's rays
-  against the whole wing took 600 ms a wing (80-160 ms now). `join_report` measured the feathered wall against the feathers
-  (p95 140 degrees); against the arm it is 1-2.
-* **No collar where the arm lies along the back** (plain exit under `wingroot.COLLAR_MIN_EXIT` = 43 degrees, decided in
-  `WingKind.collar_axis` for the pose the collar is built in: the folded wing, 21-40 degrees; the heavy body's swing -45 and
-  raise -20). That is where the construction fails: the wall leans over the skin on most of the ring, `collar.py`'s lean cut
-  takes the width to its floor and the hair-thin shell left crossed itself 300-1,200 times, with rim normals 175 degrees off and
-  a leak on the heavy body (measured before the cut-off; scratchpad `junction/S6b_out/collar_report.txt`). The worst such row
-  leaves at 40.4 degrees (heavy feathered, folded), the shallowest good one at 44.7 (heavy dragon at rest): the margin is 2.6
-  and 1.7 degrees. Those poses keep the junction's fillet seam.
-
-![root close-ups at level 2, membrane / dragon / feathered on the neutral man, child and heavy body](images/wing_root_s6b_roots.png)
-
-## 4. The body the wing adapts
-
-`creature_anatomy` gives a winged figure `measure_bust_circ` 0.25, `torso_muscle_dorsi` 0.35, `torso_muscle_pectoral` 0.85
-(unchanged in round 2b; a test now pins the dorsi coupling at most 0.4, round 1's test let 0.5 through).
-
-| neutral man (64.9 L) | litres |
-|---|---|
-| sliders | +1.20 |
-| relief of the two shoulder girdles | +0.97 (0.49 a side) |
-| total | 2.17 (3.3% of the body) |
-
-Round 1 had 1.64 L of relief; the research asked 0.7-1.2 L a side. The lower relief is the price of a back without a ring: the
-round-1 masses stood 0.11-0.34 s high and stacked to 0.48 units where they overlapped; the relief now is lower and wider
-(`test_the_volume_of_the_wing_is_mostly_local_and_within_budget`: 0.35-0.8 L a side). Child 0.20 L, tall 1.77 L.
-
-## 5. Numbers
-
-The angle of the arm's axis to the skin, plain -> shaped (degrees, 90 = square), at rest (bodies through the pipeline:
-`effective_target_weights`):
+`wingroot.visible_join`: the angle between the arm's axis and the skin's tangent plane on a ring k root radii round where the axis
+crosses the plain skin (`min`: the side the arm leans over, negative where the skin folds over the arm; 90: the skin square to the
+arm). The angle where the axis itself meets the skin (the 62 -> 74 round 2b quoted) is inside the arm. Membrane wing at rest,
+level 0 cage (`S7_wing_tools/visible_join.py` on the three trees):
 
 ```
-body     membrane      dragon        feathered
-neutral  62.3 -> 73.6  63.9 -> 73.8  63.5 -> 74.2
-child    60.4 -> 66.7  60.3 -> 65.7  61.9 -> 71.3
-heavy    45.3 -> 59.8  44.7 -> 61.0  49.5 -> 59.5
-tall     63.2 -> 70.6  62.2 -> 68.5  62.9 -> 81.0
-short    63.3 -> 70.0  63.2 -> 72.8  64.0 -> 72.1
-female   57.0 -> 63.4  58.3 -> 66.0  60.0 -> 68.9
+            c808d60 (shown to the user)      835af09 (round 3)               round 4
+            1.3 r min/mean  1.8 r min/mean   1.3 r          1.8 r            1.3 r          1.8 r
+neutral     -14.4 / 49.3    -16.7 / 49.5     23.3 / 46.6    11.5 / 39.9      28.8 / 50.6    21.1 / 43.2
+child       -21.2 / 53.6     16.8 / 46.7     34.0 / 52.6    11.1 / 42.8      30.4 / 51.0    24.5 / 44.2
+heavy       -25.8 / 42.2    -33.8 / 42.4     33.3 / 47.5    19.9 / 44.7      27.4 / 45.1    29.0 / 46.4
+tall         14.3 / 50.5     14.2 / 48.1     27.9 / 48.9    17.2 / 43.1      22.8 / 46.3    21.5 / 43.3
+short         5.9 / 52.1     -0.2 / 52.1     26.5 / 47.4    10.7 / 40.4      28.3 / 51.2    20.8 / 42.7
+slim woman  -39.3 / 42.3     -1.6 / 40.5     30.4 / 51.3    10.1 / 43.6      29.9 / 52.0    17.3 / 44.3
 ```
 
-Poses (membrane; neutral / child / heavy): folded 33 -> 49 / 37 -> 53 / 37 -> 57; fold 0.5 55 -> 66 / 53 -> 67 / 49 -> 69;
-raised 45 69 -> 75 / 69 -> 74 / 58 -> 68; swung 30 77 -> 85 / 76 -> 81 / 72 -> 78; swung -45 51 -> 59 / 49 -> 58 / 40 -> 50.
-**The angle never gets shallower after shaping** in these rows (round 1: child fold 0.5 79 -> 71, child swing -45 69 -> 65);
-on the feathered wing in steep poses it can go down by up to 11 degrees but stays at 70 or more (slim woman, raised 45:
-82 -> 71; measured at fillet height 0.6, before the final 0.45).
+At 1.8 root radii the leaning side improves on every body (to 17-29 from 10-20) and the mean rises on every body against round 3
+(39.9 -> 43.2 on the neutral man). Against c808d60 the mean is lower on the neutral man, the child and the short body: there the
+arm pierced the back at 45 degrees with the skin folding over it on one side (negative minimum) and square to it on the other. A
+fillet that flows into the arm lowers the angle near it on every side; the mean is not a score to maximise, the minimum and the
+spread are. The hidden axis angle went DOWN (73.6 -> 64.1 on the neutral man) because the boss now lifts the skin under the
+leaning side instead of tilting the skin at the axis.
 
-The core's join angle (`junction.measure_junction`, level 2, the test body), before -> after:
+Poses (membrane, neutral): folded exit 21 (no collar), fold 0.5 45.7 (full collar), swing -45 49.9, raise -20 57.1.
 
-```
-           round 1 (HEAD c808d60)   S1's generic wing (after only, round-1 review)   S6b
-bat        88.4 -> 78.7             67.4                                              101 -> 72
-dragon     87.5 -> 77.4             63.5                                               96 -> 65
-feathered  85.1 -> 62.9             47.4                                              102 -> 68
-```
+**Stowed wings** (`test_a_stowed_wing_of_the_second_placement_rests_on_the_back`, now with the heavy body, on the body as the
+document draws it): the share of the stowed angel wing inside the torso: neutral 6.1%, child 4.1%, woman 6.1%, heavy **3.8%**
+(round 3: 14.1%, feathers out of the shoulder tops); the bat and the dragon stay within the first placement's 15%. A version-3 feathered wing's stow root stands off
+the back by how much thicker the back is behind the shoulder joints than the neutral man's (`kinds.stow_root`, `WING_STOW_BULK`).
 
-The gain is 29-34 degrees (round 1: 10); the after value is better than round 1's on the bat and the dragon and worse on the
-feathered wing (68 against 62.9; the S1 generic wing's 47.4 is still the lowest). The before value rose because the arm leaves
-more steeply (a steep arm's measure includes the acute side's skin facing into the wall). `test_the_skin_meets_the_root...[wing]`
-asks the generic 15 degrees again (round 1's 8-degree exception is gone) and an after value under 75.
+![the heavy man's stowed angel wings, 835af09 and round 4](images/wing_root_r4_stow_heavy.png)
 
-The root collar (`collar.join_report`, level 1 / 2; `rim`: the collar's shading normal against the skin's at the rim, `wall`:
-against the arm's at the top, degrees; `before`: the skin against the arm where they meet without it):
+**Timings** (neutral man, best of 5, a machine shared with other builders, re-measured after the last edit; round 4 /
+835af09, `S7_wing_tools/timing.py`): the wing pair's build 50 / 49 ms (bat), 341 / 327 (angel); the specs 5 / 5 and 8 / 8 ms;
+`apply_junctions` 61 / 55 ms (bat), 79 / 72 (angel); `Placed.layers()` per wing 269 / 750 ms (bat), 286 / 754 (angel) warm (the
+moulded skin is cached per pose; cold it adds the wing's own junction, 60-150 ms, a level-1 subdivision, 80 ms, and the skin
+patch, 45 ms). `wing_arm_axis` builds a light rig once per wing shape (cached; a cold first build of a new shape pays it).
 
-```
-(at rest, levels 1 / 2)     rim p50/p95          wall p50/p95       before   self-crossings   ms a wing
-neutral   bat / dragon       2.5-3.0 / 3.3-5.1    0.8-1.1 / 1.4-2.1  47-49    0                73-132
-neutral   feathered          2.9-3.6 / 3.8-5.3    0.6 / 1.0          55-57    0 / 99           72-87
-child     3 styles           2.3-3.4 / 3.2-6.9    1.4-2.7 / 3.4-9.3  57-76    0-4; feathered 182-295   77-120
-heavy     3 styles           2.0-2.6 / 3.2-5.7    0.6-1.8 / 2.1-7.9  50-65    0-3              77-117
-tall      3 styles           2.5-2.9 / 3.2-5.1    1.3-2.7 / 2.4-5.4  44-51    0                70-106
-slim woman 3 styles          2.0-3.0 / 3.7-8.0    1.1-1.8 / 3.8-5.2  52-58    5-183            93-116
-poses (fold 0.5, raised 45, swung +-45, raised -20; neutral, child, heavy): rim p95 3.0-7.2, wall p95 1.5-7.0, 0-50 self-crossings,
-          child dragon at fold 0.5: 336-350
-```
-
-`before` is what the skin and the arm make where they meet without the collar (the junction alone: 44-76 degrees);
-with it, the visible join is within a few degrees of tangent on both sides. The self-crossings are inside the hidden thin
-sector (the arm's acute side) as with the tail; the visible sheet never sinks under the skin. Cost per wing: 70-132 ms on a
-machine at load 2 (the collar's target is 100 ms; level 2 is over it on some rows).
-
-Timings (neutral man, best of 3-7 on a machine at load ~2, this tree / HEAD c808d60): the wing pair's build 50 / 54 ms (bat),
-345 / 434 ms (angel); the specs 5 / 6 ms; specs plus `apply_junctions` 63 / 69 ms (bat), 78 / 70 ms (angel); a collar 72-91 ms
-per wing (none at HEAD). `WingKind.resolve_placement` now finds the joint on the body (landmarks and a ray against the cage):
-8.5 ms per wing spec against 0.2, paid by every caller that reads an anchor without building (the lab's overlay markers,
-`Engine.anchor_points`, once per draw).
-
-Validity (`junction.junction_quality` on 6 bodies x 3 styles x rest / folded / raised 45): 0 violations; the validity pass backs
-off no quad on the neutral, child, heavy and tall membrane at rest (`tools/wing_root_report.py`).
+**Print** (the lab's export, medium, the share of the arm piece inside the body, junction off / on; `S7_wing_tools/weld.py`,
+re-measured after the last edit): bat 8.7% / 11.0%, dragon 8.4% / 10.4%, angel 6.2% / 12.2% (835af09: 20.7 / 27.9,
+18.7 / 25.8, 11.6 / 19.4); the same on the core + tail + wing merged tree. The arm is less buried because the joint slid out
+along it. No blocking finding; the angel without the junction is under the report's 8% "shallow weld" warning.
 
 ## 6. Documents
 
-* **New records** carry `placement.version = 2` (stamped by the preset: `presets["shoulder_blades"]["stamp"]`, a generic
-  one-line hook in `new_spec`), `offset = -0.5` (in units of s for a version-2 record) and `up_hint = WING_UP_HINT_V2`.
-* **Records written before** have no stamp and store the first preset's numbers explicitly. One that holds them untouched (the
-  preset's quad without weights, offset -0.9, `WING_UP_HINT`, `WING_ROLL`, or leaves them out) is read as version 2: **it moves**
-  (the joint onto the ribs, the arm over the blade, the body-scaled sleeve, the collar), because that placement is the defect
-  the user and the critics named. It renders exactly as a new record (`test_an_unstamped_record_with_the_first_numbers_moves...`).
-  The document is not rewritten.
-* **A record in which a person changed** the sink, the hint, the roll or the quad keeps exactly what they chose: version 1
-  (and the first versions' bone-thin upper arm unless the record sets `muscle`). `placement.version = 1` pins the first version
-  on any record; `muscle` on a version-1 record gives it the sleeve.
-* **What renders differently** (disclosure): an untouched wing moves (above) and gets the body-scaled sleeve, the new masses and a
-  skin-coloured root collar (a second shell `wing-1.l/collar` in the picture and the STL, at `--subdivide` 1 or 2 only);
-  a pinned or hand-edited (version-1) wing goes back to the bone-thin rod it had before round 1 (HEAD gave every wing the thick
-  sleeve); a wing with `bones=false` now reshapes the back (the masses; round 1 left it alone); every wing's junction has the
-  fillet 0.45 high instead of 0.3. The print report's arm embed at `--subdivide 1` drops from 48% to 28% (neutral bat), 42% to 13%
-  (child bat), 31% to 19% (neutral angel), 25% to 9% (child angel): still 0 blocking (the joint is half as deep and the arm leaves
-  more steeply, so less of it is inside the body).
-* A pinned record (`version: 1`) that leaves out the sink or the hint gets the first version's numbers.
-* A stamped record is read as its stamp; its stored numbers are never sniffed. `.mmchar` v1 and v2 files load unchanged
-  (`test_the_version_survives_a_save_and_old_files_still_load`); `back_wings()` (the builder API) is the first version, bit for
-  bit (`test_kinds::test_the_membrane_root_is_exactly_where_it_always_was...` compares a version-1 record with it again).
+* **New records** carry `placement.version = 3`.
+* **A version-2 record** (written by 835af09, S6b) is read as version 2: its joint on the ribs, NOT slid; the joint, the exit
+  point and the arm are where 835af09 put them. Its moulded skin is NOT as it was: the masses, the boss, the collar ramp and
+  the tube start below are not versioned, so they reach version-1 and version-2 records too (neutral man, measured on the cage
+  against 835af09: the skin moves at most 0.25 units further, 134 of 13,378 vertices by more than 0.02, bat; 0.26 / 140 angel;
+  a version-1 record 0.16-0.18 / 113-116; `S7_wing_tools/v2_diff.py`).
+* **Records written before the versions** have no stamp. One that holds the first preset's numbers untouched is read as the latest
+  version: it moves (to version 3). One in which a person changed the sink, the hint, the roll or the quad keeps exactly the
+  placement they chose (version 1) **and the muscular sleeve** every tree that could write it drew (round 1 .. c808d60): **B4**.
+  Only an explicit `placement.version = 1` stamp gives the first versions' bone-thin rod. The fixtures in
+  `tests/fixtures/wing_c808d60/` were WRITTEN by c808d60 (`S7_wing_tools/gen_c808d60_fixtures.py` on an export of it) with
+  `manifest.json` holding what c808d60 drew: the edited records keep their exit point exactly, the neutral man's arm radius at
+  0.3 of the humerus is 0.411 against c808d60's 0.428 (the sleeve tapers now), the dragon's 0.444 / 0.459, the angel's 0.380 /
+  0.374, the child's **0.297 against 0.428** (the sleeve is body-scaled since S6b: c808d60 gave a child the man's arm).
+
+![the three edited c808d60 fixtures (wing_offset, wing_roll, wing_child_offset), each as c808d60 drew it and as round 4 (core + tail + wing merged) draws it: the sleeve kept, no bone-thin rod](images/wing_root_r4_old_document.png)
+
+* **What renders differently** (disclosure): EVERY record with a wing: the new masses (the supraspinatus mound, the taller boss
+  lifted toward the leaning side, the smaller infraspinatus plateau), the collar ramp (40-45 degrees), the angel's tube start and
+  the slider clamps below; the muscle and bone layers are new. On top of that, an untouched record, a new record and a version-3
+  record: the joint 0.30 s further out
+  along the arm (the whole wing 0.35 units out on the neutral man; the visible upper arm that much longer), the new masses (the
+  supraspinatus mound, the taller boss lifted toward the leaning side, the smaller infraspinatus plateau), the collar ramping in
+  between 40 and 45 degrees (43 was a hard cut), the stowed angel wing standing off a bulkier back, the junction tube of the
+  angel wing from 0.15 of its humerus; the muscle and bone layers are new. An edited unstamped record gets the sleeve back
+  (835af09 drew the rod). **The sliders**: `muscle` 0.5-1.4 (was 0-2), `collar` 0-1.3 (was 0-2): a record storing more is clamped
+  with a note (muscle 2.0 drew an arm a third of the shoulder's half-width wide, muscle 0 a rod in a frayed collar, collar 2.0 a
+  doubled stripe; `S7_wing_out/ext_sheet_S7.png`). A pinned version-1 record without `muscle` keeps its rod.
+  **The collar's floor**: a collar weaker than a fifth (the `collar` slider times the ramp) is not drawn, so a record storing
+  `collar` 0.05-0.19 now has NO collar in any pose (835af09 drew a thin one), and with the slider under 1 the collar appears at
+  a steeper exit than 41.4 degrees (slider 0.5: the ramp must reach 0.4, about 42.2 degrees).
+* `.mmchar` v1 and v2 files load without error and nothing in them is rewritten; they render with the differences above.
 
 ## 7. References used
 
-(library ids: `refs/wing/<id>`; `TAKEAWAYS.md` section 5)
+(library ids: `refs/wing/<id>`; `TAKEAWAYS.md` section 5; side-by-side sheets, third-party images kept out of the repository:
+scratchpad `junction/S7_wing_out/ref_muscle_H06_H05_vs_S7.png`, `ref_bone_H03_vs_S7.png`)
 
-* **wing/H22** (Canova, Cupid's root) and **H23**: the roots sit HIGH on the back flanking the spine between the shoulder blades and
-  the back swells into the root with no seam: the joint's y (the level of the scapular spine) and x (over the medial half of the
-  blade), the skin-coloured collar that rolls the back into the arm. His collar of small feathers is not built.
-* **wing/H24** (Winged Victory, side): a rounded shoulder mound rises behind and above the root; wings swept back: the boss on the
-  root, and why a wing swept 5 degrees further back is acceptable.
-* **wing/A12** (mockingbird from behind, wings raised): the root at the shoulder top, a smooth saddle between the two roots: the
-  rhomboid mass that fills the interscapular region without a basin, the open side of the collar toward the spine.
-* **wing/H03, H01** (scapulae on the rib cage): medial border at 0.37-0.53 of the biacromial width, scapula height 0.42-0.47:
-  the socket's x (0.48 shx: inside the blade's outline) and its depth (the blade and its muscles lie on the ribs 0.4-0.6 units
-  under the skin of a man).
-* **wing/H05, H06, H07** (superficial and deep back muscles): the trapezius' insertion on the scapular spine and acromion (the
-  slope runs to the root), the rhomboids from the spine to the medial border (the new mass), the latissimus V.
-* **wing/H21** (Michelangelo's back) and **H15**: masses are elongated and directional, the spinal furrow runs through; no
-  concentric rings: the diagnosis of the bullseye.
-* **wing/A16** (flying-fox skin over its skeleton) and **limb/limb_059**, **skin/wm_leonardo_shoulder_photo** (TAKEAWAYS
-  section 2: the root flare is carried by the first quarter of the limb, then the limb tapers): the sleeve's taper.
-* **wing/A02, A07** (bird girdle) for the strut; **wing/A17** (bat glenoid outside the ribs).
-
-Side-by-side sheets (my renders beside the references, third-party images, kept out of the repository):
-scratchpad `junction/S6b_out/S6b_refsheet.png`.
+* **wing/H06** (Sobotta, superficial back) and **H05** (Gray 409): the outlines of the trapezius kite (nape to T12, the acromion,
+  the free border along the scapular spine), the latissimus' upper border over the inferior angle, the infraspinatus window
+  between trapezius, deltoid and latissimus, the rhomboid's window; the order of the layers. Measured on a landmark grid.
+* **wing/H07** (Sobotta, deep): the rhomboids under the trapezius, the supraspinatus in its fossa. **H04**: the attachments.
+* **wing/H03** (Gray 204) and **H01** (Albinus): the blade's outline, the medial border's gap (0.37 / 0.53), the spine's rise
+  (23-25 degrees), its height (0.44): `SCAPULA_BLADE`, `SCAPULA_SPINE`. **H08** (back section): the skin and fat over the muscle
+  (`SKIN_T`), the muscle over the blade (`SCAPULA_DEPTH`).
+* **wing/A07, A02** (pigeon skeleton, Fuerbringer's girdle plate) and **A17, A18** (flying fox): the shoulder joint at the top of
+  the thorax just under the skin, a short buried humerus (version 3), the strut to the sternum (the clavicle).
+* **wing/H24** (Winged Victory, side), **H22, H23** (Canova): the rounded shoulder mound behind and above the root (the
+  supraspinatus mass, the boss' lift); the back swelling into the root without a seam.
+* **wing/H15, H16** (muscular and lean backs): the relief's scale (no rings; the blade's mound and its lower edge read).
 
 ## 8. What it does not do (honestly)
 
-* **The 70-degree exit is met on the neutral, tall and short bodies** (the tall dragon 68.5), not on the child (66-71), the woman
-  (63-69) or the heavy body (60-61: its trapezius slope tilts the skin the other way; plain 45).
-* **The folded wing has no root collar** (above), and the folded bat itself is the first versions' fold geometry (a tangle of
-  struts lying on the back).
-* **Collar artifacts**: on the heavy body a few dark dots on the acute side where the hair-thin part of the collar meets the arm;
-  self-crossings in that hidden zone (0-50 on most rows; 99-295 on the feathered roots of the neutral man, the child and the slim
-  woman; 336-350 on the child dragon at fold 0.5); the heavy body's level-1 collar top shows a slightly toothed colour line on
-  the arm. The child's feathered wall p95 is 9 degrees.
-* **Stowed (folded) wings** of the second placement lie 4-9% inside the torso on the neutral man, the child and the woman (the
-  first placement's bounds, `test_a_stowed_wing_of_the_second_placement_rests_on_the_back`), but the heavy body's feathered wing
-  14.5% (7.2% in the first placement).
-* **The print report's arm embed** halves (section 6): no case blocks, but the weld is thinner than the first placement's.
-* **No feather collar / mantle** (wing/H22) and **no membrane flank line** (wing/A16): the feathered root's coverts still end on
-  the skin; the membrane still meets the flank as in round 1.
-* **Bone is schematic**: the plate, the strut and the humerus; only the humerus is posed.
-* **Relief volume** is lower than the research's estimate (section 4).
-* **`FILLET_PULL`**: the in-plane redistribution moves the skin by less than 1e-4 here (the arm leaves steeply): a mutant setting
-  it to 0 is near-equivalent; it is pinned by value.
+* **The folded bat and dragon** pivot about the joint 0.35 units further out: their stowed membrane's root panel (the rig's,
+  between the arm and the waist) shows larger flat flaps at the inner edge than at 835af09 (scratchpad
+  `S7_wing_out/folded_slide.png`). The folded pose has no collar (exit 12-35 degrees); its boss eases to 0.6 of its height
+  (`BOSS_FLAT`: a whole boss beside an arm lying along the back is a lobe); the skin beside the folded arm moves up to 0.38.
+  In the ecorche the folded deltoid (the cap sheet laid round an arm lying along the back) reads as a round disc.
+  Folded, every sheet and bone still lies inside the skin (bat and angel, neutral and heavy: the largest signed distance
+  -0.051; `S7_wing_tools/folded_layers.py`, not a test); the white at the top of the shoulder is the acromion and the
+  clavicle where no sheet covers them.
+* **The folded angel wing's arm does not cross the plain skin** on four of six bodies (neutral, child, slim woman, short:
+  `exit_angle` is `None`, so no collar and no open side); it did not at 835af09 either (`S7_wing_out/probe_v3.jsonl`).
+* **The visible join's mean** at 1.8 root radii is below c808d60's on three bodies (section 5); the hidden axis angle fell.
+* **The relief** is 0.23 L a side on the neutral man (the research's estimate for flight muscle: 0.7-1.2): the visible mound is
+  modest by design (no rings).
+* **The bone layer is schematic**: a blade without fossae or a coracoid process, a spine bar, a ring for the glenoid, a clavicle
+  tube; only the humerus is posed (the blade does not rotate with the arm). The blade is the same for the human arm and the wing;
+  the human arm's own glenoid and humerus are not drawn.
+* **The muscle sheets end where rays from behind stop meeting the back**: over the top of the shoulder (the trapezius' upper part)
+  and round the flank (the latissimus) the ecorche shows their cut edge; a small flap of the trapezius stands at the nape in a
+  side view.
+* **The angel wing printed without the junction** has 6.2% of its arm in the body (a "shallow weld" warning; 5% blocks); with
+  the junction 12.2% (835af09: 19.4%).
+* **Collar artifacts with the round-3 construction** (B1-B3: the sawtooth ring, the tone rim, the feathered crossings, the tall
+  body's acute-side tear) are the core's; merged with the core's round-4 collar the wing rows have none (section 4).
+* **Level 0** (the CLI's and the lab's default in 835af09) has no collar: the core track's level policy decides that.
 
-## 9. Looking at it
+## 9. Tests and mutations
+
+`tests/test_wing_root.py` (83 tests). Each round-4 behaviour has a test that fails without it; a mutation run on a copy
+(scratchpad `S7_wing_tools/mutrun.py`, each mutant alone) catches all 16:
+
+| mutant | caught by |
+|---|---|
+| an edited unstamped record gets the rod again (B4) | `test_an_edited_record_written_by_c808d60_keeps_the_muscular_arm_it_had`, `test_an_unstamped_record...` |
+| the muscles laid under the PLAIN skin (round 3's construction in spirit) | `test_the_muscle_lies_a_skin_thickness_under_the_shaped_skin[neutral]` |
+| the skin's thickness doubled; the edge dip tripled; no cover (deeper sheets not under outer ones) | the same / `test_a_muscle_sheet_is_a_closed_lens_a_skin_thickness_under_the_skin` |
+| the lens fans wound back (round 3's holes) | `test_a_muscle_sheet_is_a_closed_lens...` (every directed edge once) |
+| the ray from behind not solved onto the tangent plane | `test_a_ray_from_behind_meets_the_back_and_nothing_past_it` |
+| no slide (the version-2 joint under the blade) | `test_the_joint_sits_on_the_blade_and_the_humerus_leaves_it_through_muscle_only` |
+| the strut through the chest (round 3's furcula) | the same (bones inside the skin, the clavicle just under it) |
+| the collar cut at a hard 43 degrees | `test_the_collar_ramps_in_as_the_arm_rises_off_the_back` |
+| a collar drawn at 0.05-0.2 strength (a fragment of a ring) | `test_a_collar_ramped_in_less_than_a_fifth_is_left_out_not_drawn_as_a_fragment` |
+| the collar 0.05 high (round 3's surviving M11) | `test_the_collar_climbs_the_arm` |
+| no stand-off for a bulky back | `test_a_stowed_wing_of_the_second_placement_rests_on_the_back[macro3]` (the heavy man) |
+| the muscle slider back to 0-2 | `test_the_muscle_and_collar_sliders_stop_before_the_drumstick_and_the_double_ring` |
+| the boss' lift removed | `test_the_arm_leaves_a_steeper_skin_than_it_did` (the visible join) |
+| no supraspinatus mound | `test_the_masses_sit_on_the_back...` (a value pin) |
+
+Round 3's surviving M3 (`PAD_STACK`) and M12 (each pad on its own mound) targeted `pad_mesh`, which is gone: the stacking is the
+cover term and the moulded skin, both caught above. Two guards the first sheets had (a seed filter by the body frame's trunk, a
+height limit at the occiput) survived their mutants on six bodies: they were removed. The full suite (2373 passed, 30 skipped)
+and the Tk tests (183 passed) run green on this tree; `tests/test_wing_root.py` and the tail track's ecorche tests run green on
+this tree with the core's and the tail track's round-4 patches applied.
+
+## 10. Looking at it
 
 ```
-python tools/wing_root_view.py OUT.png "wing:style=membrane" 180,12 140,25 --pair --r 3.2
-python tools/wing_root_view.py OUT.png "wing:style=membrane" 150,25 --layers bone,muscle,skin --window 2.1     # a dissection
-python tools/wing_root_report.py --bodies neutral,child,heavy --styles membrane,dragon --poses "rest;preset=folded"
+python tools/wing_root_view.py OUT.png "wing:style=membrane" 180,8 --layers bone,muscle,skin --window 2.4 --levels 2   # a dissection
+python tools/wing_root_view.py OUT.png "wing" 180,10 140,20 90,5 --layers muscle,bone --no-body --levels 1           # the layers alone
+python tools/wing_root_report.py --bodies neutral,child,heavy --styles membrane,dragon --poses "rest;preset=folded"  # incl. the seen join
 minimaster character --add wing --subdivide 2 -o x.png          # the collar needs --subdivide 1 or 2
 ```

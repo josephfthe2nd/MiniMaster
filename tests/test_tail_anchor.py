@@ -202,6 +202,11 @@ def test_a_tail_placed_on_the_side_stays_there_and_midline_false_switches_it_off
     o = K.instantiate_all([off], base, v)[0]
     cent = cv[cq[K.PRESET_FACES["tail_base"]]].mean(axis=0)
     assert np.allclose(o.anchor, cent, atol=1e-12) and o.anchor[0] > 0.01     # one quad: off the plane
+    # (round 4) only a midline tail's lift stops at the vertical: the model is handed its axis' elevation; a tail on the
+    # side of the body, whose axis is the quad's normal, is lifted as its controls say
+    mid = K.instantiate_all([K.new_spec("tail")], base, v)[0]
+    assert 5.0 <= mid.model.params.elevation <= 18.0
+    assert s.model.params.elevation == 0.0 and o.model.params.elevation == 0.0
     # a tail has no side: new records cannot have one, and an old record's 'both' (two tails in a T from the cleft
     # wall: round-1 review) is built as the one midline tail, with a warning; the record keeps what it says
     with pytest.raises(ValueError, match="midline"):

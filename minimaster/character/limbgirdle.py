@@ -46,7 +46,8 @@ _EPS = 1e-12
 ARM_OUT = 0.3              # lower pair: the pivot stands this many R outside the skin (0.4 before round 2b: a ball beside the ribs)
 ARM_DOME = 1.0             # ... and its dome is this many R (1.1 before)
 ARM_DROP = 0.85            # lower pair: the pivot is 0.85 Lu below the primary joint
-LEG_RISE = 1.5             # hip pair: 1.5 R_leg above the hip joint (the iliac crest)
+LEG_RISE = 0.6             # hip pair: 0.6 R_leg above the hip joint, on the buttock (round 4; 1.5 before: the iliac
+                           # crest, which put the dome on the lower back above the buttock at waist height, a knee-pad)
 PIVOT_OUT = 0.4            # the pivot stands this many R outside the skin
 DOME_RADIUS = 1.1          # the dome (glenohumeral head under the deltoid), in R
 CUT_T = 0.30               # the plane the limb is cut at, in Lu from the joint
@@ -249,9 +250,12 @@ SITES = {
     "upper_arms": Site("arm", fan=(-0.55, 0.5, -1.05), scale=0.85, pose=(68.0, -30.0, -10.0),
                        limits=(("abduct", 160.0), ("adduct", -60.0), ("swing", (-60.0, 45.0))),
                        out=0.0, dome=1.07, clear_end="adduct"),
-    "extra_legs": Site("leg", rise=LEG_RISE, phi=-30.0, scale=0.7, pose=(49.0, 5.0, 25.0),
+    # round 4: on the BUTTOCK, 55 degrees behind the lateral midline (limb_023: a polymelic goat's extra hind legs
+    # hang from the rump; limb_064 / 065: the gluteal mass is the hip's deltoid), the thigh leaving the gluteal
+    # mass down and back; round 2b's girdle was 30 degrees behind lateral, 1.5 R above the hip joint (waist height)
+    "extra_legs": Site("leg", rise=LEG_RISE, phi=-55.0, scale=0.7, pose=(38.0, -15.0, 30.0),
                        limits=(("abduct", 75.0), ("adduct", -38.0), ("swing", (-20.0, 50.0))),
-                       out=0.1, dome=0.97, lean=0.7),
+                       out=0.1, dome=0.97, lean=1.0),     # (round 4: 0.7 left the dome's pole outside the buttock)
 }
 
 CHAINS = {"arm": ("l-shoulder", "l-elbow", "l-hand"), "leg": ("l-upper-leg", "l-knee", "l-ankle")}
@@ -1046,7 +1050,7 @@ def clear_limits(b: SideBuild, body_v, site: Site, rig_cls) -> dict:
     limits = dict(site.limits)
     if not site.clear_end:
         return limits
-    skin = _original_skin(body_v, b)[::2]
+    skin = _original_skin(body_v, b)
     if not len(skin):
         return limits
     n_l = int(b.info["n_limb_verts"])
@@ -1062,11 +1066,24 @@ def clear_limits(b: SideBuild, body_v, site: Site, rig_cls) -> dict:
     end = hi if key == "abduct" else lo
     step = -LIMIT_STEP if key == "abduct" else LIMIT_STEP
 
+    # round 4: the gap the RAISE must keep is CLEARANCE R, or what the limb already keeps at the preset's own pose
+    # when that is less: the root (the pinned dome and the start of the flare, which the pose hardly moves) of a heavy
+    # muscular body's pair stands 0.2-0.3 R from the original arm at every raise, so pulling the raise in for it took
+    # that body's range to its floor (-16..-4 degrees, the round-3 review) without changing the gap
+    def gap_at(raise_, swing, reach=None):
+        V = rig.pose({"raise_": raise_, "swing": swing}).vertices[:n_l]
+        if reach is None:
+            return _gap(V, skin)
+        lo, hi = V.min(axis=0) - reach, V.max(axis=0) + reach        # only the original limb's skin that can be nearer
+        near = skin[np.all((skin >= lo) & (skin <= hi), axis=1)]
+        return _gap(V, near) if len(near) else np.inf
+
+    floor = min(floor, 0.97 * gap_at(rest_raise, 0.0, floor))
+
     def clear(raise_):
         lo_s, hi_s = geo.control_range("swing", {"raise_": raise_})
         for swing in (lo_s, hi_s, 0.0):
-            V = rig.pose({"raise_": raise_, "swing": swing}).vertices[:n_l:3]
-            if _gap(V, skin) < floor:
+            if gap_at(raise_, swing, floor) < floor:
                 return False
         return True
 
@@ -1187,11 +1204,21 @@ MASSES = {
 }
 # the masses of a second shoulder girdle on the flank (LimbModel._arm_masses), in R: (radius, height, offsets)
 ARM_MASSES = dict(
-    pad=(2.3, 0.6, 1.0),                                          # radius, height, up offset of its centre
-    anterior=(1.0, 0.26, (0.6, -0.3), (2.2, 0.9)),                # radius, height, (ant, up) from, (ant, up) to
-    latissimus=((1.0, 0.24, (0.6, -0.35), (1.6, -1.0)),           # thick at the axilla ...
-                (0.8, 0.12, (1.6, -1.0), (2.8, -2.0))),           # ... thinning toward the iliac crest
+    # round 4: the pad is the SLOPE onto the top of the dome (limb_071: the trapezius runs onto the deltoid): centred
+    # at the pivot's height, so it is highest where the dome hides it and has fallen to a third of its height (under
+    # half of what the dome stands out of the skin) where it meets the dome's top; round 2b's (2.3 R wide, 0.6 high,
+    # centred a radius ABOVE the pivot) stood higher than the dome's own top: it buried the top half of the dome (a
+    # flat sleeve end, a saw-tooth cut at level 0) and bulged the flank above the arm into a saddlebag (round-3 review)
+    pad=(1.7, 0.40, 0.0),                                         # radius, height, up offset of its centre
+    anterior=(0.9, 0.18, (0.6, -0.3), (2.0, 0.7)),                # radius, height, (ant, up) from, (ant, up) to
+    latissimus=((0.9, 0.16, (0.6, -0.35), (1.5, -1.0)),           # thick at the axilla ...
+                (0.7, 0.07, (1.5, -1.0), (2.6, -2.0))),           # ... thinning to nothing toward the iliac crest
 )
+# round 4: the hip girdle's masses (LimbModel._leg_masses), in R of the second limb: (post, up) from, (post, up) to,
+# radius, height: the gluteal swell behind and above the root, the medius up to the iliac crest, the anterior (tensor)
+LEG_MASSES = (((0.6, 0.3), (1.2, 0.7), 1.9, 0.30),
+              ((0.2, 0.8), (0.6, 1.9), 1.1, 0.14),
+              ((-0.8, 0.1), (-0.8, 0.1), 0.9, 0.10))
 MASS_CAP = 0.47                # the masses' height unit is at most this share of the trunk's half depth (a lean body: R)
 SKIN_THICKNESS = 0.12          # of R: skin and fat over muscle (6-10 mm on a lean male)
 KEEP_REACH = 1.45              # the original limb is protected to this many R around its bones
@@ -1246,6 +1273,8 @@ class LimbModel:
                             end=tuple(S + up * 1.4 * R + medial * 1.6 * R)))
         if g.limb == "arm":
             return self._arm_masses(S, n, up, ant, R, m)
+        if LEG_MASSES:
+            return self._leg_masses(S, n, up, ant, R, m)
         rs, hs, off = cfg["skirt"]
         ra, ha = cfg["anterior"]
         rp, hp = cfg["posterior"]
@@ -1256,6 +1285,21 @@ class LimbModel:
             J.Mound(tuple(S + post * 0.8 * R + up * 0.2 * R), rp * R, hp * R * m,
                     end=tuple(S + post * (2.4 if g.limb == "arm" else 1.5) * R + up * 0.5 * R)),
         ]
+        return tuple(out)
+
+    def _leg_masses(self, S, n, up, ant, R, m):
+        """Round 4: the masses of a second HIP girdle: the GLUTEAL mass the thigh leaves from (limb_064 / limb_065:
+        gluteus maximus is the largest and thickest muscle of the body, the hip's analogue of the deltoid), a broad
+        low swell behind and above the root, with the medius running up to the iliac crest and a small anterior
+        (tensor) mass in front. Round 2b's generic skirt and folds left the dome a knee-pad standing on the lower
+        back with a rim (the round-3 review)."""
+        from . import junction as J
+        post = -ant
+        out = []
+        for (a0, u0), (a1, u1), r, h in LEG_MASSES:
+            c0 = S + post * a0 * R + up * u0 * R
+            c1 = S + post * a1 * R + up * u1 * R
+            out.append(J.Mound(tuple(c0), r * R, h * R * m, end=None if (a0, u0) == (a1, u1) else tuple(c1)))
         return tuple(out)
 
     def _arm_masses(self, S, n, up, ant, R, m):
@@ -1308,7 +1352,7 @@ class LimbModel:
                 out.append(J.Keep(tuple(p0 + (p1 - p0) * i / n), rk, 0.3))
         return tuple(out)
 
-    def junction(self, controls=None, fillet: float = 1.0, height: float = 0.35, mass: float = 1.0,
+    def junction(self, controls=None, fillet: float = 1.0, height: float = 0.15, mass: float = 1.0,
                  hug: float = 0.97):
         """The :class:`~.junction.JunctionSpec` of the root in the WORLD frame of its side."""
         from . import junction as J
@@ -1361,6 +1405,33 @@ class LimbModel:
             else:                                    # no slab (a tiny limb): the straight line of the joints
                 out.append(self._left(pj + t * (ej - pj)))
         return out
+
+    def _moulded_trunk(self, controls=None):
+        """The trunk's skin around the girdle as the junction moulds it (LEFT frame): the body cage moved by this
+        limb's own spec (:func:`junction.moulded_cage`), the patch within ``CLAMP_REACH`` R of the pivot subdivided
+        once (the level the figure is rendered at), as ``(points, outward normals)``; ``None`` when the model was
+        made without its body (``body`` is set by the kind)."""
+        body = getattr(self, "body", None)
+        if body is None:
+            return None
+        from . import junction as J, junction_checks as JC
+        base, verts = body
+        spec = self.junction(controls)
+        cage_v, cage_q = J.moulded_cage(base, verts, [spec] if spec is not None else [])
+        piv = np.asarray(self.build.joints[0], dtype=np.float64)          # (world frame of the side)
+        near = np.linalg.norm(cage_v - piv, axis=1) < CLAMP_REACH * self.R + 1.0
+        qsel = cage_q[near[cage_q].all(axis=1)]
+        if not len(qsel):
+            return None
+        used = np.unique(qsel)
+        remap = -np.ones(len(cage_v), dtype=np.int64)
+        remap[used] = np.arange(len(used))
+        sv, sq, exact = JC.subdivide_patch(cage_v[used], remap[qsel])
+        nrm = J.vertex_normals(sv, sq)
+        sv, nrm = sv[exact], nrm[exact]
+        if self.right:
+            sv, nrm = _reflect(sv), _reflect(nrm)
+        return sv, nrm
 
     # -- the root collar (collar.py) -------------------------------------------------------
 
@@ -1465,7 +1536,12 @@ class LimbModel:
         # -- muscle: the sleeve of the limb in bellies, centred on the limb's own section ---------
         dome_sel = ((pts - pv) @ u) < 0.15 * R
         dome_r = float(np.linalg.norm(pts[dome_sel] - pv, axis=1).min()) if dome_sel.any() else DOME_RADIUS * R
-        muscle = [ellipsoid(pv, np.eye(3), (dome_r - t_skin,) * 3, rings=10, segments=16)]
+        # the dome's muscle (deltoid / gluteal analogue): a cap that runs down the limb toward its insertion, not a ball
+        # on the joint (round 4; the round-3 review: "a lollipop ball at the root")
+        rd = dome_r - t_skin
+        a_cap = perp_to(u, fwd)
+        cap_axes = np.array([_unit(np.cross(u, a_cap)), a_cap, u])
+        muscle = [ellipsoid(pv + u * (0.3 * rd), cap_axes, (rd, rd, 1.3 * rd), rings=10, segments=16)]
         self._parts = {}
         MARGIN = 0.85                                 # of the inscribed radius: a bend of the skin shears its sections
 
@@ -1545,15 +1621,32 @@ class LimbModel:
             mid = 0.5 * (g.pivot + tip) - n * 0.2 * R
             bone.append(tube_mesh([g.pivot - n * 0.25 * R, mid, tip], [0.15 * R, 0.14 * R, 0.12 * R], segments=10))
         else:
-            dirc = _unit(0.80 * n - 0.55 * ant + 0.17 * up)       # medial-anterior: from the costal arch to the joint
-            start = g.pivot - dirc * 3.0 * R
-            clav = tube_mesh([start, 0.5 * (start + g.pivot), g.pivot], [0.2 * R, 0.17 * R, 0.2 * R], segments=10)
-            bone.append(clav)
+            # round 4: the clavicle analogue lies OUTSIDE the ribs, along the trunk section from the costal arch in front
+            # to the joint (round 2b's ran from the joint 2.4 R straight into the chest: a rod in the coronal cut,
+            # TAKEAWAYS section 6 item 1: the girdle is a plate and a strut on the ribs, not a spike into them)
+            walk_c = [loop_walk(g.loop, g.skin, d * R) for d in np.linspace(2.6, 0.6, 5)]
+            path = [sk - nrm * 0.45 * R + up * (0.15 * R * k) for k, (sk, nrm) in enumerate(walk_c)]
+            bone.append(tube_mesh(path + [g.pivot], [0.14 * R, 0.16 * R, 0.17 * R, 0.18 * R, 0.19 * R, 0.2 * R],
+                                  segments=10))
             walk = [loop_walk(g.loop, g.skin, d * R) for d in np.linspace(-1.8, -3.4, 6)]
             thin = 0.16 * R                               # the scapula: a plate on the back of the ribs
             bone.append(tube_mesh([sk - nrm * (0.5 * R + thin) for sk, nrm in walk],
                                   thin * np.array([0.5, 0.9, 1, 1, 0.9, 0.5]), segments=10, caps=(True, True),
                                   cap_rings=3, ellipse=(np.array([0.0, 1.0, 0.0]), 1.5 * R / thin)))
+        # round 4: every piece INSIDE the figure by at least the skin's thickness (the round-3 review: a lens of the
+        # latissimus strip and a shard of the scapula plate came through the flank skin behind the root, up to 0.45 R
+        # on the heavy body): each vertex is pushed in along the nearer skin's normal (the limb's own, or the
+        # trunk's as the junction moulds it) where it stands outside or closer to it than the skin is thick
+        if CLAMP_LAYERS:
+            from . import shading as _sh
+            n_l = self.build.info["n_limb_verts"]
+            limb_n = _sh.vertex_normals(skin.vertices, skin.faces)[:n_l]
+            surfaces = [(pts, _reflect(limb_n) if self.right else limb_n)]
+            trunk = self._moulded_trunk(controls)
+            if trunk is not None:
+                surfaces.append(trunk)
+            muscle = [clamp_inside(m, surfaces, t_skin) for m in muscle]
+            bone = [clamp_inside(b, surfaces, t_skin) for b in bone]
         self._parts = {"muscle": list(muscle), "bone": list(bone)}       # the pieces, for the checks
         out = {"bone": bone, "muscle": muscle}
         res = {}
@@ -1562,6 +1655,38 @@ class LimbModel:
             res[k] = Mesh(_reflect(m.vertices), m.faces[:, ::-1]) if self.right else m
         res["skin"] = skin
         return res
+
+
+CLAMP_REACH = 3.0      # R: the trunk's skin is read within this far of the pivot (the masses never reach farther)
+CLAMP_LAYERS = True    # round 4: the layers are pushed inside the skin (clamp_inside); False: round 2b's layers
+
+
+def clamp_inside(mesh: Mesh, surfaces, depth: float) -> Mesh:
+    """``mesh`` with every vertex at least ``depth`` inside the union of ``surfaces`` (each an oriented point
+    cloud ``(points, outward normals)`` dense enough that the plane of the nearest point is the surface there:
+    the skin of a limb, the trunk's skin subdivided once). A vertex whose signed distance to the union (the
+    smaller of the distances to the planes of the nearest point of each surface) is above ``-depth`` is moved
+    along that point's normal by the difference; one inside deeper is left alone."""
+    V = np.asarray(mesh.vertices, dtype=np.float64).copy()
+    best = np.full(len(V), np.inf)
+    move = np.zeros_like(V)
+    for P, N in surfaces:
+        P = np.asarray(P, dtype=np.float64)
+        N = np.asarray(N, dtype=np.float64)
+        if not len(P):
+            continue
+        idx = np.empty(len(V), dtype=np.int64)
+        for k in range(0, len(V), 512):
+            d2 = ((V[k:k + 512, None, :] - P[None, :, :]) ** 2).sum(axis=2)
+            idx[k:k + 512] = d2.argmin(axis=1)
+        sd = ((V - P[idx]) * N[idx]).sum(axis=1)
+        better = sd < best
+        best = np.where(better, sd, best)
+        move = np.where(better[:, None], N[idx], move)
+    need = best > -depth
+    if need.any():
+        V[need] -= (best[need] + depth)[:, None] * move[need]
+    return Mesh(V, mesh.faces)
 
 
 def loop_walk(loop, point, distance: float):

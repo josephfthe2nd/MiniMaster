@@ -789,6 +789,47 @@ WING_SOCKET_Y = 0.50          # (the joint's y - spine-1's y) / (neck's y - spin
 WING_SOCKET_DEPTH = 0.50      # how far the joint lies under the skin of the back, in s (0.59 units on the neutral man)
 WING_UP_HINT_V2 = (1.0, 1.4, -0.6)
 WING_OFFSET_V2 = -WING_SOCKET_DEPTH     # what a version-2 record stores as its sink: in units of s
+# ---- the third version (round 4): the socket above, the joint then slid OUT along the arm's own rest axis by
+# WING_SLIDE x s with the frame's orientation kept (``Appendage.slide``): the arm crosses the skin at the same point
+# and angle, but the joint lies ON the shoulder blade (0.34 units under the skin of the neutral man instead of 0.59
+# on the ribs under it) and the buried humerus is half as long (0.35 instead of 0.70): it leaves the joint through the
+# blade's muscles, not up through the blade (the round-3 review's bone finding; wing/A07, A17: a bird's and a bat's
+# shoulder joint lie just under the skin at the top of the thorax). The feathered arm is slimmer and longer: slid as
+# far, 3.8% of it lay in a body printed without the junction (the print report blocks under 5%); slid 0.20 s, 6.2%
+WING_SLIDE = 0.30
+WING_SLIDE_STYLE = {"feathered": 0.20}
+
+
+_ARM_AXES: dict = {}
+_ARM_AXES_LOCK = __import__("threading").Lock()       # the lab builds from worker threads
+
+
+def wing_arm_axis(style: str, shape: dict) -> np.ndarray:
+    """The unit direction of a wing's rest humerus (shoulder -> elbow) in its OWN frame, for the
+    shape parameters ``shape`` (cached: it does not depend on the root, the sleeve or the
+    feathers' coverts, so a lighter rig gives it)."""
+    light = {k: v for k, v in shape.items() if k not in ("sleeve", "root")}
+    if style == "feathered":
+        light.update(coverts=False, underwing=False)
+    try:
+        key = (style, tuple(sorted((k, repr(v)) for k, v in light.items())))
+    except TypeError:
+        key = None
+    if key is not None:
+        with _ARM_AXES_LOCK:
+            hit = _ARM_AXES.get(key)
+        if hit is not None:
+            return hit
+    from .wings import make_wing_rig
+    j = make_wing_rig(style, **light).skeleton.joints
+    d = np.asarray(j["elbow"], dtype=np.float64) - np.asarray(j["shoulder"], dtype=np.float64)
+    d = d / max(float(np.linalg.norm(d)), 1e-12)
+    if key is not None:
+        with _ARM_AXES_LOCK:
+            while len(_ARM_AXES) >= 64:
+                _ARM_AXES.pop(next(iter(_ARM_AXES)))
+            _ARM_AXES[key] = d
+    return d
 
 
 def back_wings(style: str = "membrane", scale: float = 1.0,
@@ -841,6 +882,11 @@ class Appendage:
     # ``root_point`` as an offset from the anchor's surface point instead of a point in body
     # space (so it follows the body's morphs). Mirrored like the point.
     root_relative: bool = False
+    # (wings) slide the shoulder joint OUT along the arm's own rest axis (shoulder -> elbow) by this
+    # many units, the frame's orientation kept: where the arm crosses the skin and at what angle stay
+    # exactly, less of the humerus is buried (``kinds.WingKind``'s placement version 3). The root
+    # target is converted into the slid frame, so a membrane's attachment line still ends on it.
+    slide: float = 0.0
     # ---- topological placement (additive; ``None`` keeps the legacy behaviour exactly) ----
     # ``anchor_point`` is a point in WORLD space that is re-snapped to whichever body face is
     # nearest on every build, so on a taller or smaller body it lands on a different part of
@@ -1051,8 +1097,12 @@ class Appendage:
         for idx in self._indices():
             M = self._anchor_frame(body_v, body_q, idx, self._point(idx), base)
             kw = dict(shape)
+            surface = M[:3, 3] + np.array([0.0, 0.0, self.offset])          # before the sink (and the slide)
+            if self.slide:
+                M = M.copy()
+                d = M[:3, :3] @ wing_arm_axis(style, shape)
+                M[:3, 3] += float(self.slide) * d / max(float(np.linalg.norm(d)), 1e-12)
             if self._has_root() and "root" not in kw:
-                surface = M[:3, 3] + np.array([0.0, 0.0, self.offset])      # before the sink
                 rp = self._root_world(surface, idx, body_v, body_q, base)
                 local = np.linalg.inv(M) @ np.append(rp, 1.0)      # into wing units
                 kw["root"] = (float(local[0]), float(local[2]))

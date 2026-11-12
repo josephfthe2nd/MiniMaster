@@ -1,0 +1,54 @@
+{
+  "anatomy": {
+    "cap": 1.0,
+    "enabled": true
+  },
+  "appendages": [
+    {
+      "controls": {},
+      "enabled": true,
+      "id": "wing-1",
+      "kind": "wing",
+      "params": {},
+      "placement": {
+        "anchor": {
+          "corners": [
+            8254,
+            8248,
+            10592,
+            10593
+          ],
+          "face": 10296
+        },
+        "offset": -0.9,
+        "preset": "shoulder_blades",
+        "roll": -95.0,
+        "up_hint": [
+          1.0,
+          1.4,
+          -0.45
+        ]
+      },
+      "side": "both"
+    }
+  ],
+  "asymmetry": {},
+  "format": "minimaster-character",
+  "macro": {
+    "african": 0.0,
+    "age": 0.5,
+    "asian": 0.0,
+    "caucasian": 1.0,
+    "gender": 1.0,
+    "height": 0.5,
+    "muscle": 0.55,
+    "weight": 0.5
+  },
+  "materials": {
+    "eye_color": "#5b7c8d",
+    "skin": "SKIN"
+  },
+  "name": "unnamed",
+  "sliders": {},
+  "version": 2
+}

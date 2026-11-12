@@ -776,3 +776,105 @@ def subdivide_patch(verts, quads) -> tuple:
     exact[:V] = ~rim_v
     exact[eoff:] = interior_e
     return (outs if many else outs[0]), out, exact
+
+
+# --------------------------------------------------------------------------
+# what a seam looks like in the picture (round 4: the collar's outline and its contact line)
+
+
+def _box_blur(img: np.ndarray, r: int) -> np.ndarray:
+    """A (2r+1)-wide box blur of a 2-D array with edge replication, by cumulative sums."""
+    out = img.astype(np.float64)
+    for axis in (0, 1):
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (r + 1, r)
+        p = np.pad(out, pad, mode="edge")
+        c = np.cumsum(p, axis=axis)
+        hi = np.take(c, np.arange(2 * r + 1, c.shape[axis]), axis=axis)
+        lo = np.take(c, np.arange(0, c.shape[axis] - 2 * r - 1), axis=axis)
+        out = (hi - lo) / (2 * r + 1)
+    return out
+
+
+def high_pass(rgb: np.ndarray, r: int = 2) -> np.ndarray:
+    """Luminance minus a near-Gaussian blur of it (three box blurs of radius ``r``): edges and fine tone
+    steps, the measure the round-3 critics read the collar's outline with."""
+    g = np.asarray(rgb, dtype=np.float64)[..., :3].mean(axis=2)
+    b = g
+    for _ in range(3):
+        b = _box_blur(b, r)
+    return g - b
+
+
+def seam_report(shells, collar_ids, body_id: int = 0, wall_ids=(), *, size=(320, 320), azimuth=180.0,
+                elevation=10.0, fit=None) -> dict:
+    """How the seams of the root collars read in one picture (``shells``: portrait shells; ``collar_ids``: the
+    indices of the collar shells, ``body_id`` the body's, ``wall_ids`` the appendages').
+
+    * ``outline_hp``: the median high-pass magnitude (:func:`high_pass`) on the pixels where the collar's
+      footprint meets the body's skin -- its outline on the skin: a sticker's outline is a tone step and a
+      serrated z-fight there; ``skin_hp``: the same on the skin 4 to 10 pixels away from every seam and
+      silhouette (the skin's own detail); ``outline_ratio`` the first over the second (about 1: the outline
+      cannot be told from the skin around it);
+    * ``wall_jag``: of the image rows and columns that cross the line where the collar meets an appendage, the
+      share that cross it more than once within 3 pixels (a sawtooth or z-fighting contact line);
+    * ``outline_px`` / ``wall_px``: how many pixels those lines are long in this view."""
+    from . import portrait as po
+    img = po.render_portrait(shells, size=size, azimuth=azimuth, elevation=elevation, fit=fit)
+    vb = po.visibility_buffer(shells, size, azimuth, elevation, fit=fit)
+    sid = vb.shell
+    col = np.isin(sid, np.asarray(list(collar_ids), dtype=np.int64))
+    body = sid == body_id
+    wall = np.isin(sid, np.asarray(list(wall_ids), dtype=np.int64)) if len(wall_ids) else np.zeros_like(body)
+    bg = sid < 0
+
+    def nb(mask):
+        out = np.zeros_like(mask)
+        out[1:] |= mask[:-1]
+        out[:-1] |= mask[1:]
+        out[:, 1:] |= mask[:, :-1]
+        out[:, :-1] |= mask[:, 1:]
+        return out
+
+    def grow(mask, k):
+        for _ in range(k):
+            mask = mask | nb(mask)
+        return mask
+
+    hp = np.abs(high_pass(img))
+    depth = vb.depth
+    # where the footprint meets the skin ON the surface (the two pixels at about the same depth), not where the
+    # body passes in front of the collar or the collar's own silhouette stands over skin behind it
+    z_tol = 0.004 * float(np.nanmedian(np.where(np.isfinite(depth), depth, np.nan)))
+    outline = np.zeros_like(col)
+    for sh_ in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        o_c = np.roll(col, sh_, axis=(0, 1))
+        o_b = np.roll(body, sh_, axis=(0, 1))
+        o_z = np.roll(depth, sh_, axis=(0, 1))
+        with np.errstate(invalid="ignore"):
+            same = np.abs(o_z - depth) < z_tol
+        outline |= (col & o_b & same) | (body & o_c & same)
+    outline &= ~grow(bg | wall, 3)                          # the silhouettes and the wall's line are not the outline
+    seams = outline | (col & nb(wall)) | (wall & nb(col)) | (bg & nb(~bg))
+    near = grow(seams, 10) & ~grow(seams, 4) & (body | col) & ~grow(bg, 6)
+    # medians: a handful of pixels where a run of the collar ends in the cleft beside the root carry the cleft's
+    # own crease; the outline is the long line round the footprint
+    rep = {"outline_px": int(outline.sum()), "outline_hp": float(np.median(hp[outline])) if outline.any() else 0.0,
+           "skin_hp": float(np.median(hp[near])) if near.any() else 0.0}
+    rep["outline_ratio"] = rep["outline_hp"] / max(rep["skin_hp"], 1e-9)
+    # the contact line with the appendage: runs of collar / wall along rows and columns
+    jag = cross = 0
+    for a in (sid, sid.T):
+        c_ = np.isin(a, np.asarray(list(collar_ids), dtype=np.int64))
+        w_ = np.isin(a, np.asarray(list(wall_ids), dtype=np.int64)) if len(wall_ids) else np.zeros_like(c_)
+        state = np.where(c_, 1, np.where(w_, 2, 0))
+        for row in state:
+            idx = np.nonzero((row[1:] != row[:-1]) & (row[1:] > 0) & (row[:-1] > 0))[0]
+            if not len(idx):
+                continue
+            cross += len(idx)
+            if len(idx) > 1:
+                jag += int(np.sum(np.diff(idx) <= 3)) + 0
+    rep["wall_px"] = int(cross)
+    rep["wall_jag"] = float(jag) / max(cross, 1)
+    return rep

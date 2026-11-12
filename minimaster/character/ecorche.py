@@ -75,7 +75,10 @@ def layer_shells(base, verts, placed, layers=LAYERS, *, cut: bool = False, plane
             shells = [po.Shell(cut_mesh(s.mesh, pz, nz), s.material, s.ao, s.ao_strength,
                                s.base_colors) if i == 0 else s for i, s in enumerate(shells)]
     for p in placed:
-        meshes = p.layers()
+        # a kind that lays its inner layers under the skin the body is meshed with takes that skin (the tail's body-side
+        # muscles); the others build theirs from their own model
+        on = getattr(p.kind, "layers_on", None)
+        meshes = on(p, verts) if callable(on) else p.layers()
         for name in layers:
             m = meshes.get(name)
             if m is None or not len(m.faces):

@@ -667,6 +667,7 @@ class _Geometry:
     components: dict                   # group -> [(attached to the body, [shell names])]
     root_share: dict                   # group -> {root shell: share of its vertices inside}
     zmin: dict                         # group -> lowest z (units)
+    crossings: dict = field(default_factory=dict)   # collar shell -> pairs of its own triangles that cross
 
 
 @dataclass
@@ -740,8 +741,12 @@ def _geometry(shells, body: Solid, link_cache: dict, rules: PrintRules) -> _Geom
         sig = (tuple((piece_of(n), round(float(volume[n]), 9)) for n in names),
                hash(dist.tobytes()))
         components[g] = _group_components(solids, names, body, link_cache, sig)
+    # a root collar is a closed shell whose own triangles must not cross: the report checks every shell
+    # alone, and a slicer that does not union a shell with itself prints a crossing as a hole or a lip
+    from .collar import count_crossings
+    crossings = {n: count_crossings(m.vertices, m.faces) for n, m in shells if piece_of(n) == COLLAR_PIECE}
     return _Geometry(list(shells), pp.shell_failures(shells), volume, boxes, components,
-                     root_share, zmin)
+                     root_share, zmin, crossings)
 
 
 def _thickness(shells, rest, rules: PrintRules) -> _Thickness:
@@ -861,6 +866,12 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
     for app, geo, th, kind, params, scale, mapping in analyses:
         for name, msg in geo.failures:
             findings.append(Finding("block", "shell", _rename(name, mapping), msg))
+        for name, nx in geo.crossings.items():
+            if nx:
+                findings.append(Finding(
+                    "warn", "self-crossing", _rename(name, mapping),
+                    f"{name} crosses itself ({nx} pairs of triangles): a slicer that does not union a shell "
+                    "with itself may print the crossing as a hole or a lip", float(nx), 0.0))
         by_group: dict = {}
         for n in (n for n, _ in geo.shells):
             by_group.setdefault(group_of(n), []).append(n)

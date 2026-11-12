@@ -18,8 +18,8 @@ the frontal bone from landmarks of the morphed head:
 
 | layer | what it is | where it is in the code |
 | --- | --- | --- |
-| `bone` | the cornual process of the frontal bone: a cone 0.82 R wide at the skin, tapering over the first 0.62 of the length (the last 0.4 of a bovid horn is solid keratin), widening into the skull below the skin, on a plate of the skull's outer table | `HornModel.bone`, `skull_plate` |
-| `muscle` | the soft tissue between the skull and the skin that the pedestal tents (scalp, galea, periosteum, the germinal cuff): a lens around the cornual process, its upper surface the MOULDED skin less the skin thickness, its lower surface the outer table | `soft_tissue` |
+| `bone` | the cornual process of the frontal bone: a linear cone 0.82 R wide at the skin, to nothing at 0.62 of the length (the last 0.4 of a bovid horn is solid keratin), flaring into the skull's outer table along a concave quarter circle 0.6 R (round 4: no pedestal, no step; the ossicone's bone is a column with a dome a skin thickness under its skin), on a plate of the outer table | `HornModel.bone`, `skull_plate` |
+| `muscle` | the soft tissue between the skull and the skin that the pedestal tents (scalp, galea, periosteum, the germinal cuff): a lens around the cornual process, its upper surface the MOULDED skin less the skin thickness, its lower surface the outer table; under a ram, the temporalis too (round 4); every vertex at least 0.02 units under the DRAWN skin | `soft_tissue`, `temporalis_lens`, `tuck_under_skin` |
 | `skin` | the keratin sheath, the shell that is printed and rendered, with its foot (below); the scalp around it is the body itself, moulded by the junction spec | `HornModel.skin`, `Placed.mesh()` |
 
 `Placed.layers()` returns them as named closed meshes in the MakeHuman frame; `ecorche.layer_shells` and
@@ -102,7 +102,7 @@ Siberian ibex A01; antelope against the gemsbok A22; ossicone against the live g
 | ram | 3.0, 0.28 | 41 | spiral, Psi 275 deg, q 1.35, bends back, down and out | 0.80 + keel | temple crest | bone |
 | spiral | 4.0, 0.13 | 40 | spiral Psi 40 deg + 2.25 turns of helix | 1.0 | crown | bone |
 | antelope | 4.0, 0.13 | 45 | lyre: +23 deg out, then back | 0.90 | crown | bone |
-| ossicone | 0.45, 0.15 | 20 | spiral Psi 3 deg | 1.0 | crown | skin |
+| ossicone | 0.55, 0.15 (round 3: 0.45) | 20 | spiral Psi 3 deg | 1.0 | crown | skin |
 
 The **ossicone** is the one shape that is skin-covered bone (a giraffe's): the whole surface has the skin
 material, so its foot is the concave skin fillet of A29 (flare 0.45 ~ the measured 0.5 radii), it tapers by only a
@@ -490,3 +490,251 @@ the groove/bead test is replaced by one that fails on a step at the skin line or
 the lean's direction (a lean turned inward fails it, not only the incidental layers tests); the soft-tissue test checks
 containment on every shape instead of its own formula; the lone-horn and field tests compare with the FIGURE's skin. 23
 single-line mutations of the round-2 code were run against them on the final tree (`scratchpad/junction/S6b_horn_s/mut.py`): all 23 are caught.
+
+
+## Round 4 (S7): one skin over the ossicone, a bone that grows out of the skull, the head's own midline, the ranges that break
+
+The round-3 critic (independent, on real-pipeline renders against the reference library) scored the horn location 6,
+bone 4.5, muscle 5, skin 5, silhouette 5.5, robustness 6.5, print 7, verdict REVISE, with six blocking findings. What was
+done about each, how it was measured, and what is still wrong. Everything below was measured on this track's tree
+(835af09 + this patch) and, where the picture depends on the renderer, on 835af09 + the core track's S7_core patch + this
+patch (the merged tree): the critic's own `hv.py` renders through the real pipeline.
+
+### 1. The ossicone is one surface of skin (no cuff, no lip, no sock line)
+
+Round 3 drew the skin-covered ossicone (A29, A30: skin and hair run over the bone with no line anywhere) with the skin's
+cuff (`collar.py`, a SECOND shell) whose top edge was a pale scalloped lip round its base, a hard tone band at 55 % of its
+height and two tone rings in the scalp. The band's cause (the critic's): the shortened `FOOT_HEIGHTS` bunched the last foot
+rings under the first shaft ring and the profile's slope jumped from -0.30 to -0.09 there.
+
+* **No cuff.** `HornKind.collar_profile` returns `None` for a shape whose `SHAPES` row has `collar=None` (the ossicone);
+  the `collar` parameter no longer applies to it (a saved record keeps the key, unused).
+* **The fillet is the sheath's own foot** (`foot="fillet"`, `HornModel.fillet_generatrix`, `_fillet_foot`): a concave
+  quarter circle of `flare` base radii (default 0.5: A29's valley fillet, 0.25 of the base width) from the column down to
+  the skin, sampled every `FILLET_STEP` 5 degrees; it is cut where it is `gamma` (6) degrees off the skin and goes on
+  straight through the skin to `dive` 0.06 base radii under it, then steeply to 0.12 (a sheet that ends tangent to a skin
+  of other facets stands off it: the lip). Above it the column's rings become planar over `FILLET_BLEND` 1.2 base radii,
+  spaced like the shaft's. Each ring's radius is the column's own taper at each vertex's height plus the fillet: the
+  profile is C1 by construction.
+* **Fitted to the skin as it is DRAWN**: the moulded cage subdivided once (the core track's default level; level 2 lies
+  within 0.006 units of it under the foot, and the dive goes 0.009 under). On the cage the skin stood up to 0.03 units
+  (0.2 base radii) off the drawn one where the junction lifts the scalp (`S7_horn_tools/gap.py`).
+* **Shaded as the skin where it meets it**: the renderer shades every shell with its own normals and its own cavity
+  term, so where the foot dives under the skin at 6 degrees the two shadings interleaved into a ragged ring
+  (`oss_now_base_L1.png`, the last row below). The ossicone's mesh is a `hornrig.ShadedMesh` that carries the drawn
+  skin's normals and cavity term at and under the skin, blending to its own between 0.05 and 0.3 fillet radii over it
+  (`shade_foot`, `SHADE_BAND`): the protocol of the core track's `collar.CollarMesh` (`shading_normals`,
+  `shading_cavity`), which its 7-line hook in `portrait._shell_colors` draws. 835af09's renderer ignores the attributes
+  (the geometry, and the print, are the same either way): **the ring disappears only with the core track's hook merged.**
+* **A stub** (a big `base_radius` the head limits keeps the record's proportions: 0.6 builds 0.17 long on a 0.18 radius)
+  has its fillet and blend scaled down together to end under 0.85 of its length (`fillet_generatrix(room=...)`; before,
+  the foot's top stood above the tip). `flare` (the fillet's radius) has the range `FILLET_RHO` 0.2-1.0 for the
+  ossicone (the slider was dead outside it).
+* **Proportions** (A29, the giraffe silhouette of TAKEAWAYS 4): length 0.55 (0.45 read stubby), column H/W 1.83,
+  taper 0.94 / 0.88 / 0.82 of the column at 25 / 50 / 75 % (A29: 0.94 / 0.88 / 0.82 of its column), tip 0.75 R, a dome of
+  eight rings (was three), 40 facets (skin: no keratin facets to match); a smaller tent (`tent` 2.6 R wide, 0.2 R high, at
+  least 0.03 units) and a narrower, lower junction fillet under the foot's own (`tube` 0.5 x 0.4) took the two tone
+  rings out of the scalp.
+
+![round 3 (top) against A29; round 4 at levels 1 and 2 on the merged tree; round 4 without the core's renderer hook](images/horn_r4_ossicone.png)
+
+![round 4 on five bodies, level 1, merged tree](images/horn_r4_ossicone_bodies.png)
+
+Measured on the built mesh, four bodies (`S7_horn_tools/ossnum.py`; tests in `tests/test_horn_ossicone.py`):
+
+```
+                    profile turn a ring (deg)        crossing the drawn skin (deg)
+                    over the fillet   column         level 1 max / p50   level 2 max / p50
+round 3   neutral   18.2              18.2           68.7 / 46.7         68.2 / 48.2       (the sheath under its cuff)
+round 4   neutral    5.3               0.5           11.8 /  4.8          8.9 /  4.4
+          child      4.8               0.5           10.3 /  4.5          6.5 /  4.4
+          tall       5.1               0.5           10.3 /  4.8         11.4 /  4.5
+          heavy      5.3               0.5           11.8 /  4.8          8.9 /  4.4
+```
+
+The deepest ring is under the drawn skin all round at levels 1 and 2 on every body (no lip). The same numbers at the
+ossicone's other ends (`S7_horn_tools/ossnum2.py`, level 1 / level 2 crossing p50 and max): tilt 0 5.2 / 8.3 and 5.3 / 7.9,
+tilt 45 4.0 / 17.0 and 3.9 / 12.7 (the column turns 3.8 degrees a ring there), flare 0.2 5.1 / 15.2, flare 1.0 3.8 / 8.9,
+the brow site 4.4 / 10.6, length 0.3 5.2 / 12.5, random faces 0 / 9 / 57 4.7-4.9 / 12.7-13.1; the rim is 0.04-0.09 base
+radii under the drawn skin in every case. At **level 0** the cage, up to 0.03 units over the level-1 skin near the root,
+crosses the fillet more steeply (p50 13 degrees, at most 31 on the default; tilt 45 at most 72); with the carried shading
+the level-0 pictures show no ring either (`S7_horn_out/sheet_ossicone_L0.png`). A picture measure of the band
+round the root (`S7_horn_tools/rimseam.py`: high-pass of the image on the skin 1.0-2.2 root radii from the axis over the
+skin 2.6-3.4 out, three views, silhouettes masked) reads 2.07-2.23 for round 4 without the hook and 1.36-1.44 with it
+(round 3: 1.15-1.30, but there that band is the cuff's own smooth top, its rim lies outside the band): a crude measure that
+also counts the valley's own shading; the pictures are the evidence. A pair builds in 0.29 s (round 3: 0.08 s): the
+level-1 field and the shading transfer; a draft (the lab's drag preview) skips both and builds in 0.13 s.
+
+### 2. The ranges that broke stop where they break
+
+`tilt` ends at `TILT_MAX` 45 (was 60: the cuff split in two with a skin-coloured crack across the horn and the low side
+of the sheath lay along the scalp as a keratin tongue); `ring_verts` starts at `RING_VERTS_MIN` 24 and ends at 48 (was
+5-32: a hexagonal sheath tore the cuff into teeth). Typing a value past them is an error (`new_spec`), a saved record
+with one builds at the limit with an `AppendageWarning` that says so and keeps its value. The extremes grid
+(`test_extremes_build_clean_skin_and_sheaths_that_do_not_cross`) now has tilt 45, 24 facets and twist +-3, and checks
+that each sheath stays on its own side of the head's midline.
+
+**Twist** was uncapped (`psi_b = twist x L / 2`): an antelope at twist 3 crossed itself 166 times, a curved pair met
+over the head (140 crossing faces), a curved horn of length 12 at twist 3 crossed itself 3,884 times and its partner 3,384
+times. Now the total turn `hypot(psi, psi_b)` is held to the planar spiral's cap (`HornModel.psi_b`) and, where the twist
+turns the pair inward, it keeps the share of its turn that leaves every sheath `TWIST_MARGIN x TENT_MARGIN` off the head's
+midline (`twist_room`, bisection on `twist_scale`; the build report says so). Every shape at twist +-3 and at twist 3 with
+length 12: 0 self-crossings, 0 between the pair (`S7_horn_tools` + the critic's `cross.py`).
+
+![round 3 against round 4: random face 0 (front, top) and twist 3](images/horn_r4_midline_twist.png)
+
+![tilt 45, the new maximum, merged tree, level 1](images/horn_r4_tilt45.png)
+
+### 3. Scale and midline from the head's own centre
+
+`--randomize-face` moves the whole head sideways: the skull-base and crown joints, the eyes and every slab of the skull by
+the same amount (seed 0: -0.162 at every height from 30 to 90 % of the head). Round 3 measured the skull's half-width as
+its largest `|x|` and the midline margins from world `x = 0`. `Head.mid` is the head joints' x now; `skull_halfwidth` is
+half the slab's width, `local_halfwidth`, the radius limit, the tent's and the fillet's margins and the right side's
+keeps (the ear, the eye) are measured from `Head.mid`; the side of a horn comes from the record, not the sign of x.
+A rigid sideways shift of the body now translates both horns to 1.8e-15 and changes nothing else
+(`test_a_head_moved_sideways_moves_its_horns_and_changes_nothing_else`; round 3: a different horn).
+
+```
+seed amount   head x   k (round 3 -> 4)   R (round 3 -> 4)   limited (round 3 -> 4)   true half-width / largest |x|
+-    -        0.000    1.000 -> 1.000     0.170 -> 0.170     -        -> -            0.693 / 0.693
+0    0.35    -0.162    1.238 -> 1.004     0.155 -> 0.171     midline  -> -            0.696 / 0.859
+9    0.35    -0.158    1.273 -> 1.046     0.173 -> 0.178     midline  -> -            0.725 / 0.883
+4    0.35    +0.046    1.050 -> 0.984     0.179 -> 0.167     -        -> -            0.682 / 0.728
+11   0.35    +0.070    1.116 -> 1.015     0.190 -> 0.172     -        -> -            0.703 / 0.773
+21   0.60    -0.096    1.155 -> 1.016     0.196 -> 0.173     -        -> -            0.704 / 0.801
+57   0.60    +0.171    1.145 -> 0.898     0.119 -> 0.153     midline  -> -            0.623 / 0.794
+88   0.60    -0.085    1.012 -> 0.889     0.164 -> 0.151     midline  -> -            0.617 / 0.701
+```
+
+Round 3's scale was 5-27 % too big on every random face and four of seven were limited by a midline that was not there
+(the two errors partly cancelled). `test_the_horn_is_sized_by_the_skull_not_the_eyes` asserted the phantom limit on seeds 0
+and 9; it now asserts the true half-width and no limit there.
+
+### 4. The bone grows out of the skull (A05) and the ossicone's is a column with a dome (A29, A30, A16)
+
+`core_radius` is A05's linear cone (0.75 / 0.50 / 0.25 of the base at 25 / 50 / 75 % of the core), continued straight into
+the skull; round 3's pedestal (1.12 R under the skin, stepping to the cone at the foot's top: the critic's "plumbing
+reducer") is gone. `bone()` builds it on the skull's outer table (the unmoulded skin less the scalp, `SCALP_THICK`), flaring
+into it along a concave quarter circle `CORE_FLARE` 0.6 base radii, its rings following the table and becoming planar above
+the flare. Measured on the built bone (`test_the_bone_is_a_cone_that_flares_into_the_skull_with_no_step`, four shapes, two
+bodies): the section never widens going up, a generatrix turns at most 10 degrees a ring over the flare and at most the
+path's own curl above it (the ram curls from its root: 16 degrees; round 3: a flat shoulder). The ossicone's bone fills it
+a skin thickness under its skin (at most 0.35 R), a column to a dome about a skin thickness under the skin's dome
+(`test_the_ossicones_bone_is_a_column_with_a_dome_not_a_spike`; round 3: 0.1 of its base wide at 90 % of its height).
+
+![A05 against the curved horn's core on the table (bone only), round 3's pedestal; A30 against the ossicone's bone; the ram's core](images/horn_r4_bone.png)
+
+**Every layer vertex is under the drawn skin by a true distance** (`tuck_under_skin`): the lens and the plate are height
+fields along the horn's axis and their rims stood out of the temple (round 3: 4-13 vertices, up to 0.1 base radii); they now
+also stop where the skin under them is the eye's or the ear's (the junction's keeps: the ram's lens reached into the
+eyelid's fold), and any vertex nearer the drawn skin than `LAYER_DEPTH` 0.02 (the bone outside the sheath: `BONE_DEPTH`
+0.04, under the lens) is moved in along the skin's normal (or toward the head's centre where two sheets of skin meet).
+Measured with the true closest-point distance to the shaped body at levels 1 and 2, every shape, neutral / child / tall /
+heavy: 0 vertices out (`test_the_layers_are_under_the_drawn_skin_by_true_distance`, which replaces round 3's proxy).
+
+### 5. Muscle: the temporalis under a ram; tests that can fail
+
+* **The ram sits on a temporalis** (H05: the fan fills the temporal fossa under the superior temporal line, its bulk
+  behind the orbit; H14: a strong one bulges the temple). `TEMPORALIS` (down 0.24, back 0.10 head units from the root,
+  0.30 wide, 1.45 times longer front to back, a 0.032 swell): the ram's spec has a second mound there along the skin's
+  normal, and the muscle layer has the temporalis lens (`temporalis_lens`, merged with the root's lens). Under the ram's
+  head bound (0.12, unchanged: the core's test of the visible head's width still holds it to 10.5 %) the swell lifts the
+  skin by 0.013 units on the neutral and heavy bodies, 0.009 on the child (`S7_horn_tools/temporal.py`): about half of what
+  was asked. It reads at head scale as a slight fullness of the temple under the root, not as H14's bulge.
+
+  ![the ram with and without the temporalis swell, level 2](images/horn_r4_temporalis.png)
+
+* **M7** (the default 24 facets back to 16) survived every geometric test in round 3. `test_the_sheath_is_round_enough_where_
+  its_cuff_meets_it` measures the facets' sagitta on the built sheath where the cuff meets it: 24 sides 0.0022-0.0036 units
+  (the ram's 32: 0.0020-0.0030), 24 on a ram 0.0035-0.0048 (so the ram keeps 32), a 16-gon 0.0046 on the neutral curved
+  horn; the bound is 0.004 (M7 is caught, so is the ram at 24).
+* **M4** (`BEND_LIMIT` 0.7 -> 0.85) survived the fold test, whose bound was 0.8: the bound is 0.66 now (the grid's worst
+  is 0.607; with 0.85 it is 0.741).
+* The soft-tissue checks that were true by construction (the lens under the field it was built from, its top over its
+  bottom) are gone; containment is now the true distance over all vertices (above).
+
+### 6. Documents
+
+Nothing in a saved document is rewritten; `.mmchar` v1/v2 load as before. The critic's round-3 document
+(`tests/fixtures/horns_round3.mmchar`: a ram, and a spiral with `ring_verts` 16 on a random face) loads, builds with one
+warning ("ring_verts = 16 is outside [24, 48]: using 24") and saves byte for byte. A horn the head limits to less than
+0.98 of its size now says so in the build report (was 0.9; the first version's `base_radius` 0.42 builds at about 0.6 of its
+size, with the note). The twist note is new.
+
+### Disclosure: how an existing saved document renders now (round 4)
+
+* every **ossicone**: no cuff (a record's `collar` is kept and ignored); its own concave fillet foot; 0.55 long and 40
+  facets around unless the record set them (was 0.45 and 24); a finer dome; a smaller tent; its `flare` now means the fillet's
+  radius in base radii (0.2 to 1; a stored 0.45 builds a 0.45 R fillet);
+* **random faces**: every horn's size changes (table above: -12 % to +29 % of round 3's radius), and a horn round 3
+  limited by the phantom midline is no longer limited;
+* `tilt` above 45 builds at 45, `ring_verts` under 24 at 24 (with a warning each);
+* `twist`: the total turn is capped and a twist that turns the pair into each other is reduced (a note says so);
+* the **ram** has a slight temporal swell; every horn's **bone and muscle layers** (the ecorche view) are new shapes;
+* with `--subdivide 0` (or `Lab(levels=0)`) the ossicone's fillet, fitted to the level-1 skin, is crossed by the cage up
+  to 0.03 units higher near the root (p50 13 degrees); the carried shading hides it on the merged tree, a crease shows
+  without it (an ossicone-ONLY figure has no collar, so the core's CLI default asks for level 0 there: see the limits);
+* an ossicone record with `flare` outside 0.2-1.0 builds at the limit with a warning.
+
+### What is still wrong (honest)
+
+* **The ossicone's seamless root depends on the core track's renderer hook** (`portrait._shell_colors` reading
+  `shading_normals`). On 835af09 alone the dive's edge shows as a soft ragged ring (the last row of the first image).
+* An ossicone-only figure: the core track's `collar.default_levels(placed)` asks the kind's `collar_profile`, which is
+  `None` now, so the CLI's default level is 0 for it (the lab's record path still says 1, from the `collar` parameter's
+  default). At level 0 the cage crosses the fillet at p50 13, up to 31 degrees near the root (72 at tilt 45).
+* The **ram's temporalis swell** is held to about half its height by the ram's head bound: subtle at head scale. The
+  temporalis lens and the root's lens are one red mass in the ecorche, not a legible fan.
+* The **ram** still reads as a thick tube leaving the temple from the front (its curl starts at the root); its root is not
+  moved above and behind the orbit (A31).
+* The **pair of ossicones** is still about 3 widths apart (A29: 1.2-1.5); no poll preset.
+* **Twist +3** on a curved pair keeps the tips 0.075 apart over the head: legal, not pretty.
+* The **spiral** still reads as an S-bent tube, the **growth rings** are uniform and deep, a **child** gets adult-size
+  horns (minor findings of round 3, not addressed).
+* The temporalis, the twist guard and the level-1 fit cost build time (warm, best of three, a pair, final / draft): curved
+  0.095 / 0.082 s, ram 0.185 / 0.164, spiral 0.131 / 0.108, antelope 0.121 / 0.087, ossicone 0.293 / 0.129 (the `SkinField`
+  grid made the height queries about 7x faster; without it the ossicone took 2.4 s). The lab builds a dragged pair's left
+  side only.
+* The **ram's skull plate** in the bone-only view is crumpled at its edges where the tuck pressed it under the temple's
+  skin; the **ossicone at tilt 45** turns 3.8 degrees a ring in its column (the blend over a strongly tilted scalp);
+  the ossicones still lean about 45 degrees out from vertical on the neutral head (A30: about 20); a tilt near 30 stands
+  them up, not done (a default change for every saved ossicone).
+* The facet test is a proxy: the sagitta of the sheath's polygon against a bound (0.004 units) fitted between the
+  24-gon's worst (0.0036) and the 16-gon's (0.0046), not a measure of the cuff's contact line (the core track measures
+  that).
+
+### References used in round 4
+
+* **A29** (giraffe ossicones, live): the valley fillet 0.5 R, the column's taper, no seam -> the fillet foot, the
+  proportions, no cuff. **A30** (giraffe head): a skin-covered column ending in a dome -> the ossicone's bone and its dome.
+  **A16** (giraffe skull): the bone the skin drapes over -> the bone fills the ossicone.
+* **A05** (goat skull, scale bar): the linear core and its continuous flare into the frontal bone -> `core_radius`,
+  `CORE_FLARE`, no pedestal.
+* **H05** (Gray 382) and **H14** (hypertrophied temporalis): where the temporalis lies under a temple horn and how it
+  shapes the skin -> `TEMPORALIS`.
+* TAKEAWAYS sec. 4 (ossicone H/W 1.5-1.75; the checklist's "temple root needs a muscle mound").
+
+### Mutations (round 4)
+
+Each one-line mutation of this round's code against the tests that must catch it (`S7_horn_tools/mutrun.py`, a scratch
+copy, `-x`): 27 run, 26 caught. Caught: the skull's width as its largest |x|, the radius limit / the tent's and fillet's
+margins / the local half-width / the right side's keeps measured from world x = 0 (five), `TILT_MAX` 60, `RING_VERTS_MIN`
+5, the default 24 facets back to 16 (M7), the ram at 24, the twist uncapped, the twist guard off, the ossicone's cuff back,
+the fillet foot off, the foot fitted to the cage, the fillet's arc in 20-degree steps, a step in the column's radius at the
+blend, the carried shading off, no dive under the skin, the bone's flare off, round 3's pedestal back, the ossicone's bone
+a spike, the layers not tucked, the lens reaching the eye's keep, the temporalis off, the temporalis flat, `BEND_LIMIT`
+0.85 (M4). Survived: `FILLET_BLEND` 1.2 -> 0.05 (the column's rings go planar within a twentieth of a base radius): an
+equivalent mutant, since each ring's radius is the cone's at its own vertices' heights the surface is the same cone and only
+the rings' spacing on it changes. Two first versions of tests were tautological (a bound written with the constant they
+guard: `FILLET_STEP + 1`, `CORE_BASE + 0.5 CORE_FLARE`) and let the arc-step and no-flare mutants through; they use fixed
+numbers now.
+
+### Tests (round 4)
+
+`tests/test_horn_ossicone.py` (new: no cuff, C1 profile on the built mesh, crossing angle and rim against the drawn skin at
+levels 1 and 2, the carried shading through the pipeline's transform, print and build time);
+`tests/test_horn_anatomy.py`: the sideways shift, the true scale on seeds 0 and 9 (the phantom-midline assertion is
+replaced), the UI ranges and old records beyond them, the extremes grid with tilt / facets / twist and the midline, the
+bone's flare and the ossicone's column, the true containment of every layer, the facets, the temporalis, the round-3
+document; `tests/test_horn_collar.py`: the cuff on the keratin shapes only.

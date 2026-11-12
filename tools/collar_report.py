@@ -1,19 +1,22 @@
 """The numbers of the root collar (``minimaster.character.collar``) on the real body.
 
-    python tools/collar_report.py [--bodies neutral,tall,short,child,heavy] [--levels 1,2]
-        [--poses rest,curl,droop,lift,lift70,sway] [--spec tail]
+    python tools/collar_report.py [--bodies neutral,tall,short,child,heavy,slim_f] [--levels 1,2]
+        [--poses rest,curl,droop,lift,lift70,sway,low60,lift90,swing-45,raise60] [--spec tail]
 
-For every body x level x pose (the tail's pose controls) it builds the character, the shaped skin and the
-collar and prints, over the part of the collar that can be seen (a collar thinner than 0.04 units is a hair
-on the fold side and not counted):
+For every body x level x pose (the appendage's pose controls) it builds the character, the shaped skin and the
+collar and prints, over the part of the collar that can be seen (a column whose visible reach is under 0.04
+units is not counted):
 
-* ``rim``     the angle between the renderer's vertex normal of the collar at its rim and the skin's (p50 / p95);
-* ``wall``    the same where the collar meets the tail, against the tail's shaded normal (p50 / p95);
-* ``before``  the angle between the skin and the tail wall where they meet WITHOUT the collar (p50): 90 = the skin
-              runs into the wall, 0 = tangent -- what the collar replaces;
-* ``min h``   the lowest the visible sheet gets over the skin (units, >= -0.002 = never under it);
+* ``rim`` / ``wall``  the angle between the normal the RENDERER draws the collar with (the skin's own where it
+              meets the skin, the wall's where it meets the appendage: ``collar.shading_transfer``) and the skin's /
+              the appendage's shaded normal, p95 (0: no edge in the shading);
+* ``geo``     the same with the collar's OWN geometric normals, rim / wall p95: the angles the sheet crosses the skin
+              (``GAMMA_SKIN_DEG``) and enters the wall (``ALPHA_WALL_DEG``, less where the profile is flatter);
+* ``before``  the angle between the skin and the wall where they meet WITHOUT the collar (p50);
 * ``crease``  the 99th percentile of the dihedral between neighbouring faces of the visible sheet (degrees);
-* ``self``    pairs of crossing triangles in the whole shell (the hair-thin fold side has a few);
+* ``wwave``   the wobble of the line where the collar enters the wall (root radii, ``collar.contact_lines``);
+* ``fold``    columns whose sheet faces away from the skin where it meets it; ``self`` pairs of crossing triangles;
+* ``kept``    the share of the ring that has a collar (the rest: the fold side, a leaning wall, a cut column);
 * ``ms``      the time of ``collar_pieces`` with the body mesh given (what a pipeline pays per root).
 
 Needs the CC0 assets like every character command. Run from the repository root.
@@ -41,7 +44,8 @@ BODIES = {
     "slim_f": {"weight": 0.0, "gender": 0.0},
 }
 POSES = {"rest": {}, "curl": {"curl": 1.2}, "droop": {"droop": 0.9}, "lift": {"lift": 40.0},
-         "lift70": {"lift": 70.0}, "sway": {"sway": 40.0}}
+         "lift70": {"lift": 70.0}, "sway": {"sway": 40.0}, "low60": {"lift": -60.0}, "lift90": {"lift": 90.0},
+         "swing-45": {"swing": -45.0}, "raise60": {"raise_": 60.0}}
 
 
 def main(argv=None) -> int:
@@ -53,15 +57,19 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     base, lib = mh.load()
     cat = SliderCatalog(lib.names)
-    print(f"{'body':8s} {'L':>1s} {'pose':7s} {'rim p50/p95':>12s} {'wall p50/p95':>13s} {'before':>7s} "
-          f"{'min h':>7s} {'crease':>7s} {'self':>5s} {'seen':>5s} {'ms':>5s}")
+    print(f"{'body':8s} {'L':>1s} {'pose':8s} {'rim/wall':>9s} {'geo r/w':>11s} {'before':>7s} "
+          f"{'crease':>7s} {'wwave':>6s} {'fold':>4s} {'self':>5s} {'kept':>5s} {'ms':>5s}")
     for body in args.bodies.split(","):
         for pose in args.poses.split(","):
             c = Character()
             c.macro.update(BODIES[body])
             c.appendages.append(kinds.add_from_text(args.spec, c.appendages, base=base, lib=lib))
             if POSES[pose]:
-                c.appendages[0].controls = dict(POSES[pose])
+                keys = {cs.key for cs in kinds.kind_of(c.appendages[0]).controls}
+                ctl = {k: v for k, v in POSES[pose].items() if k in keys}
+                if not ctl:
+                    continue                                   # a pose this kind does not have
+                c.appendages[0].controls = ctl
             verts = lib.apply(base.verts, c.effective_target_weights(cat))
             placed = c.instantiate_appendages(base, verts, lib)
             shaped = c.shaped_body(base, verts, placed)
@@ -69,12 +77,12 @@ def main(argv=None) -> int:
                 skin = CO.skin_from_cage(base, shaped, lv)
                 r = CO.join_report(base, shaped, placed[0], None, levels=lv, skin=skin)
                 if not r:
-                    print(f"{body:8s} {lv:1d} {pose:7s} (no collar)")
+                    print(f"{body:8s} {lv:1d} {pose:8s} (no collar)")
                     continue
-                print(f"{body:8s} {lv:1d} {pose:7s} {r['rim_p50']:5.1f}/{r['rim_p95']:5.1f}  "
-                      f"{r['wall_p50']:5.1f}/{r['wall_p95']:6.1f} {r['before_p50']:7.1f} {r['above_skin_min']:7.4f} "
-                      f"{r['crease_p99']:7.1f} {r['self_crossings']:5d} {100 * r['visible_share']:4.0f}% "
-                      f"{1000 * r['seconds']:5.0f}")
+                print(f"{body:8s} {lv:1d} {pose:8s} {r['rim_p95']:4.1f}/{r['wall_p95']:4.1f} "
+                      f"{r['geo_rim_p95']:5.1f}/{r['geo_wall_p95']:5.1f} {r['before_p50']:7.1f} "
+                      f"{r['crease_p99']:7.1f} {r['wall_wave']:6.3f} {r['fold_columns']:4d} {r['self_crossings']:5d} "
+                      f"{100 * r['kept_share']:4.0f}% {1000 * r['seconds']:5.0f}")
     return 0
 
 

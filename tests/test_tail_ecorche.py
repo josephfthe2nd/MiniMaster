@@ -54,7 +54,7 @@ def test_layer_shells_draw_each_layer_with_its_own_material_and_colour_the_sleev
                                                   po.sh.hex_to_linear(E.TENDON)))
     n_sleeve = len(p.model.model().muscle().vertices)
     assert np.allclose(cols[0], muscle_red) and np.allclose(cols[n_sleeve - 1], tendon)   # sleeve root pole: belly; tip pole: tendon
-    assert np.allclose(cols[n_sleeve:], muscle_red)                       # the body-side masses (lenses) are all muscle
+    assert np.allclose(cols[n_sleeve:], muscle_red)                       # the body-side muscles are all muscle
     # the model's belly fraction is the same one that colours it
     assert np.allclose(p.model.model().muscle_belly()[:5], 1.0)
     # every layer a kind has is drawn, with its own material (the horn's too: bone core, soft-tissue lens, sheath), and
@@ -69,6 +69,26 @@ def test_layer_shells_draw_each_layer_with_its_own_material_and_colour_the_sleev
         assert len(shell.mesh.vertices) == len(hp.layers()[name].vertices)
     # ... and a kind without an anatomy has the skin only
     assert len(E.layer_shells(base, v0, [_plain_placed()], ("bone", "muscle", "skin"), body=False)) == 1
+
+
+@assets
+def test_the_tails_body_side_muscles_are_drawn_under_the_skin_the_view_meshes(world):
+    """The tail's body-side muscles are laid under the skin the body is MESHED with (round 4): ``layer_shells`` hands the
+    body verts it draws to the kind (``TailKind.layers_on``), so a view of a body whose skin another appendage's junction
+    (or none) shaped draws them under that skin, not under the tail's own moulding. Here: the same tail drawn on the
+    shaped body and on the unshaped one gives different muscles, each the kind's ``layers_on`` of that body."""
+    from minimaster.character import junction as J
+    base, _, v0 = world
+    p = K.instantiate_all([K.new_spec("tail")], base, v0)[0]
+    shaped = J.shaped_body(base, v0, [p])
+    xf = po.MH_TO_Z_UP
+    drawn = {}
+    for name, verts in (("shaped", shaped), ("plain", v0)):
+        shells = E.layer_shells(base, verts, [p], ("muscle",), body=False)
+        want = p.kind.layers_on(p, verts)["muscle"].transform(xf)
+        assert np.allclose(shells[0].mesh.vertices, want.vertices)
+        drawn[name] = shells[0].mesh.vertices
+    assert not np.allclose(drawn["shaped"], drawn["plain"], atol=1e-4)
 
 
 class _Plain(K.Kind):

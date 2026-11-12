@@ -55,7 +55,7 @@ _EPS = 1e-12
 # the sampling of the shell (the task asks for >= 48 x >= 12; the visible part is 3 + RINGS rings)
 SEGMENTS = 72
 RINGS = 14
-SKIRT_U = (0.04, 0.1, 0.2, 0.35, 0.6, 1.0)      # the dive under the skin past the rim, in skirt widths (graded: a gentle start)
+SKIRT_U = (0.3, 0.65, 1.0)      # the skirt that closes the sheet under the skin past the dive, in skirt lengths
 SKIRT_WIDTH = 0.9                               # the skirt is this many widths (of the visible reach) wide
 ARC_ANGLES = (2.5, 7.0, 16.0, 32.0, 55.0, 90.0)
 LEAN_FROM_DEG, LEAN_FULL_DEG = 62.0, 100.0      # where the wall leans over the skin (angle to the outward skin direction) the collar fades out
@@ -71,6 +71,30 @@ WALL_PAD = 0.002                                # the join ring stands this far 
 CREASE_DROP_DEG = 28.0                          # ... or whose chord leaves the tangent plane of the one before by more than this (a groove narrower than a step)
 CREASE_STEP_DEG = 18.0                          # a crease: consecutive stations of the march whose skin normals differ by more than this           # degrees: the sheet curves into the appendage
 SKIN_MATERIALS = ("skin", "appendage")
+ALPHA_WALL_DEG = 20.0   # the sheet meets the appendage's wall at this angle and goes in: a clean contact line (round 4)
+GAMMA_SKIN_DEG = 5.0    # ... and goes under the skin at this angle (CollarProfile.ramp = its tangent)
+CUT_WIDTH = 0.02        # units: a column narrower than this (or CUT_REL root radii) has no collar: the ring opens
+CUT_REL = 0.08
+DIVE_SHARE = 0.5        # past the crossing the sheet dives to this share of the sink, then the skirt closes it
+DIVE_U = (0.4, 0.75, 1.0)
+SKIRT_LEN = 2.0         # the skirt that closes the sheet under the skin is this many sinks long
+MIN_SECTOR = 6          # fewer columns than this: no collar
+MIN_RUN = 10            # a run of collar columns shorter than this is dropped (it would be all taper)
+GUARD_ITERATIONS = 3    # cut the columns whose triangles cross (or whose sheet folds), at most this many times
+GUARD_CHECK = True
+TAPER_COLS = 4.0        # a run of collar columns tapers to nothing over this many columns at each end
+SINK_MAX_REL = 0.12     # root radii: the underside need only be under the skin for the slicer's union, not deep
+SINK_MIN_REL = 0.01     # ... and never less than this
+ARC_RADIUS = 0.3        # the turn into the appendage, in its radius at the root
+TURN_MAX_DEG = 40.0     # the skin under a collar may turn this far from the exit's normal; the reach ends there
+CONVERGE_MIN = 0.35      # neighbouring columns may come this close (of their spacing at the exit) before the reach ends
+TOP_SMOOTHING = 4       # rounds of 1-2-1 smoothing of the top edge's height around the ring
+RAY_GROUP = 0.04        # rays within this much arclength of each other are cast against one slab of the wall
+RAY_SLAB_PAD = 0.03     # ... the triangles spanning it, padded by this much
+EXIT_STEPS = 6          # secant steps fitting the exit curve to the skin
+BOTTOM_STEP = 3         # the underside of the shell keeps every third station
+POLY_GAP_SPREAD = 0.4     # corners of a tilted ring seen from the axis are unevenly spaced: this much spread is a polygon
+FOLD_DEG = 60.0         # a sheet whose normal where it meets the skin is this far off the skin's is folded
 MIN_LEVEL = 1          # the body must be meshed at level 1 or 2: level 0 is the 0.28-unit cage, a coarse polyhedron the collar would stand off in flaps
 
 
@@ -105,7 +129,7 @@ class CollarProfile:
     sink: float = 0.2
     falloff: float = 2.5
     lift: float = 0.0
-    ramp: float = 0.035
+    ramp: float = 0.0875
     open_deg: float = 60.0
     fold_deg: float = 115.0
     up: tuple | None = (0.0, 1.0, 0.0)
@@ -172,6 +196,59 @@ def _smoothstep(u):
 
 def _cross(a, b):
     return np.cross(a, b)
+
+
+# --------------------------------------------------------------------------
+# a shell that carries its own shading
+
+
+class CollarMesh(Mesh):
+    """A collar shell that carries the normals and the cavity term it is SHADED with
+    (``shading_normals`` (n, 3), ``shading_cavity`` (n,), or ``None``: the renderer computes its own).
+
+    Why: the renderer shades every shell with area weighted vertex normals and a cavity AO computed on
+    that shell alone, so a separate shell lying on the skin is drawn with its own normals and its own
+    occlusion: a tone patch the size of its footprint, and where the two surfaces are within the depth
+    buffer's precision of each other (the rim, tangent to the skin) a serrated z-fighting outline (the
+    round-3 "sticker").  The collar therefore carries the SKIN's shading near its rim and the WALL's near
+    its top edge, and its own between (``shading_transfer``): whichever surface wins the depth test at a
+    seam, the pixel is the same.  This is the normal-transfer used to hide the seams of separately
+    modelled pieces of a character; the geometry (and so the print) is unchanged by it.
+
+    Every transform keeps the attributes (normals turn with the inverse transpose); ``Mesh.merge``
+    and the print path drop them (a print does not shade)."""
+
+    def __init__(self, vertices, faces, shading_normals=None, shading_cavity=None, profile_x=None):
+        super().__init__(vertices, faces)
+        self.shading_normals = None if shading_normals is None else np.asarray(shading_normals, dtype=np.float64)
+        self.shading_cavity = None if shading_cavity is None else np.asarray(shading_cavity, dtype=np.float64)
+        self.profile_x = None if profile_x is None else np.asarray(profile_x, dtype=np.float64)
+
+    def _like(self, verts, faces, linear=None):
+        n = self.shading_normals
+        if n is not None and linear is not None:
+            n = _unit(n @ np.linalg.inv(linear))                 # (M^-T n) as rows
+        return CollarMesh(verts, faces, n, self.shading_cavity, self.profile_x)
+
+    def copy(self) -> "CollarMesh":
+        return CollarMesh(self.vertices.copy(), self.faces.copy(),
+                          None if self.shading_normals is None else self.shading_normals.copy(),
+                          None if self.shading_cavity is None else self.shading_cavity.copy(),
+                          None if self.profile_x is None else self.profile_x.copy())
+
+    def transform(self, m: np.ndarray) -> "CollarMesh":
+        out = Mesh.transform(self, m)
+        return self._like(out.vertices, out.faces, np.asarray(m, dtype=np.float64)[:3, :3])
+
+    def translated(self, v) -> "CollarMesh":
+        out = Mesh.translated(self, v)
+        return self._like(out.vertices, out.faces)
+
+    def scaled(self, s) -> "CollarMesh":
+        out = Mesh.scaled(self, s)
+        s = np.asarray(s, dtype=np.float64)
+        return self._like(out.vertices, out.faces, np.diag(np.broadcast_to(s, (3,))) if s.ndim else
+                          np.eye(3) * float(s))
 
 
 # --------------------------------------------------------------------------
@@ -381,9 +458,9 @@ class SkinPatch:
             best[m] = d.argmin(axis=1)
         return best
 
-    def closest(self, points, guess=None):
-        """``(point, normal, signed distance, nearest vertex)`` of the surface nearest to each
-        point (positive outside); ``guess`` warm-starts the vertex search (see above)."""
+    def closest_bary(self, points, guess=None):
+        """``(point, corner vertex ids (n, 3), barycentric weights (n, 3), nearest vertex)`` of the
+        surface nearest to each point: what :meth:`closest` and :meth:`sample` interpolate with."""
         P = np.asarray(points, dtype=np.float64).reshape(-1, 3)
         v = self.nearest_vertex(P, guess)
         cand = self._table[v]                                   # (n, K) triangle ids or -1
@@ -400,12 +477,36 @@ class SkinPatch:
         j = d2.argmin(axis=1)
         rows = np.arange(n)
         sel = rows * K + j
-        point = pt[sel]
-        bw = bary[sel]
-        corner = self.F[tri[rows, j]]
+        return pt[sel], self.F[tri[rows, j]], bary[sel], v
+
+    def closest(self, points, guess=None):
+        """``(point, normal, signed distance, nearest vertex)`` of the surface nearest to each
+        point (positive outside); ``guess`` warm-starts the vertex search (see above)."""
+        P = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        point, corner, bw, v = self.closest_bary(P, guess)
         normal = _unit((self.N[corner] * bw[:, :, None]).sum(axis=1))
         signed = ((P - point) * normal).sum(axis=1)
         return point, normal, signed, v
+
+    @property
+    def cavity(self) -> np.ndarray:
+        """The renderer's cavity term (:func:`shading.cavity_term`) of every patch vertex: the same
+        numbers the picture's ambient occlusion of the whole mesh has, away from the patch's border
+        (the term looks two rings of neighbours out)."""
+        if getattr(self, "_cavity", None) is None:
+            from . import shading as sh
+            self._cavity = sh.cavity_term(self.V, self.F, self.N)
+        return self._cavity
+
+    def sample(self, points, guess=None):
+        """``(normal, cavity term, signed distance)`` of the surface at the point nearest to each of
+        ``points``: the renderer's smooth vertex normal and its cavity term, interpolated as the
+        picture interpolates them across a triangle."""
+        P = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        point, corner, bw, _ = self.closest_bary(P, guess)
+        normal = _unit((self.N[corner] * bw[:, :, None]).sum(axis=1))
+        term = (self.cavity[corner] * bw).sum(axis=1)
+        return normal, term, ((P - point) * normal).sum(axis=1)
 
 
 def skin_from_cage(base, shaped_verts, levels: int):
@@ -529,6 +630,18 @@ class Wall:
         j = d.argmin(axis=1)
         self.tri_s = axis.s[j]
         self.edge = float(np.max(np.linalg.norm(self.tris[:, 1] - self.tris[:, 0], axis=1)))
+        # ... and its axial extent: its corners projected onto the nearest segment of the axis (a ray cast from
+        # the axis at s, square to it, can only hit a triangle that spans s: the narrow slab of rays below)
+        V = mesh.vertices
+        a, b = axis.P[:-1], axis.P[1:]
+        ab = b - a
+        L2 = np.maximum((ab * ab).sum(-1), _EPS)
+        t = np.clip(((V[:, None, :] - a[None]) * ab[None]).sum(-1) / L2[None], 0.0, 1.0)     # (nv, segs)
+        foot = a[None] + t[..., None] * ab[None]
+        k = ((V[:, None, :] - foot) ** 2).sum(-1).argmin(axis=1)
+        vs = axis.s[k] + t[np.arange(len(V)), k] * np.sqrt(L2[k])
+        fs = vs[mesh.faces]
+        self.tri_lo, self.tri_hi = fs.min(axis=1), fs.max(axis=1)
 
     def radius(self, theta, s):
         """``(distance, direction, axis point)`` for angles ``theta`` (n,) at arclengths ``s`` (n,)."""
@@ -540,16 +653,23 @@ class Wall:
         so = s[order]
         i = 0
         n = len(s)
-        slab = max(0.35, 2.5 * self.edge)
+        pad = RAY_SLAB_PAD
         while i < n:
-            j = int(np.searchsorted(so, so[i] + 0.3, side="right"))
+            j = int(np.searchsorted(so, so[i] + RAY_GROUP, side="right"))
             j = max(j, i + 1)
             idx = order[i:j]
             lo, hi = float(so[i]), float(so[j - 1])
-            near = (self.tri_s > lo - slab) & (self.tri_s < hi + slab)
+            near = (self.tri_hi >= lo - pad) & (self.tri_lo <= hi + pad)
             if near.any():
                 dist[idx] = ray_mesh_first_hit(c[idx], e[idx], self.tris[near])
             i = j
+        miss = ~np.isfinite(dist)
+        if miss.any():                              # a bent axis: try the old, wide slab before giving up
+            slab = max(0.35, 2.5 * self.edge)
+            for q in np.nonzero(miss)[0]:
+                near = (self.tri_s > s[q] - slab) & (self.tri_s < s[q] + slab)
+                if near.any():
+                    dist[q] = ray_mesh_first_hit(c[q:q + 1], e[q:q + 1], self.tris[near])[0]
         bad = ~np.isfinite(dist)
         dist = np.where(bad, rad * 1.0, dist)
         return dist, e, c
@@ -566,13 +686,18 @@ class Wall:
         the lobing of the wall (harmonics 2 and 4) are kept.  It is measured at ONE station and applied at
         the stations of the exit curve (which differ by a radius or more between the back and the
         underside: a low pass over radii taken at different stations rings at the steps)."""
+        theta = np.asarray(theta, dtype=np.float64)
         n = len(theta)
-        th2 = np.arange(2 * n) * (math.pi / n)
-        dist, _, _ = self.radius(th2, np.full(2 * n, float(s_ref)))
+        m = 2 * max(n, 72)
+        th2 = np.arange(m) * (2.0 * math.pi / m)
+        dist, _, _ = self.radius(th2, np.full(m, float(s_ref)))
         f = np.fft.rfft(dist)
         f[keep + 1:] = 0.0
-        low = np.fft.irfft(f, len(dist))
-        return (low - dist)[::2]
+        low = np.fft.irfft(f, m)
+        at, _, _ = self.radius(theta, np.full(n, float(s_ref)))
+        low_at = np.interp(theta % (2.0 * math.pi), np.concatenate([th2, [2.0 * math.pi]]),
+                           np.concatenate([low, low[:1]]))
+        return low_at - at
 
     def smooth_points(self, theta, s, delta):
         """The wall points at ``(theta, s)`` with the facet correction ``delta`` applied radially."""
@@ -650,9 +775,6 @@ def build_collar(skin: SkinPatch, points, radii, wall: Mesh, profile: CollarProf
         return None
     axis = Axis(points, radii, profile.up)
     n = profile.segments
-    theta = np.arange(n) * (2.0 * math.pi / n)
-
-    away = np.degrees(np.abs((theta + math.pi) % (2.0 * math.pi) - math.pi))      # angle from the open side
 
     # -- where the axis comes out of the skin --------------------------------------------------
     ns = int(np.clip(axis.length / 0.03, 24, 240))
@@ -661,22 +783,37 @@ def build_collar(skin: SkinPatch, points, radii, wall: Mesh, profile: CollarProf
     _, _, sd_ax, _ = skin.closest(pa)
     inside = np.nonzero(sd_ax < 0.0)[0]
     if not len(inside):
+        if diag is not None:
+            diag["dropped"] = "the appendage's axis never enters the skin"
         return None
     after = np.nonzero((sd_ax >= 0.0) & (np.arange(ns) > inside[0]))[0]
     if not len(after):
+        if diag is not None:
+            diag["dropped"] = "the appendage's axis never comes out of the skin"
         return None
     s_e = float(s_ax[after[0]])
     r_root = float(ra[after[0]])
 
-    # -- the exit curve: where each generator of the wall pierces the skin --------------------------
+    # -- the columns: on the corners of the wall's polygon ----------------------------------------------
+    # The collar's top edge goes INTO the wall at ALPHA_WALL_DEG; between two columns its edge is a straight
+    # chord, and where a corner of the appendage's polygon (a 24-gon horn, a 32-sided wing sleeve) fell between
+    # two columns the chord dipped inside the corner and the contact line dipped with it, by the corner's depth
+    # over tan(alpha): a scallop per facet.  So the number of columns is a multiple of the polygon's sides and
+    # the first column sits on a corner: every chord then lies ON a facet.
     wallf = Wall(axis, wall)
+    theta, sides = _polygon_columns(wallf, s_e + 0.5 * profile.height * r_root * profile.strength, n)
+    n = len(theta)
+    theta0 = float(theta[0])
+    away = np.degrees(np.abs((theta + math.pi) % (2.0 * math.pi) - math.pi))      # angle from the open side
+
+    # -- the exit curve: where each generator of the wall pierces the skin --------------------------
     K = 8
     s_lo = max(0.0, s_e - 2.0 * r_root)
     s_hi = min(axis.length, s_e + 3.0 * r_root)
     st = np.linspace(s_lo, s_hi, K)
     n_scan = max(n // 3, 16)                  # a coarse scan around the ring, the secant steps below do the rest
     th_scan = np.arange(n_scan) * (2.0 * math.pi / n_scan)
-    wp = wallf.point(np.repeat(th_scan, K), np.tile(st, n_scan))
+    wp = wallf.point(np.repeat(th_scan + theta0, K), np.tile(st, n_scan))
     _, _, sdw, _ = skin.closest(wp)
     sdw = sdw.reshape(n_scan, K)
     outside = sdw >= 0.0
@@ -690,18 +827,33 @@ def build_collar(skin: SkinPatch, points, radii, wall: Mesh, profile: CollarProf
                 break
     ok = np.isfinite(s_scan)
     if not ok.any():
+        if diag is not None:
+            diag["dropped"] = "the appendage's wall does not cross the skin near its exit"
         return None
     if not ok.all():                         # no crossing in range: borrow the nearest crossing
         idx = np.arange(n_scan)
         for j in np.nonzero(~ok)[0]:
             d = np.minimum((idx[ok] - j) % n_scan, (j - idx[ok]) % n_scan)
             s_scan[j] = s_scan[ok][d.argmin()]
-    s_x = np.interp(theta, np.concatenate([th_scan, [2.0 * math.pi]]),
+    s_x = np.interp((theta - theta0) % (2.0 * math.pi), np.concatenate([th_scan, [2.0 * math.pi]]),
                     np.concatenate([s_scan, s_scan[:1]]))
-    for _ in range(3):                       # a few secant steps on the real wall
+    # secant steps on the real wall: the signed distance of the wall point to the skin goes to zero (the step of
+    # 0.8 sd that assumed the wall square to the skin crawled where it leans, and a wide tail's exit never fitted)
+    s_prev, sd_prev = None, None
+    for _ in range(EXIT_STEPS):
         wp = wallf.point(theta, s_x)
         _, _, sdx, _ = skin.closest(wp)
-        s_x = np.clip(s_x - 0.8 * sdx, 0.0, axis.length)
+        if (np.abs(sdx) < 0.2 * FIT_TOL).all():
+            break
+        if s_prev is None:
+            s_new = s_x - 0.8 * sdx
+        else:
+            slope = (sdx - sd_prev) / np.where(np.abs(s_x - s_prev) > 1e-9, s_x - s_prev, 1e-9)
+            ok_ = (slope > 0.05) & np.isfinite(slope)
+            s_new = np.where(ok_, s_x - sdx / np.where(ok_, slope, 1.0), s_x - 0.8 * sdx)
+            s_new = np.clip(s_new, s_x - 0.5 * r_root, s_x + 0.5 * r_root)
+        s_prev, sd_prev = s_x, sdx
+        s_x = np.clip(s_new, 0.0, axis.length)
     delta = wallf.facet_correction(theta, s_e)
     X = wallf.smooth_points(theta, s_x, delta)
     Xs, Nx, sdx, v_start = skin.closest(X)
@@ -713,23 +865,20 @@ def build_collar(skin: SkinPatch, points, radii, wall: Mesh, profile: CollarProf
     ratio = profile.ventral / max(profile.width, _EPS)
     w_theta = 1.0 - (1.0 - ratio) * _smoothstep((away - profile.open_deg) / (profile.fold_deg - profile.open_deg))
     g0 = _unit(e_x - (e_x * Nx).sum(-1, keepdims=True) * Nx)                      # outward along the skin
-    u_vis = _profile_stations(profile.rings, 0.35 * profile.height / max(profile.width, _EPS), profile.falloff)
+    tan_g0 = math.tan(math.radians(GAMMA_SKIN_DEG)) if profile.ramp <= 0.0 else float(profile.ramp)
+    v_vis = _visible_stations(profile.rings, profile.height / max(profile.width, _EPS), profile.falloff,
+                              math.tan(math.radians(ALPHA_WALL_DEG)), tan_g0)
     skirt_u = np.asarray(SKIRT_U)
     wide = profile.width * r0
-
     sink0 = profile.sink * r0
+    tan_g = math.tan(math.radians(GAMMA_SKIN_DEG)) if profile.ramp <= 0.0 else float(profile.ramp)
+    tan_a = math.tan(math.radians(ALPHA_WALL_DEG))
+    cut = max(CUT_WIDTH, CUT_REL * r0)                    # a collar narrower than this is no collar: the sector ends
 
     def sink_of(W):
         # a thin collar (the fold side: the skin is a crease there, two walls close together) is sunk
         # little: a pad 0.1 deep under a V-shaped cleft leaves the body through the other wall
         return sink0 * np.maximum(SINK_FLOOR, (W / wide) ** 0.7)
-
-    def run(W):
-        eps = np.maximum(SKIRT_WIDTH * W, 1.5 * sink_of(W))      # the dive is gentle even where the collar is thin
-        steps = np.concatenate([
-            W[:, None] * np.diff(u_vis)[None, :],
-            eps[:, None] * (np.diff(np.concatenate([[0.0], skirt_u])))[None, :]], axis=1)
-        return _march(skin, Xs, g0, steps, v_start)
 
     # The first march, at the width the side asks for, says where the surface goes: (1) its direction
     # at the rim against the wall's generator is the lean of the wall over the skin there (where it
@@ -742,151 +891,592 @@ def build_collar(skin: SkinPatch, points, radii, wall: Mesh, profile: CollarProf
     fit_ok = np.abs(sdx) <= FIT_TOL
     fit_ok = fit_ok & np.roll(fit_ok, 1) & np.roll(fit_ok, -1)
     W = np.maximum(wide * w_theta * np.where(fit_ok, 1.0, 0.0), MIN_WIDTH)
-    nrings = len(u_vis) - 1
-    u_an = u_vis[::2] if nrings % 2 == 0 else u_vis                              # the analysis marches every second station
+    nrings = len(v_vis) - 1
+    u_an = v_vis[::2] if nrings % 2 == 0 else v_vis                              # the analysis marches every second station
     steps_an = W[:, None] * np.diff(u_an)[None, :]
     P_a, N_a, G_a = _march(skin, Xs, g0, steps_an, v_start)
     na = len(u_an) - 1
-    beta = np.degrees(np.arccos(np.clip((Tx * G_a[na - 1]).sum(-1), -1.0, 1.0)))   # wall vs outward skin
-    lean = _smoothstep((beta - LEAN_FROM_DEG) / (LEAN_FULL_DEG - LEAN_FROM_DEG))
+    lean_at = None                                                                # set below, once the reach is known
     step = np.degrees(np.arccos(np.clip((N_a[1:na] * N_a[: na - 1]).sum(-1), -1.0, 1.0)))
     chord = P_a[1:na] - P_a[: na - 1]                                             # a step that climbs or drops steeply
     drop = np.abs((chord * N_a[: na - 1]).sum(-1)) / np.maximum(np.linalg.norm(chord, axis=-1), _EPS)
     bad = (step > CREASE_STEP_DEG) | (drop > math.sin(math.radians(CREASE_DROP_DEG)))   # (stations - 1, n)
     first = np.where(bad.any(axis=0), bad.argmax(axis=0), na)
     reach = u_an[np.minimum(first + 1, na)]                                       # fraction of the width before the crease
+    # the march itself must go outward: a step that turns back toward the wall (a fold of the surface the
+    # closest point jumped across) ends the reach there too
+    back = ((P_a[1:na] - P_a[: na - 1]) * g0[None]).sum(-1) < 0.0
+    first_b = np.where(back.any(axis=0), back.argmax(axis=0), na)
+    reach = np.minimum(reach, u_an[np.minimum(first_b + 1, na)])
+    # ... and so does a skin that turns away by more than TURN_MAX_DEG over the reach (a collar wrapped round
+    # the convex edge of the sacrum or a buttock folded its rim back over itself: a lowered tail on the heavy body).
+    # (A limit on a march the skin holds back -- less than 0.6 of the way asked -- was tried and removed: switched
+    # off over 158 builds (six bodies x 18 cases at level 1, three at level 2) it added one pre-guard crossing in all,
+    # removed two folds and kept more collar: 0.14 of a ring summed over the builds.)
+    turn = np.degrees(np.arccos(np.clip((N_a[:na] * Nx[None]).sum(-1), -1.0, 1.0))) > TURN_MAX_DEG
+    first_t = np.where(turn.any(axis=0), turn.argmax(axis=0), na)
+    reach = np.minimum(reach, u_an[np.minimum(first_t, na)])
+    # ... and so does a column whose path over the skin runs into its neighbour's: marching outward from a concave
+    # stretch of the exit curve, neighbouring paths converge and cross (a caustic) and the rim folds back over
+    # itself there.  The reach of both ends where their spacing, measured along the exit curve's own direction,
+    # has shrunk below CONVERGE_MIN of what it is at the exit
+    jn = (np.arange(n) + 1) % n
+    c0 = Xs[jn] - Xs
+    l0 = np.linalg.norm(c0, axis=-1)
+    c0 = c0 / np.maximum(l0, _EPS)[:, None]
+    sep = ((P_a[:na, jn] - P_a[:na]) * c0[None]).sum(-1) / np.maximum(l0, _EPS)[None]
+    conv = sep < CONVERGE_MIN
+    first_c = np.where(conv.any(axis=0), conv.argmax(axis=0), na)
+    first_c = np.minimum(first_c, np.roll(first_c, 1))                            # both columns of the pair
+    reach = np.minimum(reach, u_an[np.maximum(np.minimum(first_c, na) - 1, 0)])
+    # the lean of the wall over the skin: the wall's generator against the outward direction of the skin a third of
+    # the way out, or at the last station before a crease or a fold (measured at the far end of the march, a path
+    # that had run on over the spine's furrow said the back's own wall leaned over it, and cut the dorsal collar)
+    last = np.minimum.reduce([first, first_b, first_t, first_c])
+    k_lean = np.clip(np.minimum(na // 3, last - 1), 0, na - 1)
+    G_l = G_a[k_lean, np.arange(n)]
+    beta = np.degrees(np.arccos(np.clip((Tx * G_l).sum(-1), -1.0, 1.0)))         # wall vs outward skin
+    lean = _smoothstep((beta - LEAN_FROM_DEG) / (LEAN_FULL_DEG - LEAN_FROM_DEG))
+    if diag is not None:
+        diag["limits"] = dict(fit_ok=fit_ok.copy(), lean=lean.copy(), reach=reach.copy(), first=first.copy(),
+                              first_b=first_b.copy(), first_t=first_t.copy(), first_c=first_c.copy(), W0=W.copy())
     W = np.maximum(W * lean * np.minimum(1.0, reach / 0.85), MIN_WIDTH)
     W = np.where(fit_ok, _ring_smooth(W, RIM_SMOOTHING), MIN_WIDTH)             # no collar where the fit failed, not even a smoothed one
 
-    def construct(W):
-        H = np.maximum(profile.height * r0 * (W / wide) ** 0.7, 0.3 * MIN_WIDTH)
-        P_m, N_m, G_m = run(W)
+    def ends_taper(keep):
+        """1 in the middle of a run of kept columns, falling to 0 over ``TAPER_COLS`` toward its ends (a ring: 1)."""
+        if keep.all():
+            return np.ones(n)
+        d = np.full(n, float(n))
+        idx = np.arange(n)
+        for j in np.nonzero(~keep)[0]:
+            d = np.minimum(d, np.minimum((idx - j) % n, (j - idx) % n))
+        return _smoothstep(d / TAPER_COLS)
+
+    def construct(W, keep, sink_scale):
+        """The rings of the columns ``keep`` at the reach ``W`` (n,): ``(top, bottom, arcs, x_top, info)``."""
+        # a run of columns ends in a taper: the reach, the height, the sink and the turn into the appendage all
+        # fall toward its two end columns, so the loops that close it (its caps) are small and hidden
+        taper = ends_taper(keep)
+        Wk = cut + np.maximum(W - cut, 0.0) * taper
+        # the height fades to nothing where the width falls to the cut: the visible sheet ends on the skin
+        fade = _smoothstep((Wk - cut) / (1.5 * cut))
+        H = np.maximum(profile.height * r0 * (Wk / wide) ** 0.7 * fade, 1e-4)
+        # the height (and with it the visible reach) is smoothed round the ring: the fade near the cut turned a
+        # dip of the width three columns wide into a notch, and the sheet creased 60 degrees across it
+        H = np.where(keep, np.maximum(_ring_smooth(np.where(keep, H, 1e-4), 3), 1e-4), H)
+        q = H / Wk
+        x_e, hne, u_c, g_c, u_x = _column_profile(q, profile.falloff, tan_a, tan_g)
+        sink = np.minimum(sink_of(Wk), SINK_MAX_REL * r_root) * sink_scale * (0.25 + 0.75 * taper)
+        sink = np.maximum(sink, SINK_MIN_REL * r_root)          # never nil: the underside would lie on the sheet
+        dive = DIVE_SHARE * sink                                                  # how deep the sheet goes past the crossing
+        # the dive leaves the crossing at the crossing slope and bends down to ``dive`` within ``Ld`` (a short
+        # hidden sheet: a long one over the curved skin of the back folded over itself)
+        Ld = np.clip(3.0 * dive, 0.02, 0.25)
+        u_d = u_x + Ld / Wk
+        eps = np.maximum(SKIRT_LEN * sink, 0.03)
+        u_vis = v_vis[None, :] * u_x[:, None]                                     # (n, stations): the visible part
+        u_dv = u_x[:, None] + (u_d - u_x)[:, None] * np.asarray(DIVE_U)[None, :]  # the dive under the skin
+        steps = np.concatenate([Wk[:, None] * np.diff(u_vis, axis=1),
+                                Wk[:, None] * np.diff(np.concatenate([u_x[:, None], u_dv], axis=1), axis=1),
+                                eps[:, None] * np.diff(np.concatenate([[0.0], skirt_u]))[None, :]], axis=1)
+        P_m, N_m, G_m = _march(skin, Xs, g0, steps, v_start)
+        nv = nrings                                                               # marched visible stations
+        # the march can stall (the closest point held back by a fold of the skin for a few steps, then let go):
+        # the visible stations are put back where they belong along the path it walked, by its arc length
+        P_m, N_m = _respace(Xs, P_m, N_m, np.cumsum(steps[:, :nv], axis=1).T, nv)
+        nd = len(DIVE_U)
         # next to the wall the marched points jitter by a millimetre-ish (the facets of the subdivided
         # skin) which is as much as the distance between stations there: the stations next to the wall
-        # lie on the straight chord from the wall to the rim, blended into the marched points
-        rho = W[None, :] * u_vis[1:, None]                                            # (rings, n)
-        chord = Xs[None] + (rho / W[None, :])[..., None] * (P_m[nrings - 1] - Xs)[None]
-        blend = _smoothstep(rho / (0.1 * W[None, :] + 0.03))[..., None]
+        # lie on the straight chord from the wall to the crossing, blended into the marched points
+        rho = (Wk[:, None] * u_vis[:, 1:]).T                                      # (nv, n)
+        Wv = (Wk * u_x)[None, :]
+        chord_p = Xs[None] + (rho / np.maximum(Wv, _EPS))[..., None] * (P_m[nv - 1] - Xs)[None]
+        blend = _smoothstep(rho / (0.1 * Wv + 0.03))[..., None]
         P_m = P_m.copy()
-        P_m[:nrings] = chord + blend * (P_m[:nrings] - chord)
+        P_m[:nv] = chord_p + blend * (P_m[:nv] - chord_p)
         # the exit point on the wall and the nearest skin point differ by the residual of the secant steps
-        # (a few thousandths): the sheet starts exactly ON the wall and blends into the skin by the rim
         shift = X - Xs
-        fade = ((1.0 - u_vis[1:]) ** 3)[:, None, None]
-        P_m[:nrings] += fade * shift[None]
-        # the same for the skirt past the rim, where the skin may be a crease (the apex of the cleft: the
-        # normals flip within a step and the top and bottom of the skirt would cross): close to the rim the
-        # skirt is the straight continuation, blended into the marched points
-        eps = np.maximum(SKIRT_WIDTH * W, 1.5 * sink_of(W))
-        rho_s = eps[None, :] * skirt_u[:, None]                                       # (skirt, n) distance past the rim
-        straight = P_m[nrings - 1][None] + rho_s[..., None] * G_m[nrings - 1][None]
-        blend_s = _smoothstep(rho_s / 0.06)[..., None]
-        P_m[nrings:] = straight + blend_s * (P_m[nrings:] - straight)
-        P = np.concatenate([X[None], P_m])                                            # stations 0 .. rings + skirt
+        P_m[:nv] += ((1.0 - v_vis[1:]) ** 3)[:, None, None] * shift[None]
+        # past the crossing the sheet is hidden: the dive and the skirt are the straight continuation of the skin's
+        # tangent there, offset along the normal there (a strip marched on over a curved, creased skin turned
+        # sideways column by column and its neighbours crossed it); they are short, so a convex skin's rise over
+        # the tangent (L^2 / 2R) stays well inside the dive
+        rho_s = np.cumsum(steps[:, nv:], axis=1).T                                # (nd + skirt, n) distance past it
+        P_m[nv:] = P_m[nv - 1][None] + rho_s[..., None] * G_m[nv - 1][None]
+        N_m = N_m.copy()
+        N_m[nv:] = N_m[nv - 1][None]
+        P = np.concatenate([X[None], P_m])                                        # stations 0 .. visible, dive, skirt
         N = np.concatenate([Nx[None], N_m])
-        n_vis = len(u_vis)
-        sink = sink_of(W)
-        # the wall point H up the generator: the profile ends there, tangent to the wall
-        E = wallf.smooth_points(theta, np.clip(s_x + H, 0.0, axis.length), delta)
+        n_vis = nv + 1
+        # the wall point H up the generator, ON the real (faceted) wall: the sheet arrives there at ALPHA and goes in
+        # the axial height of the top edge is smoothed around the ring: the exit curve under it carries the skin's
+        # facets (a few thousandths, column to column) and the contact line on the wall zigzagged with them
+        s_top = _ring_smooth(s_x + H, TOP_SMOOTHING)
+        E = wallf.point(theta, np.clip(s_top, 0.0, axis.length))
         Hv = np.linalg.norm(E - X, axis=1)
-        D_end = _unit(E - X)
-
-        # the underside is the skin pushed down by the sink; where the collar is a hair the skin may be a crease
-        # (the apex of the cleft: the normals flip within a step) and an offset along them folds, so the
-        # underside there is the sheet translated along the normal at the rim
+        # the wall's generator: from the exit up the (smoothed) wall far enough that the facets cannot turn it (a
+        # tapered column's E is a hair from X, and E - X pointed wherever the facet put it)
+        Hg = np.maximum(H, 0.25 * r_root)
+        gen = _unit(wallf.smooth_points(theta, np.clip(s_x + Hg, 0.0, axis.length), delta) - X)
+        # ... but where the collar is tall enough, the profile ends exactly on E (its last chord then arrives at the
+        # designed angle; aimed along the smoothed generator it arrived anywhere from 3 to 55 degrees)
+        trust = _smoothstep(Hv / (0.25 * r_root))[:, None]
+        D_end = _unit(trust * _unit(E - X) + (1.0 - trust) * gen)
         thin = 1.0 - _smoothstep(W / (0.1 * wide))
         Nb = _unit((1.0 - thin)[None, :, None] * N + thin[None, :, None] * N[n_vis - 1][None])
-
-        # -- the sheet ----------------------------------------------------------------------------------------
-        x = 1.0 - u_vis                                                               # 1 at the wall, 0 at the rim
-        top = []
-        for i in range(n_vis):
-            xi = x[i]
-            h = profile.lift * (1.0 - xi * xi) + _profile_h(xi, Hv, profile.falloff)
-            if profile.ramp > 0.0:                    # leaves the skin at a small angle: clear of its facets
-                L = np.clip(0.45 * W, 0.05, 0.5)
-                t = np.clip(xi * W / L, 0.0, 1.0)
-                h = h + profile.ramp * L * t * (1.0 - _smoothstep(t))
-            w = _smoothstep(xi)
+        # the underside is the skin offset inward along its normals; where neighbouring normals converge faster
+        # than the points are apart (a convex bend of the skin under a narrow collar: a slim shoulder) the offset
+        # points swap places and the underside crosses itself.  The sink stays under that focal distance.
+        jn = (np.arange(n) + 1) % n
+        def focal(Pa, Pb, Na, Nb_):
+            dv = Pb - Pa
+            d = np.linalg.norm(dv, axis=-1)
+            conv = ((Nb_ - Na) * dv).sum(-1) / np.maximum(d, _EPS)          # how fast the offsets approach
+            return np.where(conv > 1e-9, 0.5 * d / np.maximum(conv, 1e-9), np.inf)
+        lim_c = focal(P[:, :], P[:, jn], Nb[:, :], Nb[:, jn]).min(axis=0)            # between neighbour columns
+        lim_r = focal(P[:-1], P[1:], Nb[:-1], Nb[1:]).min(axis=0)                  # along a column
+        lim = np.minimum(np.minimum(lim_c, np.roll(lim_c, 1)), lim_r)
+        sink = np.minimum(sink, np.maximum(lim, SINK_MIN_REL * r_root))
+        # ... smoothed round the ring and never above that (a sink that jumped from one column to the next twisted the
+        # underside and the skirt between them into each other); eroded by both neighbours first, so a mirrored
+        # pair of roots gets mirrored sinks (a one-sided erosion made the ring order matter)
+        eroded = np.minimum.reduce([sink, np.roll(sink, 1), np.roll(sink, -1)])
+        sink = np.minimum(sink, np.maximum(_ring_smooth(eroded, 2), SINK_MIN_REL * r_root))
+        sink = np.minimum.reduce([sink, np.roll(sink, 1) * 1.5, np.roll(sink, -1) * 1.5])
+        dive = np.minimum(dive, 0.5 * sink)
+        # -- the sheet: the profile, the dive, the skirt -----------------------------------------------------------
+        top = np.empty_like(P)
+        top[0] = E
+        for i in range(1, n_vis):
+            u = u_vis[:, i]
+            f = _column_height(u, x_e, hne, u_c, g_c, q, tan_g, profile.falloff)
+            w = _smoothstep(1.0 - v_vis[i])
             D = _unit((1.0 - w) * N[i] + w * D_end)
-            top.append(P[i] + h[:, None] * D)
-        top[0] = E.copy()
-        for k, sg in enumerate(skirt_u):
+            top[i] = P[i] + (Hv * f)[:, None] * D
+        for k in range(nd):
             i = n_vis + k
-            h = profile.lift - (profile.lift + sink) * _smoothstep(sg)
-            top.append(P[i] + h[:, None] * Nb[i])
-        top = np.array(top)                                                           # (stations, n, 3)
-        bottom = P - sink[None, :, None] * Nb                                         # same stations, under the skin
-        # the wall tangent beyond E, then curving into the appendage
+            d_ = Ld * DIVE_U[k]
+            h = -tan_g * d_ - np.maximum(dive - tan_g * Ld, 0.0) * DIVE_U[k] ** 2
+            top[i] = P[i] + np.maximum(h, -dive)[:, None] * Nb[i]
+        for k, sg in enumerate(skirt_u):
+            i = n_vis + nd + k
+            # the skirt ends HALF way down to the underside, which closes it with an edge of its own (a skirt that met
+            # the underside in a knife edge made slivers that crossed their neighbours' where two columns differed)
+            top[i] = P[i] - (dive + 0.5 * (sink - dive) * _smoothstep(sg))[:, None] * Nb[i]
+        bottom = P - sink[None, :, None] * Nb                                     # same stations, under the skin
+        # into the appendage: on along the arrival direction (ALPHA into the wall), curving to the axis
         e_in = -_unit(e_x - (e_x * D_end).sum(-1, keepdims=True) * D_end)
-        rc = 0.3 * r0
-        arcs = np.array([E + rc * (math.sin(math.radians(a)) * D_end
-                                   + (1.0 - math.cos(math.radians(a))) * e_in * 1.0)
+        a_in = np.arctan(tan_a * hne / np.maximum(x_e, _EPS))                    # the profile's angle to the wall at E
+        t0 = _unit(np.cos(a_in)[:, None] * D_end + np.sin(a_in)[:, None] * e_in)
+        n_in = _unit(e_in - (e_in * t0).sum(-1, keepdims=True) * t0)
+        # the turn into the appendage is a fraction of its own radius there, not of the collar's size (a doubled
+        # collar turned through the axis and met the other side's), and small at the ends of a run
+        r_wall = np.linalg.norm(E - axis.at(np.clip(s_x + H, 0.0, axis.length))[0], axis=1)
+        rc = (ARC_RADIUS * np.minimum(r_root, r_wall) * (0.3 + 0.7 * taper))[:, None]
+        arcs = np.array([E + rc * (math.sin(math.radians(a)) * t0 + (1.0 - math.cos(math.radians(a))) * n_in)
                          for a in ARC_ANGLES])
-        if diag is not None:
-            diag.update(s_exit=s_e, r_root=r_root, X=X, s_x=s_x, sd_exit=sdx, W=W, H=Hv, beta=beta, lean=lean,
-                        E=E, P=P, N=N, top=top, bottom=bottom, arcs=arcs, theta=theta, axis=axis)
-        return W, Hv, E, P, N, top, bottom, arcs, n_vis
+        x_top = np.concatenate([1.0 - v_vis, -0.02 * np.arange(1, nd + 1), -0.1 - 0.1 * np.arange(1, len(skirt_u) + 1)])
+        info = dict(H=Hv, E=E, P=P, N=N, n_vis=n_vis, u_x=u_x, sink=sink, x_e=x_e, a_in=np.degrees(a_in), Wk=Wk)
+        return top, bottom, arcs, x_top, info
 
-    # the rim must continue the skin: where the sheet near the rim is not tangent to the surface (a fold in
-    # the flesh, a fat crease the march cannot see through) the width shrinks there, smoothed, and the sheet
-    # is built again (twice at most)
-    for it in range(RIM_ITERATIONS + 1):
-        W, Hv, E, P, N, top, bottom, arcs, n_vis = construct(W)
-        j, jn = np.arange(n), (np.arange(n) + 1) % n
-        fr = np.cross(top[n_vis - 1][jn] - top[n_vis - 1][j], top[n_vis - 2][j] - top[n_vis - 1][j])
-        fr = _unit(fr)
-        mismatch = np.degrees(np.arccos(np.clip(np.abs((fr * N[n_vis - 1]).sum(-1)), 0.0, 1.0)))
-        mismatch = np.where(W > 0.04, np.maximum(mismatch, np.roll(mismatch, 1)), 0.0)    # a hair-thin collar cannot be seen
-        if it == RIM_ITERATIONS or not (mismatch > RIM_TOL_DEG).any():
+    keep = _drop_short_runs((W >= cut) & fit_ok, MIN_RUN)
+    sink_scale = np.ones(n)
+    shell = None
+    log = []
+    for it in range(GUARD_ITERATIONS + 1):
+        keep = _drop_short_runs(keep, MIN_RUN)
+        if keep.sum() < MIN_SECTOR:
+            if diag is not None:
+                diag["dropped"] = (f"the collar is narrower than {cut:.3f} units all round "
+                                   "(the wall leans over the skin or the skin is a crease everywhere)"
+                                   if it == 0 else "the collar crossed itself and was cut away")
+                diag["guard_log"] = log
+            return None
+        top, bottom, arcs, x_top, info = construct(W, keep, sink_scale)
+        # the sheet must go INTO the skin where it meets it: a column whose sheet there faces away from the skin's
+        # normal by far more than the crossing angle is folded back over itself (a lowered tail's flank)
+        nvi = info["n_vis"]
+        fr = _unit(np.cross(top[nvi - 1][(np.arange(n) + 1) % n] - top[nvi - 1],
+                            top[nvi - 2] - top[nvi - 1]))
+        mism = np.degrees(np.arccos(np.clip((fr * info["N"][nvi - 1]).sum(-1), -1.0, 1.0)))
+        pair = keep & np.roll(keep, -1) & (info["Wk"] * info["u_x"] > 2.0 * cut)   # (j, j+1) both there, not a tapered end
+        fp = pair & (mism > FOLD_DEG)
+        fold = fp | np.roll(fp, 1)
+        shell = assemble_shell(top, bottom, arcs, x_top, keep=keep)
+        crossing = crossing_pairs(shell.vertices, shell.faces) if GUARD_CHECK else np.zeros((0, 2), dtype=np.int64)
+        badcol = fold.copy()
+        if len(crossing):
+            badcol[np.unique(shell.column_of[shell.faces[crossing.ravel(), 0]])] = True
+            badcol &= keep
+        log.append(dict(crossings=int(len(crossing)), folds=int(fold.sum()), bad=int(badcol.sum()),
+                        kept=int(keep.sum())))
+        if not badcol.any():
             break
-        keep = np.clip(1.0 - (mismatch - RIM_TOL_DEG) / 20.0, 0.25, 1.0)
-        W = np.where(fit_ok, np.maximum(_ring_smooth(W * _ring_smooth(keep, 2), 2), MIN_WIDTH), MIN_WIDTH)
-    return assemble_shell(top, bottom, arcs)
+        if it == GUARD_ITERATIONS:
+            shell = None
+            break
+        # no collar in those columns: the runs on either side taper to the gap (narrowing them in place sheared the
+        # columns against their neighbours and crossed more than it uncrossed)
+        keep = keep & ~(badcol | np.roll(badcol, 1) | np.roll(badcol, -1))
+        shell = None
+    if shell is None:
+        if diag is not None:
+            diag["dropped"] = "the collar crossed itself and was cut away"
+            diag["guard_log"] = log
+        return None
+    if diag is not None:
+        diag.update(s_exit=s_e, r_root=r_root, X=X, s_x=s_x, sd_exit=sdx, W=np.where(keep, info["Wk"], 0.0), beta=beta,
+                    lean=lean, theta=theta, axis=axis, top=top, bottom=bottom, arcs=arcs, keep=keep,
+                    guard_iterations=it, guard_log=log, cut=cut, sides=sides, theta0=theta0, **info)
+        diag["vid_top"] = shell.vid_top
+        diag["vid_arcs"] = shell.vid_arcs
+    return shell
 
 
-def assemble_shell(top, bottom, arcs):
-    """Close the rings into one watertight triangle mesh, outward oriented.
+def _visible_stations(rings: int, q: float, k: float, tan_a: float, tan_g: float):
+    """Fractions ``v`` (0 at the wall, 1 where the sheet meets the skin) of the visible profile of a column of
+    height over reach ``q`` (see :func:`_column_profile`), spaced half equally in ARC LENGTH and half equally in
+    TURNING ANGLE: the curvature is concentrated near the wall, and equal arc length alone cuts it into a few
+    long chords, equal turning alone into tiny ones the skin's facets swamp."""
+    x_e, hne, u_c, g_c, u_x = (float(np.ravel(a)[0]) for a in _column_profile(np.array([q]), k, tan_a, tan_g))
+    v = np.linspace(0.0, 1.0, 4001)
+    u = v * u_x
+    h = q * _column_height(u, np.array(x_e), np.array(hne), np.array(u_c), np.array(g_c), np.array(q), tan_g, k)
+    du, dh = np.diff(u), np.diff(h)
+    seg = np.hypot(du, dh)
+    ang = np.unwrap(np.arctan2(-dh, du))
+    turn = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(np.concatenate([[ang[0]], ang]))))])
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    measure = 0.5 * arc / arc[-1] + 0.5 * turn / max(turn[-1], _EPS)
+    return np.interp(np.linspace(0.0, 1.0, rings + 1), measure, v)
 
-    ``top`` (S, n, 3): the visible sheet from the wall (station 0) outward over the rim to the
-    end of the skirt (station S-1); ``bottom`` (S, n, 3): the same stations pushed under the
-    skin (only 0 .. S-2 are used: the last equals ``top[-1]``); ``arcs`` (A, n, 3): the sheet
-    carried on into the appendage past the wall. Fans close both ends at one centre vertex."""
+
+def _polygon_columns(wallf: "Wall", s_ref: float, n: int, probe: int = 720):
+    """``(theta (columns,), sides)``: the column angles of a collar on the wall's polygon.  The wall's radius
+    around the axis at ``s_ref`` (``probe`` rays) has a kink at every corner of a polygon (the second difference
+    of the radius is a sharp negative spike there, a smooth section's curvature is a fraction of it); with the
+    corners found, every facet gets the same number of columns (the smallest that makes at least ``n`` in all,
+    at most twice ``n``), the first ON its corner.  A wall with no clear corners (a smooth or irregular loft)
+    keeps ``n`` uniform columns from 0 (sides 0)."""
+    uniform = np.arange(n) * (2.0 * math.pi / n)
+    th = np.arange(probe) * (2.0 * math.pi / probe)
+    r, _, _ = wallf.radius(th, np.full(probe, float(np.clip(s_ref, 0.0, wallf.axis.length))))
+    d2 = np.roll(r, -1) - 2.0 * r + np.roll(r, 1)
+    spike = -d2
+    thr = max(6.0 * float(np.median(np.abs(d2))), 2e-4 * float(r.mean()))
+    peak = (spike > thr) & (spike >= np.roll(spike, 1)) & (spike > np.roll(spike, -1))
+    cand = np.nonzero(peak)[0]
+    if len(cand) < 3:
+        return uniform, 0
+    # the corners are the strongest kinks; a ray that crosses the diagonal of a twisted quad of the wall kinks
+    # too, more weakly: take the most kinks that are evenly spaced round the ring
+    cand = cand[np.argsort(-spike[cand])]
+    cand = cand[spike[cand] > 0.05 * spike[cand[0]]]
+    idx = None
+    for k in range(min(len(cand), 2 * n), 2, -1):
+        t = np.sort(cand[:k])
+        gaps = np.diff(np.concatenate([t, [t[0] + probe]])).astype(np.float64)
+        if gaps.std() <= POLY_GAP_SPREAD * gaps.mean():
+            idx = t
+            break
+    if idx is None:                                           # not a polygon: corners all over the place
+        return uniform, 0
+    k = len(idx)
+    # sub-sample corner angles: the vertex of a parabola through the spike and its neighbours
+    a_, b_, c_ = spike[(idx - 1) % probe], spike[idx], spike[(idx + 1) % probe]
+    den = a_ - 2.0 * b_ + c_
+    off = np.where(np.abs(den) > 1e-15, 0.5 * (a_ - c_) / np.where(np.abs(den) > 1e-15, den, 1.0), 0.0)
+    corners = (idx + np.clip(off, -0.5, 0.5)) * (2.0 * math.pi / probe)
+    per = int(math.ceil(n / k))
+    if per * k > 2 * n:
+        return uniform, 0
+    nxt = np.concatenate([corners[1:], [corners[0] + 2.0 * math.pi]])
+    f = np.arange(per) / per
+    theta = (corners[:, None] + (nxt - corners)[:, None] * f[None, :]).ravel()
+    return theta, k
+
+
+def _respace(start, P, N, want, nv):
+    """The first ``nv`` stations of marched paths ``P`` / ``N`` ((m, n, 3), from ``start`` (n, 3)) moved along each
+    path's polyline to the arc lengths ``want`` ((nv, n), increasing): a stalled march bunches its stations and
+    then jumps, and the strip between two columns, one bunched and one not, crossed itself."""
+    pts = np.concatenate([start[None], P[:nv]])                                   # (nv + 1, n, 3)
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=-1)                           # (nv, n)
+    acc = np.concatenate([np.zeros((1, pts.shape[1])), np.cumsum(seg, axis=0)])  # (nv + 1, n)
+    total = acc[-1]
+    stall = (seg.max(axis=0) > 3.0 * np.maximum(np.median(seg, axis=0), 1e-12)) | (seg.min(axis=0) < 0.2 * np.maximum(np.median(seg, axis=0), 1e-12))
+    if not stall.any():
+        return P, N
+    P = P.copy()
+    N = N.copy()
+    nrm = np.concatenate([N[:1], N[:nv]])
+    for j in np.nonzero(stall & (total > 1e-9))[0]:
+        t = want[:, j] / max(float(want[-1, j]), 1e-12) * total[j]               # the same share of the walked path
+        for c in range(3):
+            P[:nv, j, c] = np.interp(t, acc[:, j], pts[:, j, c])
+            N[:nv, j, c] = np.interp(t, acc[:, j], nrm[:, j, c])
+    N[:nv] = _unit(N[:nv])
+    return P, N
+
+
+def _drop_short_runs(keep, min_run: int):
+    """``keep`` without its runs of fewer than ``min_run`` columns (a run tapers over ``TAPER_COLS`` at each end:
+    a shorter one is all taper, its two caps a column apart, and its loops crossed each other)."""
+    keep = np.asarray(keep, dtype=bool).copy()
+    n = len(keep)
+    if keep.all() or not keep.any():
+        return keep
+    start = [j for j in range(n) if keep[j] and not keep[j - 1]]
+    for s0 in start:
+        run = [s0]
+        while keep[(run[-1] + 1) % n] and len(run) < n:
+            run.append((run[-1] + 1) % n)
+        if len(run) < min_run:
+            keep[run] = False
+    return keep
+
+
+def _hn(x, k):
+    x = np.clip(x, 0.0, 1.0)
+    return 1.0 - np.sqrt(np.maximum(1.0 - x ** k, 0.0))
+
+
+def _hn_d(x, k):
+    x = np.clip(x, 0.0, 1.0)
+    return k * x ** (k - 1.0) / (2.0 * np.sqrt(np.maximum(1.0 - x ** k, 1e-300)))
+
+
+def _bisect_increasing(fun, target, lo, hi, iters: int = 60):
+    """Vectorised bisection for ``fun(x) = target`` with ``fun`` increasing on ``[lo, hi]``."""
+    lo = np.broadcast_to(np.asarray(lo, dtype=np.float64), np.shape(target)).copy()
+    hi = np.broadcast_to(np.asarray(hi, dtype=np.float64), np.shape(target)).copy()
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        up = fun(mid) < target
+        lo = np.where(up, mid, lo)
+        hi = np.where(up, hi, mid)
+    return 0.5 * (lo + hi)
+
+
+def _column_profile(q, k, tan_a, tan_g):
+    """The profile of a column whose height over reach is ``q``: ``(x_e, hn(x_e), u_c, g_c, u_x)``.
+
+    The quarter-ellipse-like profile ``hn(x) = 1 - sqrt(1 - x^k)`` (x: 1 at the wall, 0 at the rim) is cut at
+    BOTH ends so the collar crosses the two surfaces it joins at a definite angle instead of lying tangent on
+    them (a tangent join leaves the contact line wherever the facets of the two meshes happen to cross, a
+    serrated or scalloped edge, and a band where the two z-fight):
+
+    * at the wall it ends at ``x_e`` where it is ``ALPHA_WALL_DEG`` off the wall, rescaled so it still reaches
+      the full height there (``g(u) = hn(x_e (1 - u)) / hn(x_e)``, u: 0 at the wall, 1 at the old rim);
+    * toward the skin it follows ``g`` while it is steeper than ``tan_g`` and then goes on straight at that
+      slope, through the skin at ``u_x`` (the visible reach) and under it: the near-flat part that added less
+      than a hair of height (and was the wide tinted 'patch' of the round-3 critics) is under the skin.
+
+    The shading of both edges is the skin's and the wall's (:func:`shading_transfer`), so neither angle is seen."""
+    q = np.maximum(np.asarray(q, dtype=np.float64), 1e-6)
+    x_e = _bisect_increasing(lambda x: _hn_d(x, k), 1.0 / (q * tan_a), 1e-9, 1.0 - 1e-12)
+    hne = np.maximum(_hn(x_e, k), 1e-12)
+    t = tan_g * hne / (q * np.maximum(x_e, 1e-12))
+    flat = t >= _hn_d(x_e, k)                       # the whole profile is flatter than the crossing slope
+    x_c = np.where(flat, x_e, _bisect_increasing(lambda x: _hn_d(x, k), np.minimum(t, _hn_d(x_e, k)), 0.0, x_e))
+    u_c = np.where(flat, 0.0, 1.0 - x_c / np.maximum(x_e, 1e-12))
+    g_c = _hn(x_c, k) / hne
+    u_x = u_c + q * g_c / tan_g
+    return x_e, hne, u_c, g_c, u_x
+
+
+def _column_height(u, x_e, hne, u_c, g_c, q, tan_g, k):
+    """``h / H`` of the columns at ``u`` (see :func:`_column_profile`): ``g(u)`` up to ``u_c``, a straight line
+    at the crossing slope after it (negative past ``u_x``: under the skin)."""
+    u = np.asarray(u, dtype=np.float64)
+    g = _hn(x_e * (1.0 - np.minimum(u, u_c)), k) / hne
+    return np.where(u <= u_c, g, g_c - (tan_g / np.maximum(q, 1e-6)) * (u - u_c))
+
+
+def _ear_clip(poly):
+    """Triangles ``(m, 3)`` (indices into ``poly``, (k, 2)) of a simple polygon, in its own orientation."""
+    pts = np.asarray(poly, dtype=np.float64)
+    k = len(pts)
+    area = 0.5 * np.sum(pts[:, 0] * np.roll(pts[:, 1], -1) - np.roll(pts[:, 0], -1) * pts[:, 1])
+    sign = 1.0 if area >= 0 else -1.0
+    idx = list(range(k))
+    tris = []
+    guard = 0
+    while len(idx) > 3 and guard < 4 * k * k:
+        guard += 1
+        m = len(idx)
+        cut_one = False
+        for t in range(m):
+            i0, i1, i2 = idx[t - 1], idx[t], idx[(t + 1) % m]
+            a, b, c = pts[i0], pts[i1], pts[i2]
+            cr = sign * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+            if cr <= 1e-14:
+                continue
+            ok = True
+            for j in idx:
+                if j in (i0, i1, i2):
+                    continue
+                p = pts[j]
+                d1 = sign * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]))
+                d2 = sign * ((c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0]))
+                d3 = sign * ((a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0]))
+                if d1 >= 0 and d2 >= 0 and d3 >= 0:
+                    ok = False
+                    break
+            if ok:
+                tris.append((i0, i1, i2))
+                idx.pop(t)
+                cut_one = True
+                break
+        if not cut_one:                              # not simple (a degenerate loop): fan the rest
+            for t in range(1, len(idx) - 1):
+                tris.append((idx[0], idx[t], idx[t + 1]))
+            idx = []
+            break
+    if len(idx) == 3:
+        tris.append(tuple(idx))
+    return np.array(tris, dtype=np.int64).reshape(-1, 3)
+
+
+def assemble_shell(top, bottom, arcs, x_top=None, keep=None):
+    """Close the rings into one watertight triangle mesh, outward oriented (a :class:`CollarMesh`).
+
+    ``top`` (S, n, 3): the sheet from the wall (station 0) outward over the skin to the end of the skirt
+    (station S-1); ``bottom`` (S, n, 3): the same stations pushed under the skin (every ``BOTTOM_STEP``-th and the last three are
+    used; the skirt's end and the underside's are joined by an edge); ``arcs`` (A, n, 3): the sheet carried on into the appendage past the wall.
+    Every column is a closed loop (arcs, top, bottom, back into the appendage) swept around the axis; ``keep``
+    (n,) says which columns there are: all of them close into a ring (a torus), a run of them into a sector
+    closed by its two end loops (ear-clipped caps), several runs into several closed pieces of one mesh.
+    ``x_top`` (S,): where each station of ``top`` lies on the profile (1 at the wall, 0 at the crossing of
+    the skin, negative past it): every vertex gets one in ``profile_x`` (the arcs above 1, the hidden underside
+    -1), what :func:`shading_transfer` blends the skin's, the collar's and the wall's shading by. The mesh also
+    carries ``column_of`` (the column of every vertex) and ``vid_top`` / ``vid_arcs`` (the vertex of every
+    station and column, -1 where there is no column)."""
     S, n, _ = top.shape
     A = len(arcs)
-    rings = []                                  # from the inside of the appendage, over the top, to the underside
-    c_top = arcs[-1].mean(axis=0)
-    c_bot = bottom[0].mean(axis=0)
-    for k in range(A - 1, -1, -1):
-        rings.append(arcs[k])
-    for i in range(S):
-        rings.append(top[i])
-    for i in range(S - 2, -1, -1):
-        rings.append(bottom[i])
-    mid = 0.5 * (bottom[0] + c_bot[None])
-    rings.append(mid)
-    R = np.array(rings)                         # (rings, n, 3)
-    nr = len(R)
-    verts = np.concatenate([R.reshape(-1, 3), c_top[None], c_bot[None]])
-    ct, cb = nr * n, nr * n + 1
-    j = np.arange(n)
-    jn = (j + 1) % n
+    keep = np.ones(n, dtype=bool) if keep is None else np.asarray(keep, dtype=bool)
+    if x_top is None:
+        x_top = np.linspace(1.0, -1.0, S)
+    x_top = np.asarray(x_top, dtype=np.float64)
+    # the underside is hidden and nearly flat: every BOTTOM_STEP-th station of it (and its two ends) is enough, and
+    # its rows were 40 % of the shell's faces (the crossing check's cost)
+    B = sorted(set(range(0, S, BOTTOM_STEP)) | {S - 3, S - 2, S - 1})    # fine where it meets the skirt's end
+    loop = np.concatenate([arcs[::-1], top, bottom[B][::-1]])               # (L, n, 3): one closed loop per column
+    xl = np.concatenate([1.0 + 0.1 * np.arange(A, 0, -1), x_top, np.full(len(B), -1.0)])
+    L = len(loop)
+    cols = np.nonzero(keep)[0]
+    vid = np.full((L, n), -1, dtype=np.int64)
+    vid[:, cols] = np.arange(L * len(cols)).reshape(len(cols), L).T
+    verts = loop[:, cols].transpose(1, 0, 2).reshape(-1, 3)
+    px = np.tile(xl, len(cols))
+    colof = np.repeat(cols, L)
     faces = []
-    for r in range(nr - 1):
-        a = r * n + j
-        b = r * n + jn
-        c = (r + 1) * n + jn
-        d = (r + 1) * n + j
-        faces.append(np.stack([a, b, c], axis=1))
-        faces.append(np.stack([a, c, d], axis=1))
-    faces.append(np.stack([np.full(n, ct), jn, j], axis=1))
-    last = (nr - 1) * n + j
-    faces.append(np.stack([np.full(n, cb), last, (nr - 1) * n + jn], axis=1))
-    F = np.concatenate(faces)
-    m = Mesh(verts, F)
-    if m.volume() < 0:
-        m = Mesh(verts, F[:, [0, 2, 1]])
+    ring = bool(keep.all())
+    li, ln = np.arange(L), (np.arange(L) + 1) % L
+    # the runs of kept columns (a ring: one run that wraps)
+    runs = []
+    if ring:
+        runs = [list(range(n)) + [0]]
+    else:
+        start = [j for j in range(n) if keep[j] and not keep[j - 1]]
+        for s in start:
+            r = [s]
+            while keep[(r[-1] + 1) % n] and len(r) < n:
+                r.append((r[-1] + 1) % n)
+            runs.append(r)
+    for r in runs:
+        for j, jn in zip(r[:-1], r[1:]):
+            a, b = vid[li, j], vid[ln, j]
+            c, d = vid[ln, jn], vid[li, jn]
+            faces.append(np.stack([a, b, c], axis=1))
+            faces.append(np.stack([a, c, d], axis=1))
+        if not ring:
+            for j, rev in ((r[0], True), (r[-1], False)):
+                # the end loop, flattened in its own plane (its two principal directions), ear-clipped
+                pts = loop[:, j]
+                c0 = pts.mean(axis=0)
+                _, _, vt = np.linalg.svd(pts - c0, full_matrices=False)
+                p2 = (pts - c0) @ vt[:2].T
+                tri = _ear_clip(p2)
+                ids = vid[:, j][tri]
+                faces.append(ids[:, ::-1] if rev else ids)
+    F = np.concatenate(faces) if faces else np.zeros((0, 3), dtype=np.int64)
+    m = CollarMesh(verts, F, profile_x=px)
+    if len(F) and m.volume() < 0:
+        m = CollarMesh(verts, F[:, [0, 2, 1]], profile_x=px)
+    m.column_of = colof
+    m.vid_top = vid[A:A + S]
+    m.vid_arcs = vid[A - 1::-1] if A else vid[:0]
     return m
+
+
+# --------------------------------------------------------------------------
+# the shading the collar is drawn with
+
+
+SHADE_SKIN_TO = 0.55    # the skin's shading holds from the rim (x = 0) to this far up the profile (x: 1 at the wall) ...
+SHADE_WALL_FROM = 0.45   # ... and the wall's from here to the wall; the collar's own normals between
+SHADE_AO_WALL_FROM = 0.9   # the occlusion is the skin's up to here, the wall's at the top edge
+
+
+def shade_weights(x):
+    """``(skin, own, wall)`` weights (each (n,), summing to 1) of a collar vertex at profile position ``x``."""
+    x = np.asarray(x, dtype=np.float64)
+    w_skin = 1.0 - _smoothstep(x / SHADE_SKIN_TO)
+    w_wall = _smoothstep((x - SHADE_WALL_FROM) / (1.0 - SHADE_WALL_FROM))
+    over = w_skin + w_wall
+    scale = np.where(over > 1.0, 1.0 / np.maximum(over, _EPS), 1.0)        # the two ranges overlap a little
+    w_skin, w_wall = w_skin * scale, w_wall * scale
+    return w_skin, np.clip(1.0 - w_skin - w_wall, 0.0, 1.0), w_wall
+
+
+def outward(mesh: Mesh) -> Mesh:
+    """``mesh`` with its triangles wound outward (a closed mesh of negative volume turned over): the wall a kind
+    hands over may be a mirrored piece wound inside out (the right wing's arm), and its normals, which the collar
+    is shaded with and measured against, would point in."""
+    if mesh is not None and len(mesh.faces) and mesh.volume() < 0.0:
+        return Mesh(mesh.vertices, mesh.faces[:, ::-1])
+    return mesh
+
+
+def shading_transfer(mesh: "CollarMesh", skin: SkinPatch, wall: Mesh | None = None):
+    """Set ``mesh.shading_normals`` / ``shading_cavity`` (see :class:`CollarMesh`): near the rim the
+    normal and the cavity term of the SKIN under each vertex (``skin``: the body as it is meshed, the
+    renderer's area weighted normals and its cavity term), near the top edge those of the WALL (the
+    appendage's mesh), the collar's own between, blended by :func:`shade_weights` on ``mesh.profile_x``.
+    Hidden vertices (the underside, the parts inside the appendage) keep the nearest blend."""
+    from . import shading as sh
+    wall = outward(wall)
+    V = mesh.vertices
+    x = mesh.profile_x if mesh.profile_x is not None else np.zeros(len(V))
+    w_skin, w_own, w_wall = shade_weights(x)
+    # the occlusion is the skin's under the whole visible sheet and the wall's at its top edge: the collar's own
+    # cavity term (computed on the thin shell alone, and scaled by its station spacing) drew a dark ring half way
+    # up the fillet
+    a_wall = _smoothstep((x - SHADE_AO_WALL_FROM) / (1.0 - SHADE_AO_WALL_FROM))
+    n_own = sh.vertex_normals(V, mesh.faces)
+    N = w_own[:, None] * n_own
+    T = np.zeros(len(V))
+    k = (w_skin > 0.0) | (a_wall < 1.0)
+    if k.any():
+        n_s, t_s, _ = skin.sample(V[k])
+        N[k] += w_skin[k, None] * n_s
+        T[k] += (1.0 - a_wall[k]) * t_s
+    k = (w_wall > 0.0) | (a_wall > 0.0)
+    if k.any():
+        if wall is not None and len(wall.faces):
+            cen = V[k].mean(axis=0)
+            reach = float(np.linalg.norm(V[k] - cen, axis=1).max()) + 0.5
+            wp = SkinPatch(wall.vertices, wall.faces, cen, reach)
+            n_w, t_w, _ = wp.sample(V[k])
+        else:
+            n_w, t_w = n_own[k], np.zeros(int(k.sum()))
+        N[k] += w_wall[k, None] * n_w
+        T[k] += a_wall[k] * t_w
+    mesh.shading_normals = _unit(N)
+    mesh.shading_cavity = np.clip(T, 0.0, 1.0)
+    return mesh
 
 
 # --------------------------------------------------------------------------
@@ -927,6 +1517,42 @@ def skin_from_shell(mesh):
     return (mesh.vertices - t) @ R, mesh.faces
 
 
+def wants_collar(specs, enabled: bool = True) -> bool:
+    """Does any enabled appendage of ``specs`` (records, or built ``Placed``) get a root collar?  A built one
+    asks its kind (``collar_profile``); a record asks whether its kind has a collar at all and its ``collar``
+    parameter (the kind's default when absent) is above 0, which costs nothing (no appendage is built)."""
+    if not enabled:
+        return False
+    from . import kinds as K
+    for sp in specs or ():
+        if hasattr(sp, "kind") and hasattr(sp.kind, "collar_profile") and hasattr(sp, "anchor"):
+            prof = sp.kind.collar_profile(sp)                     # a Placed
+            if prof is not None and prof.active:
+                return True
+            continue
+        if not getattr(sp, "enabled", True):
+            continue
+        kind = K.kind_of(sp)
+        if kind is None or type(kind).collar_profile is K.Kind.collar_profile:
+            continue
+        params = dict(getattr(sp, "params", {}) or {})
+        spec = kind.param("collar", params) or kind.param("collar")
+        default = spec.default if spec is not None else 1.0
+        try:
+            if float(params.get("collar", default)) > 0.0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def default_levels(specs, enabled: bool = True) -> int:
+    """The subdivision level a character is meshed at when none is asked for: ``MIN_LEVEL`` (1) when an
+    appendage gets a root collar (the collar needs a subdivided body, and without it the default picture and
+    print showed the bare pipe in a flange the collar exists to remove), else 0 (the cage, as before)."""
+    return MIN_LEVEL if wants_collar(specs, enabled) else 0
+
+
 def collar_material(placed, profile: CollarProfile):
     """The material the collar renders with: the body's skin or the appendage's own."""
     if profile.material == "appendage":
@@ -936,7 +1562,7 @@ def collar_material(placed, profile: CollarProfile):
 
 
 def collar_pieces(base, shaped_verts, placed, controls=None, *, levels: int = 2, skin=None,
-                  profile: CollarProfile | None = None, diag: dict | None = None) -> list:
+                  profile: CollarProfile | None = None, diag: dict | None = None, shade: bool = True) -> list:
     """``[(name, Mesh, material)]``: the collar of one placed appendage (``[]``: none), in the
     MakeHuman frame like ``Placed.mesh()``.
 
@@ -946,7 +1572,9 @@ def collar_pieces(base, shaped_verts, placed, controls=None, *, levels: int = 2,
     Catmull-Clark shrink); ``skin`` is that body mesh as ``(vertices, triangles)`` in the same
     frame if the caller has it already (see :func:`skin_from_shell`) or a :class:`SkinPatch`;
     ``controls`` the pose the appendage is drawn in (default: its own).  ``profile`` overrides
-    ``placed.kind.collar_profile``.  At ``levels`` 0 (the cage itself) there is no collar (``MIN_LEVEL``)."""
+    ``placed.kind.collar_profile``.  At ``levels`` 0 (the cage itself) there is no collar (``MIN_LEVEL``).
+    The mesh is a :class:`CollarMesh` that carries the skin's and the wall's shading at its two edges
+    (:func:`shading_transfer`; ``shade=False``: none, the renderer computes its own)."""
     kind = placed.kind
     prof = profile if profile is not None else kind.collar_profile(placed)
     if prof is None or not prof.active or int(levels) < MIN_LEVEL:
@@ -969,6 +1597,8 @@ def collar_pieces(base, shaped_verts, placed, controls=None, *, levels: int = 2,
     mesh = build_collar(patch, points, radii, wall, prof, diag)
     if mesh is None:
         return []
+    if shade:
+        shading_transfer(mesh, patch, wall)
     return [(f"{placed.name}/collar", mesh, collar_material(placed, prof))]
 
 
@@ -984,13 +1614,20 @@ def collar_shells(base, shaped_verts, placed, *, levels: int = 2, skin=None, con
     if not enabled:
         return out
     for p in placed or ():
-        if p.kind.collar_profile(p) is None:
+        prof = p.kind.collar_profile(p)
+        if prof is None:
             continue
+        diag: dict = {}
         try:
-            for name, mesh, mat in collar_pieces(
-                    base, shaped_verts, p, None if controls is None else controls(p),
-                    levels=levels, skin=skin):
+            got = collar_pieces(base, shaped_verts, p, None if controls is None else controls(p),
+                                levels=levels, skin=skin, diag=diag)
+            for name, mesh, mat in got:
                 out.append((p, name, mesh, mat))
+            if not got and diag.get("dropped"):
+                # a collar the kind asked for and the construction could not build is said, not swallowed
+                from .kinds import AppendageWarning
+                warnings.warn(f"appendage {p.name!r}: no root collar ({diag['dropped']})", AppendageWarning,
+                              stacklevel=2)
         except (ValueError, KeyError, IndexError, FloatingPointError, np.linalg.LinAlgError) as exc:
             from .kinds import AppendageWarning
             warnings.warn(f"appendage {p.name!r}: no root collar ({exc})", AppendageWarning,
@@ -1002,6 +1639,68 @@ def collar_shells(base, shaped_verts, placed, *, levels: int = 2, skin=None, con
 # measuring a collar (tests, tools/collar_report.py, docs/collar.md)
 
 
+def crossing_pairs(vertices, faces) -> np.ndarray:
+    """``(k, 2)`` the pairs of triangles of ONE mesh that cross each other (as :func:`count_crossings`),
+    with a broad phase sized for a collar: a uniform grid of cells 1.5 median triangles wide (the
+    generic grid of ``junction_checks.overlapping_pairs`` takes the 90th percentile, and the long
+    triangles of a collar's fans and skirt made it pair 250,000 boxes: 0.9 s), the few long triangles
+    tested against every box directly. About 40 ms for a 7,000-face collar."""
+    from . import junction_checks as JC
+    V = np.asarray(vertices, dtype=np.float64)
+    F = np.asarray(faces, dtype=np.int64)
+    if not len(F):
+        return np.zeros((0, 2), dtype=np.int64)
+    P = V[F]
+    lo, hi = P.min(axis=1), P.max(axis=1)
+    ext = (hi - lo).max(axis=1)
+    cell = max(1.5 * float(np.median(ext)), 1e-6)
+    big = ext > 4.0 * cell
+    small = np.nonzero(~big)[0]
+    out = []
+    if len(small):
+        origin = lo.min(axis=0) - 1e-6
+        t, k, _ = JC._cells(lo[small], hi[small], cell, origin, max_span=6)
+        o = np.argsort(k, kind="stable")
+        ks, ts = k[o], small[t[o]]
+        left = np.searchsorted(ks, k, side="left")
+        right = np.searchsorted(ks, k, side="right")
+        cnt = right - left
+        tot = int(cnt.sum())
+        if tot:
+            ii = np.repeat(small[t], cnt)
+            start = np.cumsum(cnt) - cnt
+            jj = ts[np.arange(tot) - np.repeat(start, cnt) + np.repeat(left, cnt)]
+            kk = np.repeat(k, cnt)
+            keep = ii < jj
+            ii, jj, kk = ii[keep], jj[keep], kk[keep]
+            ok = np.all(lo[ii] <= hi[jj], axis=1) & np.all(lo[jj] <= hi[ii], axis=1)
+            ii, jj, kk = ii[ok], jj[ok], kk[ok]
+            corner = np.floor((np.maximum(lo[ii], lo[jj]) - origin) / cell).astype(np.int64)
+            first = kk == JC._key(corner[:, 0], corner[:, 1], corner[:, 2])
+            out.append(np.stack([ii[first], jj[first]], axis=1))
+    bigs = np.nonzero(big)[0]
+    for s0 in range(0, len(bigs), 64):
+        bb = bigs[s0:s0 + 64]
+        ok = (np.all(lo[None, :, :] <= hi[bb][:, None, :], axis=2) & np.all(lo[bb][:, None, :] <= hi[None, :, :], axis=2))
+        ok[np.arange(len(bb)), bb] = False
+        bi, js = np.nonzero(ok)
+        bi = bb[bi]
+        keep = ~big[js] | (js > bi)                       # a big-big pair once, big-small always
+        bi, js = bi[keep], js[keep]
+        out.append(np.stack([np.minimum(js, bi), np.maximum(js, bi)], axis=1))
+    if not out:
+        return np.zeros((0, 2), dtype=np.int64)
+    allp = np.concatenate(out)
+    nf = np.int64(len(F))
+    key = np.unique(allp[:, 0].astype(np.int64) * nf + allp[:, 1])
+    pairs = np.stack([key // nf, key % nf], axis=1)
+    share = (F[pairs[:, 0]][:, :, None] == F[pairs[:, 1]][:, None, :]).any(axis=(1, 2))
+    pairs = pairs[~share]
+    if not len(pairs):
+        return pairs
+    return pairs[JC.pairs_cross(V, F, pairs)]
+
+
 def count_crossings(vertices, faces, other_vertices=None, other_faces=None) -> int:
     """How many pairs of triangles cross each other: within one mesh, or (with ``other_*``) between
     two. Triangles that share a vertex are not counted (neighbours), nor are touching or coplanar ones
@@ -1010,22 +1709,17 @@ def count_crossings(vertices, faces, other_vertices=None, other_faces=None) -> i
     V = np.asarray(vertices, dtype=np.float64)
     F = np.asarray(faces, dtype=np.int64)
     if other_vertices is None:
-        allv, allf = V, F
-        rows = np.arange(len(F))
-        others = rows
-    else:
-        W = np.asarray(other_vertices, dtype=np.float64)
-        G = np.asarray(other_faces, dtype=np.int64)
-        allv = np.concatenate([V, W])
-        allf = np.concatenate([F, G + len(V)])
-        rows = np.arange(len(F))
-        others = np.arange(len(F), len(allf))
+        return int(len(crossing_pairs(V, F)))
+    W = np.asarray(other_vertices, dtype=np.float64)
+    G = np.asarray(other_faces, dtype=np.int64)
+    allv = np.concatenate([V, W])
+    allf = np.concatenate([F, G + len(V)])
+    rows = np.arange(len(F))
+    others = np.arange(len(F), len(allf))
     P = allv[allf]
     pairs = JC.overlapping_pairs(P.min(axis=1), P.max(axis=1), rows, others)
     if not len(pairs):
         return 0
-    if other_vertices is None:
-        pairs = pairs[pairs[:, 0] < pairs[:, 1]]
     share = (allf[pairs[:, 0]][:, :, None] == allf[pairs[:, 1]][:, None, :]).any(axis=(1, 2))
     pairs = pairs[~share]
     if not len(pairs):
@@ -1059,22 +1753,116 @@ def _shaded_normals(points, mesh: Mesh, vertex_normals) -> np.ndarray:
     return out
 
 
+def _resample_columns(cols, sub_t: int = 4, sub_s: int = 6):
+    """``cols`` (m, n, 3) stations x columns (closed around) -> (m', n * sub_t, 3) by linear interpolation:
+    the surface the triangles between them draw, sampled finely."""
+    m, n, _ = cols.shape
+    s = np.linspace(0, m - 1, (m - 1) * sub_s + 1)
+    i = np.clip(np.floor(s).astype(int), 0, m - 2)
+    f = (s - i)[:, None, None]
+    c = cols[i] * (1 - f) + cols[i + 1] * f
+    t = np.arange(n * sub_t) / sub_t
+    j = np.floor(t).astype(int) % n
+    g = (t - np.floor(t))[None, :, None]
+    return c[:, j] * (1 - g) + c[:, (j + 1) % n] * g
+
+
+def _wave(h, ok, half: int = 12) -> float:
+    """p95 - p5 of what a quadratic fit over ``2 half + 1`` samples (three columns either side, at four samples
+    a column) leaves of the circular signal ``h``, over the samples whose whole window is ``ok`` and finite: the
+    scallops and teeth of a contact line (a facet is three columns), not its slow rise and fall around the
+    ring, nor the taper at the end of a run of columns."""
+    h = np.asarray(h, dtype=np.float64)
+    m = len(h)
+    good = np.isfinite(h) & ok
+    if good.sum() < 2 * half + 2:
+        return float("nan")
+    x = np.where(good, h, 0.0)
+    w = good.astype(np.float64)
+    k = np.arange(-half, half + 1)
+    idx = (np.arange(m)[:, None] + k[None, :]) % m
+    full = w[idx].all(axis=1)
+    # a quadratic least-squares fit over the window (Savitzky-Golay): the curve's own bend is not a wobble
+    A = np.stack([np.ones_like(k), k, k * k], axis=1).astype(np.float64)
+    coef = np.linalg.pinv(A)[0]                                   # the fit's value at the window's centre
+    avg = x[idx] @ coef
+    r = (h - avg)[full]
+    return float(np.percentile(r, 95) - np.percentile(r, 5)) if len(r) > 8 else float("nan")
+
+
+def contact_lines(diag: dict, wall: Mesh, skin: SkinPatch, sub_t: int = 4) -> dict:
+    """Where the collar's SURFACE (its triangles, sampled finely) enters the wall and where it enters the
+    skin, column by column, and how wavy those two lines are: what the eye sees as the edge of the collar
+    (a scalloped or serrated contact line is a facet of one mesh crossing a tangent sheet of the other).
+
+    * ``wall_wave``: p95 - p5 of the local wobble (:func:`_wave`: what a quadratic fit over three columns either side
+      leaves) of the position, along the axis, at which the surface enters the wall, in root radii (the samples between
+      two kept columns, the tapered ends of a run included); ``wall_contact_missing``: the share
+      of the kept columns whose surface never enters the wall (a gap between the collar and the appendage);
+    * ``rim_wave``: the same for the distance from the wall at which the surface enters the skin."""
+    wall = outward(wall)
+    top, arcs = diag["top"], diag["arcs"]
+    n_vis = int(diag["n_vis"])
+    r = float(diag["r_root"])
+    keep = np.asarray(diag.get("keep", np.ones(top.shape[1], dtype=bool)), dtype=bool)
+    _, Tx, _, _, _ = diag["axis"].at(diag["s_x"])
+    X = diag["X"]
+    keepd = np.repeat(keep & np.roll(keep, -1), sub_t)          # samples between two kept columns
+    out = {}
+    cols = np.concatenate([top[:n_vis][::-1], arcs], axis=0)   # from the crossing of the skin up to E and on in
+    D = _resample_columns(cols, sub_t)
+    m2, n2, _ = D.shape
+    wp = SkinPatch(wall.vertices, wall.faces, X[keep].mean(axis=0), 8.0 * r + 1.0)
+    _, _, sd, _ = wp.closest(D.reshape(-1, 3))
+    sd = sd.reshape(m2, n2)
+    Xd = _resample_columns(X[None].repeat(2, 0), sub_t)[0]
+    Td = _resample_columns(Tx[None].repeat(2, 0), sub_t)[0]
+    inside = sd < 0.0
+    k = np.where(inside.any(axis=0), inside.argmax(axis=0), -1)
+    hw = np.full(n2, np.nan)
+    j = np.nonzero(k > 0)[0]
+    a_, b_ = sd[k[j] - 1, j], sd[k[j], j]
+    f = np.where(a_ != b_, a_ / np.where(a_ != b_, a_ - b_, 1.0), 0.5)[:, None]
+    C = D[k[j] - 1, j] * (1 - f) + D[k[j], j] * f
+    s_xd = _resample_columns(np.asarray(diag["s_x"], dtype=np.float64)[None, :, None].repeat(2, 0), sub_t)[0, :, 0]
+    hw[j] = s_xd[j] + ((C - Xd[j]) * Td[j]).sum(-1)      # where on the wall, along the axis (not over the jittery exit)
+    out["wall_contact_missing"] = float(np.mean(~np.isfinite(hw[keepd]))) if keepd.any() else 0.0
+    out["wall_wave"] = _wave(hw, keepd) / r
+    D = _resample_columns(top, sub_t)
+    m2, n2, _ = D.shape
+    _, _, sd, _ = skin.closest(D.reshape(-1, 3))
+    sd = sd.reshape(m2, n2)
+    start = max(0, (n_vis - 4) * 6)                              # from a few stations inside the crossing on
+    inside = sd[start:] < -1e-4
+    k = np.where(inside.any(axis=0), inside.argmax(axis=0) + start, -1)
+    rho = np.full(n2, np.nan)
+    j = np.nonzero(k > 0)[0]
+    rho[j] = np.linalg.norm(D[k[j], j] - Xd[j], axis=1)
+    out["rim_wave"] = _wave(rho, keepd) / r
+    return out
+
+
 def join_report(base, shaped_verts, placed, controls=None, *, levels: int = 2, skin=None,
                 profile: CollarProfile | None = None) -> dict:
-    """The numbers of one collar (``{}`` if the appendage has none):
+    """The numbers of one collar (``{}`` if the appendage has none). Angles in degrees, lengths in units
+    unless named otherwise. "Visible" columns are the kept ones at least ``VISIBLE_WIDTH`` wide.
 
-    * ``rim_*``: the angle between the RENDERER's vertex normal of the collar at its rim (the normals the
-      shading uses: area weighted over the collar's own faces) and the skin's smooth normal there, degrees
-      (0 = the surface continues the skin without a visible edge);
-    * ``wall_*``: the same where the collar meets the appendage, against the appendage's vertex normal
-      field (the shaded normal of the appendage's shell at that point);
-    * ``before_*``: for comparison, the angle between the skin and the wall where they meet WITHOUT the
-      collar (what the junction alone leaves: 90 = the skin runs into the wall, 0 = tangent);
-    * ``above_skin_min``: the lowest the visible sheet gets over the skin (units; >= 0 means it never
-      sinks below it), ``crease_p99``: the 99th percentile of the dihedral between neighbouring faces of
-      the visible sheet (the creases the collar itself adds);
-    * ``self_crossings`` (the shell with itself), ``below_skin_vertices`` (vertices of the visible sheet
-      more than ``SKIN_TOL`` under the skin), ``watertight`` / ``outward``, ``faces``, ``width_*`` / ``height_*`` (units).
+    * ``rim_*``: the angle between the normal the RENDERER shades the collar with at the line where it meets
+      the skin (``CollarMesh.shading_normals``: the skin's own there, :func:`shading_transfer`) and the skin's
+      smooth normal: 0 = no edge can be seen in the shading;
+    * ``wall_*``: the same where the collar meets the appendage, against the appendage's shaded normal;
+    * ``geo_rim_*`` / ``geo_wall_*``: the same with the collar's OWN area weighted vertex normals (its geometry,
+      what a print has): the angle at which the surface crosses the skin (``GAMMA_SKIN_DEG``) and the wall
+      (``ALPHA_WALL_DEG``, less where the profile is flatter); ``fold_columns``: kept columns whose own rim
+      normal is more than 90 degrees from the skin's (a sheet folded back over itself);
+    * ``lip_max``: the highest the line where the sheet meets the skin stands over the skin (a step a print shows);
+    * ``before_*``: the angle between the skin and the wall where they meet WITHOUT the collar (90 = the skin
+      runs into the wall, 0 = tangent: what the junction alone leaves);
+    * ``above_skin_min`` / ``below_skin_vertices``: over the visible sheet (between the wall and the crossing);
+      ``crease_p99``: the 99th percentile of the dihedral between neighbouring faces of the visible sheet;
+    * ``self_crossings`` (the shell with itself, exact), ``watertight`` / ``outward``, ``faces``, ``width_*`` /
+      ``height_*``, ``kept_share`` (the share of the ring that has a collar), ``guard_iterations``;
+    * ``wall_wave`` / ``rim_wave`` / ``wall_contact_missing``: :func:`contact_lines` (root radii).
     """
     from . import shading as sh
     diag: dict = {}
@@ -1086,51 +1874,59 @@ def join_report(base, shaped_verts, placed, controls=None, *, levels: int = 2, s
         return {}
     mesh = pieces[0][1]
     prof = profile if profile is not None else placed.kind.collar_profile(placed)
-    n = prof.segments
     ctl = placed.controls if controls is None else controls
-    wall = placed.kind.collar_wall(placed, ctl)      # the surface the collar meets (a wing: its arm piece)
-    top, arcs, N = diag["top"], diag["arcs"], diag["N"]
-    A = len(arcs)
-    n_vis = N.shape[0] - len(SKIRT_U)                     # stations of the visible sheet
-    vn = sh.vertex_normals(mesh.vertices, mesh.faces)
-    rim = vn[(A + n_vis - 1) * n:(A + n_vis) * n]
-    # a collar thinner than VISIBLE_WIDTH (0.08 mm at medium) cannot be seen: the fold side of a tail; the
-    # angles, the creases and the height over the skin are measured where it can
-    vis = diag["W"] >= VISIBLE_WIDTH
+    wall = outward(placed.kind.collar_wall(placed, ctl))   # the surface the collar meets (a wing: its arm piece)
+    top, N = diag["top"], diag["N"]
+    n_vis = int(diag["n_vis"])
+    keep = np.asarray(diag["keep"], dtype=bool)
+    vt = diag["vid_top"]
+    vn_geo = sh.vertex_normals(mesh.vertices, mesh.faces)
+    vn_shd = mesh.shading_normals if getattr(mesh, "shading_normals", None) is not None else vn_geo
+    vis = keep & (diag["W"] * diag["u_x"] >= VISIBLE_WIDTH)                    # the reach above the skin
     vis = vis & np.roll(vis, 1) & np.roll(vis, -1)
     rep = {"seconds": seconds, "faces": int(len(mesh.faces)), "watertight": bool(mesh.is_watertight),
-           "outward": bool(mesh.volume() > 0), "visible_share": float(vis.mean())}
-    rep.update(_stats(_angles(rim, N[n_vis - 1])[vis], "rim"))
-    # the appendage's shaded normal at E: closest point on the wall, barycentric over its vertex normals
+           "outward": bool(mesh.volume() > 0), "visible_share": float(vis.mean()), "kept_share": float(keep.mean()),
+           "guard_iterations": int(diag.get("guard_iterations", 0))}
+    if not vis.any():
+        vis = keep.copy()
+    rim_ids = vt[n_vis - 1][vis]
+    skin_n = N[n_vis - 1][vis]
+    rep.update(_stats(_angles(vn_shd[rim_ids], skin_n), "rim"))
+    rep.update(_stats(_angles(vn_geo[rim_ids], skin_n), "geo_rim"))
+    rep["fold_columns"] = int((_angles(vn_geo[vt[n_vis - 1][keep]], N[n_vis - 1][keep]) > 90.0).sum())
     vw = sh.vertex_normals(wall.vertices, wall.faces)
-    bn = _shaded_normals(diag["E"], wall, vw)
-    rep.update(_stats(_angles(vn[A * n:(A + 1) * n], bn)[vis], "wall"))
-    # the angle skin / wall without the collar: the skin normal at the exit against the wall normal there
-    wall_n = _shaded_normals(diag["X"], wall, vw)
-    sk_n = diag["N"][0]
-    rep.update(_stats(np.degrees(np.arccos(np.clip(np.abs((wall_n * sk_n).sum(-1)), 0.0, 1.0)))[vis],
-                      "before"))
-    # visible sheet vs the skin
+    bn = _shaded_normals(diag["E"][vis], wall, vw)
+    e_ids = vt[0][vis]
+    rep.update(_stats(_angles(vn_shd[e_ids], bn), "wall"))
+    rep.update(_stats(_angles(vn_geo[e_ids], bn), "geo_wall"))
+    wall_n = _shaded_normals(diag["X"][vis], wall, vw)
+    sk_n = diag["N"][0][vis]
+    rep.update(_stats(np.degrees(np.arccos(np.clip(np.abs((wall_n * sk_n).sum(-1)), 0.0, 1.0))), "before"))
     patch = skin if isinstance(skin, SkinPatch) else None
     if patch is None:
         sk = skin if skin is not None else shaped_skin(base, shaped_verts, levels)
         r_max = float(np.max(placed.kind.collar_axis(placed, ctl)[1]))
         patch = SkinPatch(sk[0], sk[1], np.asarray(placed.anchor, dtype=np.float64),
                           (prof.width + 2.4) * r_max + 0.5)
-    sheet = top[1:n_vis][:, vis].reshape(-1, 3)
+    sheet = top[1:n_vis - 1][:, vis].reshape(-1, 3)
     _, _, sd, _ = patch.closest(sheet)
-    rep["above_skin_min"] = float(sd.min())
-    # creases of the visible sheet: dihedral between the face normals of neighbouring quads of the rings
+    rep["above_skin_min"] = float(sd.min()) if len(sd) else 0.0
+    rep["below_skin_vertices"] = int((sd < -SKIN_TOL).sum())
+    _, _, sdr, _ = patch.closest(top[n_vis - 1][keep])
+    rep["lip_max"] = float(np.abs(sdr).max())
     T = top[:n_vis]
+    n = T.shape[1]
     j, jn = np.arange(n), (np.arange(n) + 1) % n
-    fn = np.cross(T[1:, jn] - T[1:, j], T[:-1, j] - T[1:, j])               # (n_vis - 1, n, 3)
+    fn = np.cross(T[1:, jn] - T[1:, j], T[:-1, j] - T[1:, j])
     fn /= np.maximum(np.linalg.norm(fn, axis=-1, keepdims=True), _EPS)
     vf = vis & np.roll(vis, -1)
     d_rad = _angles(fn[1:], fn[:-1])[:, vf].ravel()
-    d_cir = _angles(fn, np.roll(fn, -1, axis=1))[:, vf].ravel()
-    rep["crease_p99"] = float(np.percentile(np.concatenate([d_rad, d_cir]), 99))
-    rep["self_crossings"] = count_crossings(mesh.vertices, mesh.faces)
-    rep["below_skin_vertices"] = int((sd < -SKIN_TOL).sum())               # visible sheet vertices under the skin
-    rep["width_min"], rep["width_max"] = float(diag["W"].min()), float(diag["W"].max())
-    rep["height_min"], rep["height_max"] = float(diag["H"].min()), float(diag["H"].max())
+    d_cir = _angles(fn, np.roll(fn, -1, axis=1))[:, vf & np.roll(vf, -1)].ravel()
+    both = np.concatenate([d_rad, d_cir])
+    rep["crease_p99"] = float(np.percentile(both, 99)) if len(both) else 0.0
+    rep["self_crossings"] = int(len(crossing_pairs(mesh.vertices, mesh.faces)))
+    rep.update(contact_lines(diag, wall, patch))
+    W = diag["W"][keep]
+    rep["width_min"], rep["width_max"] = float(W.min()), float(W.max())
+    rep["height_min"], rep["height_max"] = float(diag["H"][keep].min()), float(diag["H"][keep].max())
     return rep

@@ -1,0 +1,168 @@
+{
+  "anatomy": {
+    "cap": 1.0,
+    "enabled": true
+  },
+  "appendages": [
+    {
+      "controls": {},
+      "enabled": true,
+      "id": "horn-1",
+      "kind": "horn",
+      "params": {
+        "shape": "ram"
+      },
+      "placement": {
+        "anchor": {
+          "corners": [
+            7704,
+            12149,
+            12150,
+            7705
+          ],
+          "face": 11860
+        },
+        "offset": -0.55,
+        "preset": "horn_temple_crest"
+      },
+      "side": "both"
+    },
+    {
+      "controls": {},
+      "enabled": true,
+      "id": "horn-2",
+      "kind": "horn",
+      "params": {
+        "ring_verts": 16,
+        "shape": "spiral"
+      },
+      "placement": {
+        "anchor": {
+          "corners": [
+            7676,
+            7677,
+            7017,
+            7016
+          ],
+          "face": 7314
+        },
+        "offset": -0.55,
+        "preset": "horn_brow"
+      },
+      "side": "both"
+    }
+  ],
+  "asymmetry": {},
+  "format": "minimaster-character",
+  "macro": {
+    "african": 0.0,
+    "age": 0.5,
+    "asian": 0.0,
+    "caucasian": 1.0,
+    "gender": 0.5,
+    "height": 0.5,
+    "muscle": 0.5,
+    "weight": 0.5
+  },
+  "materials": {
+    "eye_color": "#5b7c8d",
+    "skin": "SKIN"
+  },
+  "name": "unnamed",
+  "sliders": {
+    "cheek.cheek_bones": -0.803,
+    "cheek.cheek_inner": -0.05,
+    "cheek.cheek_trans": -0.79,
+    "cheek.cheek_volume": 0.385,
+    "chin.chin.triangle": 0.071,
+    "chin.chin_bones": 0.475,
+    "chin.chin_cleft": -0.176,
+    "chin.chin_height": 0.139,
+    "chin.chin_jaw_drop": -0.1,
+    "chin.chin_prognathism": -0.258,
+    "chin.chin_prominent": 0.051,
+    "chin.chin_width": -0.44,
+    "ears.ear_flap": -0.124,
+    "ears.ear_lobe": 0.244,
+    "ears.ear_rot": 0.02,
+    "ears.ear_scale": -0.144,
+    "ears.ear_scale_depth": 0.766,
+    "ears.ear_scale_vert": 0.02,
+    "ears.ear_trans.backward_forward": -0.205,
+    "ears.ear_trans.down_up": 0.056,
+    "ears.ear_wing": -0.183,
+    "eyebrows.eyebrows_angle": -0.413,
+    "eyebrows.eyebrows_trans.backward_forward": -0.402,
+    "eyebrows.eyebrows_trans.down_up": 0.234,
+    "eyes.eye_bag.decr_incr": -0.135,
+    "eyes.eye_bag.in_out": -0.123,
+    "eyes.eye_bag_height": 0.709,
+    "eyes.eye_corner2": 0.061,
+    "eyes.eye_epicanthus": 0.236,
+    "eyes.eye_eyefold.concave_convex": 0.706,
+    "eyes.eye_eyefold.down_up": -0.078,
+    "eyes.eye_eyefold_angle": -0.218,
+    "eyes.eye_height1": 0.866,
+    "eyes.eye_height2": -0.511,
+    "eyes.eye_height3": -0.129,
+    "eyes.eye_push1": 0.233,
+    "eyes.eye_push2": 0.799,
+    "eyes.eye_scale": -0.332,
+    "eyes.eye_trans.down_up": -0.85,
+    "eyes.eye_trans.in_out": 0.232,
+    "forehead.forehead_nubian": -0.183,
+    "forehead.forehead_scale_vert": -0.136,
+    "forehead.forehead_temple": 0.161,
+    "forehead.forehead_trans": 0.078,
+    "head.head_age": 0.102,
+    "head.head_angle": -0.151,
+    "head.head_back_scale_depth": 0.451,
+    "head.head_fat": 0.527,
+    "head.head_scale_horiz": -0.158,
+    "head.head_scale_vert": 0.257,
+    "head.head_trans.backward_forward": 0.167,
+    "head.head_trans.down_up": -0.364,
+    "head.head_trans.in_out": -0.161,
+    "mouth.mouth_angles": 0.367,
+    "mouth.mouth_cupidsbow": -0.034,
+    "mouth.mouth_cupidsbow_width": -0.115,
+    "mouth.mouth_dimples": 0.074,
+    "mouth.mouth_lowerlip_height": -0.676,
+    "mouth.mouth_lowerlip_middle": 0.612,
+    "mouth.mouth_lowerlip_volume": 0.07,
+    "mouth.mouth_lowerlip_width": -0.307,
+    "mouth.mouth_philtrum_volume": 0.343,
+    "mouth.mouth_scale_depth": 0.108,
+    "mouth.mouth_scale_vert": 0.367,
+    "mouth.mouth_trans.backward_forward": 0.791,
+    "mouth.mouth_trans.down_up": 0.194,
+    "mouth.mouth_trans.in_out": 0.555,
+    "mouth.mouth_upperlip_ext": 0.755,
+    "mouth.mouth_upperlip_height": -0.357,
+    "mouth.mouth_upperlip_middle": -0.183,
+    "mouth.mouth_upperlip_volume": 0.272,
+    "mouth.mouth_upperlip_width": -0.598,
+    "nose.nose_base": -0.094,
+    "nose.nose_compression": 0.453,
+    "nose.nose_curve": 0.365,
+    "nose.nose_flaring": 0.203,
+    "nose.nose_greek": -0.663,
+    "nose.nose_hump": 0.823,
+    "nose.nose_nostrils_angle": 0.193,
+    "nose.nose_nostrils_width": 0.268,
+    "nose.nose_point": 0.173,
+    "nose.nose_point_width": -0.601,
+    "nose.nose_scale_depth": -0.502,
+    "nose.nose_scale_horiz": -0.426,
+    "nose.nose_scale_vert": 0.671,
+    "nose.nose_septumangle": -0.291,
+    "nose.nose_trans.backward_forward": -0.085,
+    "nose.nose_trans.down_up": -0.089,
+    "nose.nose_trans.in_out": 0.2,
+    "nose.nose_volume": 0.175,
+    "nose.nose_width1": 0.094,
+    "nose.nose_width2": -0.442,
+    "nose.nose_width3": -1.0
+  },
+  "version": 2
+}

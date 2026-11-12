@@ -1,0 +1,144 @@
+{
+ "cases": {
+  "wing_child_offset.mmchar": {
+   "arm_vertices": 352,
+   "body": "child",
+   "edits": {
+    "offset": -0.7
+   },
+   "exit_x_shx": 0.9044,
+   "exit_y_lt": 0.1818,
+   "joint": [
+    0.6371,
+    1.3283,
+    -0.0473
+   ],
+   "params": {},
+   "plain_angle": 39.94,
+   "radius_t015": 0.4345,
+   "radius_t03": 0.4282,
+   "sides": 14
+  },
+  "wing_dragon_offset.mmchar": {
+   "arm_vertices": 352,
+   "body": "neutral",
+   "edits": {
+    "offset": -1.1
+   },
+   "exit_x_shx": 0.9572,
+   "exit_y_lt": 0.3706,
+   "joint": [
+    0.9077,
+    4.9162,
+    0.1407
+   ],
+   "params": {
+    "style": "dragon"
+   },
+   "plain_angle": 44.48,
+   "radius_t015": 0.4648,
+   "radius_t03": 0.4592,
+   "sides": 14
+  },
+  "wing_feathered_roll.mmchar": {
+   "arm_vertices": 184,
+   "body": "neutral",
+   "edits": {
+    "roll": -80.0
+   },
+   "exit_x_shx": 0.8925,
+   "exit_y_lt": 0.3833,
+   "joint": [
+    0.9077,
+    4.9162,
+    -0.0593
+   ],
+   "params": {
+    "style": "feathered"
+   },
+   "plain_angle": 43.93,
+   "radius_t015": 0.3152,
+   "radius_t03": 0.3744,
+   "sides": 14
+  },
+  "wing_hint.mmchar": {
+   "arm_vertices": 352,
+   "body": "neutral",
+   "edits": {
+    "up_hint": [
+     1.0,
+     1.2,
+     -0.5
+    ]
+   },
+   "exit_x_shx": 0.8539,
+   "exit_y_lt": 0.2577,
+   "joint": [
+    0.9077,
+    4.9162,
+    -0.0593
+   ],
+   "params": {},
+   "plain_angle": 53.38,
+   "radius_t015": 0.4348,
+   "radius_t03": 0.4284,
+   "sides": 14
+  },
+  "wing_offset.mmchar": {
+   "arm_vertices": 352,
+   "body": "neutral",
+   "edits": {
+    "offset": -0.7
+   },
+   "exit_x_shx": 0.8172,
+   "exit_y_lt": 0.2718,
+   "joint": [
+    0.9077,
+    4.9162,
+    -0.2593
+   ],
+   "params": {},
+   "plain_angle": 47.76,
+   "radius_t015": 0.4345,
+   "radius_t03": 0.4283,
+   "sides": 14
+  },
+  "wing_roll.mmchar": {
+   "arm_vertices": 352,
+   "body": "neutral",
+   "edits": {
+    "roll": 12.0
+   },
+   "exit_x_shx": 0.8927,
+   "exit_y_lt": 0.3192,
+   "joint": [
+    0.9077,
+    4.9162,
+    -0.0593
+   ],
+   "params": {},
+   "plain_angle": 44.62,
+   "radius_t015": 0.4345,
+   "radius_t03": 0.4283,
+   "sides": 14
+  },
+  "wing_untouched.mmchar": {
+   "arm_vertices": 352,
+   "body": "neutral",
+   "edits": {},
+   "exit_x_shx": 0.8927,
+   "exit_y_lt": 0.3192,
+   "joint": [
+    0.9077,
+    4.9162,
+    -0.0593
+   ],
+   "params": {},
+   "plain_angle": 44.62,
+   "radius_t015": 0.4345,
+   "radius_t03": 0.4283,
+   "sides": 14
+  }
+ },
+ "written_by": "c808d60"
+}

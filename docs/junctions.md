@@ -602,8 +602,10 @@ literal numbers (2, 2, 1.25) next to the module's constants.
 The body is subdivided (Catmull-Clark, levels 1-2) for render and print. The junction moves cage vertices
 and CC rounds the result, so `levels >= 1` renders and prints the fillet smoothly (the 95th-percentile crease
 in the zone falls by about half with each level: horn 20 -> 10 degrees from L1 to L2, `tests/test_junction.py::
-test_the_subdivided_shaped_body_is_smooth_where_the_cage_is_coarse`); at level 0 (the CLI's default for a
-picture) it is as coarse as the cage. `minimaster character --subdivide 1 -o x.stl` used to die with "cage
+test_the_subdivided_shaped_body_is_smooth_where_the_cage_is_coarse`); at level 0 it is as coarse as the cage. Since round 4 the default level of the CLI and of the Character tab's final
+preview and export is 1 for a character with an appendage that has a root collar (`collar.default_levels`, see
+[collar.md](collar.md#4-the-default-level-is-1-when-a-collar-is-asked-for)) and 0 without; the lab's draft is the proxy
+at any level. `minimaster character --subdivide 1 -o x.stl` used to die with "cage
 is not a closed 2-manifold: 38 edges" even without appendages: the two TEETH helper islands are open (38
 boundary edges) and Catmull-Clark of an open cage raises. At level 0 they were dropped by the watertight
 check AFTER building; `printprep.character_print_shells` now leaves them out BEFORE subdividing
@@ -628,10 +630,11 @@ of `Keep` can chain several, as the tail does.
 ## The exact seam: the root collar
 
 The cage displacement cannot make the skin meet a root tangentially (a cage quad is 0.28 units, a root 0.4-0.6 across: 38-102 degrees
-from tangent above): the last step is a closed shell on the appendage's own geometry whose rim lies on the shaped skin, tangent to it, and
-that rises along the wall to join it tangentially: [collar.md](collar.md) (`collar.py`, the tail only for now: `Kind.collar_profile`).
-It is built from the skin AFTER `apply_junctions`, fitted to the body as it is meshed, and switched off by `--no-junction`, `--no-collar`
-and the tail's parameter `collar = 0`.
+from tangent above): the last step is a closed shell on the appendage's own geometry that crosses the shaped skin at a small angle and rises
+along the wall into it, DRAWN with the skin's normals and occlusion where it meets the skin and the wall's where it meets the appendage (so
+the seam cannot be seen in the shading, round 4): [collar.md](collar.md) (`collar.py`; the tail, the wings and the horns:
+`Kind.collar_profile`). It is built from the skin AFTER `apply_junctions`, fitted to the body as it is meshed, and switched off by
+`--no-junction`, `--no-collar` and the kinds' parameter `collar = 0`.
 
 ## Seen from the lab, and its limits
 

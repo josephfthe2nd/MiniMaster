@@ -88,7 +88,10 @@ def _collar(sphere, profile=None, x=0.0, tilt=0.0, diag=None, centre=None):
     wall = _tube_mesh(x=x, tilt=tilt)
     patch = CO.SkinPatch(v, f, np.array([x, 0.0, SPHERE_R]) if centre is None else centre, 6.0)
     prof = profile or CO.CollarProfile()
-    return CO.build_collar(patch, pts, rad, wall, prof, diag), patch, wall
+    m = CO.build_collar(patch, pts, rad, wall, prof, diag)
+    if m is not None:
+        CO.shading_transfer(m, patch, wall)                 # what collar_pieces does: the shading the renderer uses
+    return m, patch, wall
 
 
 def _rings(diag):
@@ -200,72 +203,93 @@ def test_the_collar_is_a_closed_outward_shell_with_the_asked_sampling(sphere):
     m, _, _ = _collar(sphere, diag=d)
     rep = m.integrity_report()
     assert rep["watertight"] and rep["outward"] and rep["degenerate_faces"] == 0 and rep["nonmanifold_edges"] == 0
-    assert d["top"].shape[1] >= 48 and len(d["top"]) - len(CO.SKIRT_U) >= 12 + 1      # >= 48 around, >= 12 radial
+    assert d["top"].shape[1] >= 48 and d["n_vis"] >= 12 + 1                               # >= 48 around, >= 12 radial
 
 
-def test_the_rim_lies_on_the_skin_and_is_tangent_to_it(sphere):
+def _ang(a, b):
+    return np.degrees(np.arccos(np.clip((a * b).sum(-1), -1, 1)))
+
+
+def _ids(d, station):
+    """The vertex of every kept column at a station of the sheet (``vid_top``; -1 where the column is cut)."""
+    return d["vid_top"][station][d["keep"]]
+
+
+def test_the_sheet_crosses_the_skin_at_the_crossing_angle_and_is_drawn_with_the_skins_normals(sphere):
+    """Round 4: the sheet is no longer tangent to the skin where they meet. A tangent sheet lay within the facets'
+    error of the skin over a band and z-fought there (the serrated outline of the round-3 'sticker'); it now goes
+    INTO the skin at GAMMA_SKIN_DEG (a clean depth crossing) and that kink is never seen, because the renderer draws
+    the collar with the skin's own normals there (CollarMesh.shading_normals)."""
     d = {}
     m, patch, _ = _collar(sphere, diag=d)
-    n, A = _rings(d)
-    n_vis = len(d["top"]) - len(CO.SKIRT_U)
-    rim = d["top"][n_vis - 1]
+    n_vis = d["n_vis"]
+    rim = d["top"][n_vis - 1][d["keep"]]
     assert np.abs(np.linalg.norm(rim, axis=1) - SPHERE_R).max() < 0.03          # on the sphere (the mesh's facets)
-    vn = sh.vertex_normals(m.vertices, m.faces)                                 # the normals the renderer shades with
-    rn = vn[(A + n_vis - 1) * n:(A + n_vis) * n]
     sphere_n = rim / np.linalg.norm(rim, axis=1, keepdims=True)
-    ang = np.degrees(np.arccos(np.clip((rn * sphere_n).sum(1), -1, 1)))
-    wide = d["W"] > 0.1
-    assert wide.sum() > 20 and np.percentile(ang[wide], 95) < 8.0                 # G1 with the skin: no visible edge
+    own = sh.vertex_normals(m.vertices, m.faces)[_ids(d, n_vis - 1)]             # the geometry: the crossing angle
+    shade = m.shading_normals[_ids(d, n_vis - 1)]                                 # what the renderer draws with
+    wide = (d["W"] > 0.3)[d["keep"]]
+    g = _ang(own, sphere_n)[wide]
+    assert wide.sum() > 20 and 0.5 * CO.GAMMA_SKIN_DEG < np.median(g) < 2.0 * CO.GAMMA_SKIN_DEG
+    # the last visible chord itself (the vertex normal also sees the dive past the crossing): GAMMA_SKIN_DEG into the skin
+    chord = (rim - d["top"][n_vis - 2][d["keep"]])[wide]
+    into = np.degrees(np.arcsin(np.abs((chord * sphere_n[wide]).sum(1)) / np.linalg.norm(chord, axis=1)))
+    assert 0.7 * CO.GAMMA_SKIN_DEG < np.median(into) < 1.3 * CO.GAMMA_SKIN_DEG, np.median(into)
+    assert np.percentile(_ang(shade, sphere_n)[wide], 95) < 1.0                  # no edge in the shading
 
 
-def test_the_sheet_is_above_the_skin_and_only_the_hidden_parts_are_below(sphere):
+def test_the_visible_sheet_is_above_the_skin_and_the_dive_and_the_skirt_are_under_it(sphere):
     d = {}
     m, patch, _ = _collar(sphere, diag=d)
-    top, bottom, arcs = d["top"], d["bottom"], d["arcs"]
-    n_vis = len(top) - len(CO.SKIRT_U)
-    for i in range(1, n_vis):                                                     # the visible sheet: never under the skin
-        r = np.linalg.norm(top[i], axis=1)
+    top, bottom, arcs, keep = d["top"], d["bottom"], d["arcs"], d["keep"]
+    n_vis = d["n_vis"]
+    for i in range(1, n_vis - 1):                                                 # the visible sheet: never under the skin
+        r = np.linalg.norm(top[i][keep], axis=1)
         assert (r - SPHERE_R).min() > -CO.SKIN_TOL, i
-    assert (np.linalg.norm(bottom[:-1], axis=2) < SPHERE_R + 0.01).all()           # the underside: under it
-    far = bottom[n_vis - 1]
-    assert (SPHERE_R - np.linalg.norm(far, axis=1)).min() > 0.02                   # sunk, so the weld overlaps the body
+    for i in range(n_vis, len(top)):                                              # past the crossing: under it
+        assert (np.linalg.norm(top[i][keep], axis=1) - SPHERE_R).max() < 0.0, i
+    assert (np.linalg.norm(bottom[:-1][:, keep], axis=2) < SPHERE_R + 0.01).all()  # the underside: under it
+    far = bottom[n_vis - 1][keep]
+    assert (SPHERE_R - np.linalg.norm(far, axis=1)).min() > 0.01                  # sunk, so the weld overlaps the body
     # the carried-on sheet is inside the tube: its distance to the axis is below the wall's
-    rad = np.linalg.norm(arcs[..., :2], axis=2)
-    assert (rad < TUBE_R * 1.01).all() and (rad[-1] < 0.9 * TUBE_R).all()
+    rad = np.linalg.norm(arcs[:, keep, :2], axis=2)
+    assert (rad < TUBE_R * 1.001).all() and (rad[-1] < 0.95 * TUBE_R).all()
 
 
-def test_the_join_with_the_wall_is_on_the_wall_and_tangent_to_it(sphere):
+def test_the_sheet_reaches_the_faceted_wall_and_goes_in_at_the_wall_angle(sphere):
+    """The top edge lies ON the polygon of the wall (not on a smoothed circle a hair outside it, which the facets
+    crossed in scallops) and arrives at about ALPHA_WALL_DEG; the renderer draws it with the wall's own normals."""
     d = {}
     m, _, wall = _collar(sphere, diag=d)
-    n, A = _rings(d)
-    E = d["E"]
+    keep = d["keep"]
+    E = d["E"][keep]
     rad = np.linalg.norm(E[:, :2], axis=1)
-    assert np.abs(rad - TUBE_R).max() < 0.03                                         # on the (faceted) wall, a hair outside
-    vn = sh.vertex_normals(m.vertices, m.faces)
-    en = vn[A * n:(A + 1) * n]
-    expect = np.stack([E[:, 0], E[:, 1], np.zeros(len(E))], axis=1)
-    expect /= np.linalg.norm(expect, axis=1, keepdims=True)                         # a straight cylinder: the normal is radial
-    ang = np.degrees(np.arccos(np.clip((en * expect).sum(1), -1, 1)))
-    wide = d["W"] > 0.1
-    assert np.percentile(ang[wide], 95) < 8.0
+    assert (rad <= TUBE_R + 1e-6).all() and (rad >= TUBE_R * np.cos(np.pi / 16) - 1e-6).all()   # on the 16-gon
+    t = CO._unit(E - d["top"][1][keep])                                           # the last chord, into the wall
+    radial = np.stack([E[:, 0], E[:, 1], np.zeros(len(E))], axis=1) / rad[:, None]
+    arrive = 90.0 - _ang(-t, radial)                                              # its angle to the wall's plane
+    assert 0.4 * CO.ALPHA_WALL_DEG < np.median(arrive) < 1.3 * CO.ALPHA_WALL_DEG
+    vw = sh.vertex_normals(wall.vertices, wall.faces)
+    wn = CO._shaded_normals(E, wall, vw)
+    assert np.percentile(_ang(m.shading_normals[_ids(d, 0)], wn), 95) < 1.0
 
 
-def test_the_join_ring_follows_the_smooth_wall_not_the_facets_of_the_polygon(sphere):
-    """A 16-gon's facet normals are up to 11 degrees from its shading normals: a collar that followed the facets
-    would show a scalloped seam, so the ring is the wall with the polygon's radius low-passed (radius within a
-    fifth of the sagitta of a facet instead of all of it)."""
+def test_the_columns_sit_on_the_corners_of_the_walls_polygon(sphere):
+    """Between two columns the collar's top edge is a straight chord; a corner of the 16-gon between two columns
+    poked through it and the contact line dipped there (a scallop per facet, the round-3 horn finding). The
+    columns are a multiple of the sides, the first ON a corner, so every chord lies on a facet."""
     d = {}
-    _collar(sphere, diag=d)
+    m, patch, wall = _collar(sphere, diag=d)
+    assert d["sides"] == 16 and len(d["theta"]) % 16 == 0
+    per = len(d["theta"]) // 16
+    corners = np.linalg.norm(d["E"][::per, :2], axis=1)
+    assert np.abs(corners - TUBE_R).max() < 2e-3                                   # the polygon's vertices
+    rep = CO.contact_lines(d, wall, patch)
+    assert rep["wall_wave"] < 0.01 and rep["wall_contact_missing"] == 0.0
+    # the wall IS faceted: its radius round the ring varies by the sagitta
     sag = TUBE_R * (1.0 - np.cos(np.pi / 16))
-    rad = np.linalg.norm(d["E"][:, :2], axis=1)
-    assert np.ptp(rad) < 0.25 * sag
-    assert np.ptp(rad) == pytest.approx(0.0, abs=0.25 * sag)
-    # the unsmoothed wall IS faceted: its radius around the ring varies by the sagitta
-    wall = _tube_mesh()
-    ax = CO.Axis(*_axis(), (0, 1, 0))
-    w = CO.Wall(ax, wall)
-    th = np.arange(96) * 2 * np.pi / 96
-    raw = w.radius(th, np.full(96, 3.0))[0]
+    w = CO.Wall(CO.Axis(*_axis(), (0, 1, 0)), wall)
+    raw = w.radius(np.arange(96) * 2 * np.pi / 96, np.full(96, 3.0))[0]
     assert np.ptp(raw) == pytest.approx(sag, rel=0.2)
 
 
@@ -286,8 +310,7 @@ def test_the_collar_is_wide_on_the_open_side_and_a_crease_on_the_folded_side(sph
     _collar(sphere, diag=d)
     n = len(d["W"])
     assert d["W"][0] > 0.8 * CO.CollarProfile().width * TUBE_R * np.cos(np.pi / 16)       # up: the full width
-    assert d["W"][n // 2] < 0.1 * d["W"][0]                                                  # down: a hair
-    assert d["H"][0] > 4 * d["H"][n // 2]
+    assert not d["keep"][n // 2] and d["W"][n // 2] == 0.0                                  # down: no collar (an open ring)
     # no asymmetry asked: the same all round
     d2 = {}
     _collar(sphere, profile=CO.CollarProfile(ventral=CO.CollarProfile().width), diag=d2)
@@ -328,43 +351,47 @@ def test_a_lean_over_the_skin_takes_the_collar_away_on_that_side():
 # -- what must fail without the fixes (the mutations the tests above and below are meant to catch) -------------------------
 
 
-def test_the_sheet_leaves_the_skin_at_a_small_angle_so_it_is_clear_of_the_facets(sphere):
-    """Tangent to the skin at the rim, but not coplanar with its facets over a wide band: a sheet that lies on
-    the skin within the facets' error ragged the edge where the two shadings differ (the ramp, 2.9 degrees)."""
-    h = {}
-    for name, ramp in (("ramp", 0.05), ("flat", 0.0)):
+def test_the_sheet_goes_into_the_skin_at_the_asked_angle_and_a_steeper_one_shows_less_of_it(sphere):
+    """``ramp`` is the tangent of the angle the sheet crosses the skin at: the near-flat outer part of the profile (less
+    than a hair of height, the wide tinted 'patch' of round 3) is under the skin, more of it the steeper the crossing."""
+    reach, angle = {}, {}
+    for ramp in (0.05, 0.15):
         d = {}
-        _collar(sphere, profile=CO.CollarProfile(ramp=ramp), diag=d)
-        n_vis = len(d["top"]) - len(CO.SKIRT_U)
-        col = 0                                                         # the open side: a wide collar
-        P, top = d["P"][:n_vis, col], d["top"][:n_vis, col]
-        dist = np.linalg.norm(P - P[n_vis - 1], axis=1)                  # how far inside the rim each station is
-        k = int(np.argmin(np.abs(dist - 0.22)))
-        h[name] = np.linalg.norm(top[k]) - SPHERE_R
-    assert h["ramp"] > 0.001 and h["ramp"] > 2.5 * h["flat"] > 0
+        m, _, _ = _collar(sphere, profile=CO.CollarProfile(ramp=ramp), diag=d)
+        keep = d["keep"] & (d["W"] > 0.3)
+        n_vis = d["n_vis"]
+        reach[ramp] = np.median((d["u_x"] * d["W"])[keep])
+        rim = d["top"][n_vis - 1][keep]
+        own = sh.vertex_normals(m.vertices, m.faces)[d["vid_top"][n_vis - 1][keep]]
+        angle[ramp] = np.median(_ang(own, rim / np.linalg.norm(rim, axis=1, keepdims=True)))
+    assert reach[0.15] < 0.9 * reach[0.05]
+    for ramp, a in angle.items():
+        assert a == pytest.approx(np.degrees(np.arctan(ramp)), abs=3.0), (ramp, a)
 
 
 def test_the_collar_lifts_off_the_skin_only_by_the_profile(sphere):
     d = {}
     _collar(sphere, profile=CO.CollarProfile(height=0.5), diag=d)
-    n_vis = len(d["top"]) - len(CO.SKIRT_U)
-    h = np.linalg.norm(d["top"][1:n_vis], axis=2) - SPHERE_R
+    n_vis = d["n_vis"]
+    h = np.linalg.norm(d["top"][1:n_vis - 1][:, d["keep"]], axis=2) - SPHERE_R
     assert h.max() > 0.2 and h.min() > -CO.SKIN_TOL
     d2 = {}
     _collar(sphere, profile=CO.CollarProfile(height=0.5, strength=0.5), diag=d2)
-    assert np.linalg.norm(d2["top"][1:n_vis], axis=2).max() - SPHERE_R < 0.7 * h.max()
+    assert np.linalg.norm(d2["top"][1:n_vis - 1][:, d2["keep"]], axis=2).max() - SPHERE_R < 0.7 * h.max()
 
 
-def test_the_collar_is_sunk_under_the_skin_by_the_asked_amount(sphere):
-    d = {}
-    _collar(sphere, profile=CO.CollarProfile(sink=0.6), diag=d)
-    n_vis = len(d["top"]) - len(CO.SKIRT_U)
-    open_col = 0
-    depth = SPHERE_R - np.linalg.norm(d["bottom"][n_vis - 1][open_col])
-    assert depth == pytest.approx(0.6 * d["r_root"], rel=0.15)
-    d0 = {}
-    _collar(sphere, profile=CO.CollarProfile(sink=0.0), diag=d0)
-    assert SPHERE_R - np.linalg.norm(d0["bottom"][n_vis - 1][open_col]) < 0.2 * depth
+def test_the_collar_is_sunk_under_the_skin_by_the_asked_amount_up_to_the_cap(sphere):
+    """The underside need only be under the skin for the slicer's union: it is sunk by ``sink`` root radii up to
+    ``SINK_MAX_REL`` (a deep underside under a curved skin crossed itself, round 3)."""
+    depth = {}
+    for sink in (0.06, 0.6, 0.0):
+        d = {}
+        _collar(sphere, profile=CO.CollarProfile(sink=sink), diag=d)
+        depth[sink] = SPHERE_R - np.linalg.norm(d["bottom"][d["n_vis"] - 1][0])
+        r_root = d["r_root"]
+    assert depth[0.06] == pytest.approx(0.06 * r_root, rel=0.15)
+    assert depth[0.6] == pytest.approx(CO.SINK_MAX_REL * r_root, rel=0.15)
+    assert depth[0.0] < 0.2 * depth[0.06]
 
 
 def test_a_tube_that_misses_the_skin_has_no_collar(sphere):
@@ -376,14 +403,14 @@ def test_a_tube_that_misses_the_skin_has_no_collar(sphere):
     assert CO.build_collar(patch, pts, rad, _tube_mesh(z0=3.0, z1=8.0), CO.CollarProfile()) is None
 
 
-def test_the_collar_survives_an_off_pole_tube_and_the_crossings_stay_few(sphere):
-    """A lenient bound on purpose (2 % of the faces): the shell has a few crossing slivers where the sheet is a hair; the
-    real tail's count is in docs/collar.md and tools/collar_report.py, and "no self-intersection" is NOT claimed."""
+def test_the_collar_survives_an_off_pole_tube_and_never_crosses_itself(sphere):
+    """Round 4: zero, not 'few' (round 3 allowed 2 % of the faces: the hair-thin fold side; that side is now no
+    collar at all, an open ring closed by two caps, and a guard cuts any column that still crosses)."""
     d = {}
     m, patch, _ = _collar(sphere, x=3.0, tilt=10.0, diag=d, centre=np.array([3.0, 0.0, np.sqrt(SPHERE_R ** 2 - 9)]))
     rep = m.integrity_report()
     assert rep["watertight"] and rep["outward"] and rep["degenerate_faces"] == 0
-    assert CO.count_crossings(m.vertices, m.faces) < 0.02 * len(m.faces)
+    assert CO.count_crossings(m.vertices, m.faces) == 0 and not d["keep"].all()
 
 
 def test_the_crossing_counter_finds_a_pair_and_ignores_neighbours():
@@ -468,7 +495,7 @@ def test_the_collar_meets_the_skin_and_the_tail_tangentially_on_every_body(world
     r = _report(world, body)
     assert r and r["watertight"] and r["outward"]
     assert r["rim_p95"] <= 10.0 and r["wall_p95"] <= 10.0, r
-    assert r["before_p50"] > 40.0                                       # what it replaces
+    assert r["before_p50"] > 35.0                                       # what it replaces (S7 tail masses: child 39.3)
     assert r["above_skin_min"] > -CO.SKIN_TOL and r["below_skin_vertices"] <= 20
     assert r["crease_p99"] < 45.0                                       # no crease of its own
     assert r["visible_share"] > 0.3
@@ -486,7 +513,7 @@ def test_the_collar_follows_the_subdivision_level_it_is_fitted_to(world, body):
     d1, d2 = {}, {}
     CO.collar_pieces(base, shaped, p, None, levels=1, skin=_skin(world, body, None, 1), diag=d1)
     CO.collar_pieces(base, shaped, p, None, levels=2, skin=_skin(world, body, None, 2), diag=d2)
-    n_vis = len(d1["top"]) - len(CO.SKIRT_U)
+    n_vis = d1["n_vis"]
     p1 = CO.SkinPatch(*_skin(world, body, None, 1), p.anchor, 3.0)
     p2 = CO.SkinPatch(*_skin(world, body, None, 2), p.anchor, 3.0)
     wide = d1["W"] > 0.3
@@ -546,9 +573,10 @@ def test_a_thin_collar_on_the_underside_keeps_the_cleft_open(world):
     d = {}
     CO.collar_pieces(world[0], shaped, p, None, levels=2, skin=_skin(world, "neutral", None, 2), diag=d)
     n = len(d["W"])
-    assert d["W"][0] > 0.5 and d["W"][n // 2] < 0.05 and d["H"][n // 2] < 0.05          # wide on the back, a hair underneath
-    # the underside never rises above the body's skin there: the cleft is not filled (the sheet hugs the wall)
-    assert d["H"][n // 2] < 0.05
+    assert d["W"][0] > 0.5                                                                  # wide on the back ...
+    # ... and none underneath (round 4: an open ring; round 3 had a 0.006-wide hair there, which crossed itself):
+    # the cleft is not filled
+    assert not d["keep"][n // 2] and d["W"][n // 2] == 0.0
 
 
 @assets
@@ -732,14 +760,17 @@ def test_the_cli_prints_the_collar_as_a_second_shell_and_no_collar_removes_it(tm
 
 
 @assets
-def test_the_cli_at_the_default_level_draws_no_collar_and_says_so(tmp_path):
-    done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--res", "120", "160",
-                           "-o", str(tmp_path / "x.png")], capture_output=True, text=True)
+def test_the_cli_at_level_zero_draws_no_collar_and_says_so(tmp_path):
+    """Round 4: the DEFAULT level of a character with a collar is 1 (tests/test_collar_seam.py); an explicit
+    ``--subdivide 0`` is honoured and says what it costs."""
+    done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "0",
+                           "--res", "120", "160", "-o", str(tmp_path / "x.png")], capture_output=True, text=True)
     assert done.returncode == 0 and "needs a subdivided body" in done.stdout
     done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--no-collar",
-                           "--res", "120", "160", "-o", str(tmp_path / "y.png")], capture_output=True, text=True)
+                           "--subdivide", "0", "--res", "120", "160", "-o", str(tmp_path / "y.png")],
+                          capture_output=True, text=True)
     assert "needs a subdivided body" not in done.stdout                    # switched off: nothing to say
-    done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "-o",
+    done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "0", "-o",
                            str(tmp_path / "z.stl")], capture_output=True, text=True)
     assert done.returncode == 0 and "tail-1           1 shell" in done.stdout
 

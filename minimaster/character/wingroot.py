@@ -282,21 +282,31 @@ class Mass:
 PERMANENT_MASSES = (
     # name, label, x/shx, (y - spine1)/Lt, axis (x, y), long/Lt, wide/shx, height/s, pad/s
     ("scapular", "infraspinatus / teres plateau on the shoulder blade, under the wing's root",
-     0.56, 0.22, (-0.15, 0.99), 0.80, 0.46, 0.105, 0.30),
+     0.66, 0.28, (0.40, 0.92), 0.46, 0.34, 0.14, 0.30),
     ("rhomboid", "rhomboid / middle trapezius from the blade's medial border toward the spine",
      0.30, 0.40, (0.90, -0.44), 0.24, 0.17, 0.06, 0.18),
     ("latissimus", "latissimus / teres fan sweeping to the flank",
      0.66, -0.55, (0.17, 0.98), 0.80, 0.32, 0.10, 0.25),
     ("trapezius", "trapezius slope from the neck to the wing's root",
      0.34, 0.74, (0.866, -0.5), 0.30, 0.15, 0.07, 0.20),
+    # the wing's elevators over the supraspinous fossa: the rounded shoulder mound behind and above the root
+    # (TAKEAWAYS wing checklist 2, wing/H24): along the scapular spine, between the root and the shoulder's top
+    ("supraspinatus", "supraspinatus / the wing's elevators above the scapular spine, behind and above the root",
+     0.66, 0.80, (0.90, 0.42), 0.30, 0.18, 0.15, 0.25),
 )
 # the shoulder boss: the muscle over the humeral head and the buried humerus (the wing's own deltoid and
 # the origins of its elevators on the blade: the "rounded shoulder mound behind and above the root" of
 # wing/H24). It runs from the skin over the joint to where the arm crosses the skin and a little beyond, so
 # it follows the arm. (name, label, reach beyond the half distance joint -> crossing in sleeve radii, wide in
 # sleeve radii, height in s, pad in s)
-CAP = ("deltoid", "shoulder boss over the humeral head and the buried humerus", 0.9, 1.7, 0.24, 0.35)
+CAP = ("deltoid", "shoulder boss over the humeral head and the buried humerus", 1.0, 2.2, 0.30, 0.35)
 BOSS_STEEP, BOSS_SHALLOW = 85.0, 40.0      # degrees between the arm and the plain skin: no boss / the whole boss
+BOSS_FLAT, BOSS_FLAT_SHARE = 15.0, 0.5     # ... and less again for an arm lying along the back (cap_mass)
+# the boss' crest moved this many sleeve radii from the run, half up the back and half the way the arm leaves (its
+# acute side): the arm grows out of the flank of a shoulder mound behind and above it (wing/H24), and the skin
+# under the leaning arm rises to meet it (the visible join's minimum at 1.3 root radii: 20 -> 29 degrees)
+CAP_LIFT = 0.8
+CAP_LIFT_DIR = 0.5                         # None: up the back; w: blend w of the arm's own direction (its acute side)
 MIN_HEIGHT = 0.03                          # a mass lower than this (units) is left out
 
 
@@ -344,12 +354,19 @@ def cap_mass(lm: Landmarks, surf: BodySurface, shoulder, elbow, sleeve_r: float 
     # flank) needs none, one that leaves it at BOSS_SHALLOW or less (the spread wing: 45 degrees) gets all
     exit_deg = math.degrees(math.asin(min(abs(float(np.dot(d, n))), 1.0)))
     need = float(np.clip((BOSS_STEEP - exit_deg) / (BOSS_STEEP - BOSS_SHALLOW), 0.0, 1.0))
+    # ... and an arm lying along the back (the folded wing) cannot be made to leave steeply: a whole boss beside it is
+    # a lobe on the back (round 1's 0.48), so below BOSS_SHALLOW it eases to BOSS_FLAT_SHARE of it at BOSS_FLAT
+    flat = float(np.clip((exit_deg - BOSS_FLAT) / (BOSS_SHALLOW - BOSS_FLAT), 0.0, 1.0))
+    need *= BOSS_FLAT_SHARE + (1.0 - BOSS_FLAT_SHARE) * flat
     if need * h * s < MIN_HEIGHT:
         return None
     h = h * need
     run = X - A0
     half = 0.5 * float(np.linalg.norm(run))
     mid = A0 + 0.5 * run
+    if CAP_LIFT:            # the crest behind and ABOVE the root (wing/H24): up the back, in the skin's plane
+        mid = mid + CAP_LIFT * r * _tangent((0.0, 1.0, 0.0) if CAP_LIFT_DIR is None else
+                                            CAP_LIFT_DIR * d + (1.0 - CAP_LIFT_DIR) * np.array([0.0, 1.0, 0.0]), n)
     c_hit = surf.hit(mid + n * 3.0, -n, near=6.0)
     c = c_hit[1] if c_hit is not None else mid
     nc = c_hit[2] if c_hit is not None else n
@@ -370,15 +387,36 @@ def envelope(mass: Mass, others) -> Mass | None:
     return replace(mass, height=h)
 
 
+def _relief(mass: Mass | None):
+    """``points -> heights``: how far the junction raises the skin there for ``mass`` (``None``: no relief)."""
+    if mass is None:
+        return None
+    return lambda points, m=mass: m.height * m.weight(points)
+
+
 # --------------------------------------------------------------------------
 # meshes of the layers
 
 BONE_SHARE = 0.30         # the humerus' radius as a share of the sleeve's (a human humerus is 0.2-0.3 of the upper arm)
-HEAD_SHARE = 0.75         # the humeral head's radius as a share of the muscle sleeve's at the joint
-PAD_RINGS, PAD_SIDES = 8, 28
-SCAPULA_DEPTH, SCAPULA_THICK = 0.60, 0.10     # under the skin, in s: the plate lies deep to the muscle pads
-SCAPULA_OUTLINE = (       # (along, across) in shares of (length, width): inferior angle, superior angle, glenoid angle
-    (-0.50, -0.06), (0.50, -0.36), (0.12, 0.50))
+HEAD_SHARE = 0.45         # the humeral head's radius as a share of the muscle sleeve's at the joint (human: 2.2 of 4.5 cm)
+GLENOID = (0.85, 0.30, 0.45)   # the glenoid's rim (a ring on the blade the head sits in): its radius, its thickness and
+                               # how far under the head's centre, in head radii
+# The shoulder blade of THIS body, which the wing's joint sits on (version 3 of the placement): the outline in the
+# body's own units (x / shx, (y - spine-1) / Lt) from wing/H03 (Gray 204) and H01 (Albinus): the superior angle, the
+# superior border to the neck of the glenoid, the lateral border down to the inferior angle (at about spine-1's level),
+# the medial border (0.37 / 0.53 of the biacromial width apart at the spine's root / the inferior angle: 0.40 / 0.53
+# of shx here), back up to the root of the spine. Height 0.85 Lt = 0.44 of the biacromial width (H01, H03: 0.42-0.47).
+SCAPULA_BLADE = ((0.41, 0.88), (0.62, 0.86), (0.82, 0.80), (0.93, 0.68), (0.88, 0.52), (0.70, 0.24),
+                 (0.53, -0.02), (0.47, 0.12), (0.40, 0.56))
+# the spine of the scapula: from the medial border up across the blade to the acromion (rising 22.7-24.9 degrees,
+# H03), its crest just under the skin at the acromion (the bony landmark of the shoulder top)
+SCAPULA_SPINE = ((0.40, 0.57), (0.60, 0.66), (0.78, 0.74), (0.95, 0.81))
+SCAPULA_DEPTH = 0.34      # s: the blade under the PLAIN skin (skin, fat and the 2-3 cm infraspinatus over it, wing/H08)
+SCAPULA_THICK = 0.05      # s
+SPINE_RADIUS = (0.05, 0.065)      # s: the spine's ridge at its root and at the acromion
+ACROMION_DEPTH = 0.08     # s: the acromion's crest (the bone's surface) under the skin
+CLAVICLE_RADIUS = (0.065, 0.05)   # s: at the acromion and at the sternum
+CLAVICLE_DEPTH = 0.08     # s: the clavicle's surface under the skin of the shoulder top and of the chest
 
 
 def _orient(mesh: Mesh) -> Mesh:
@@ -433,8 +471,10 @@ def _lens(top_pole, top_rings, bottom_pole, bottom_rings, wall: bool) -> Mesh:
             return tb(n - 1, k) if i == n - 1 else bp + 1 + i * sides + k % sides
     f = []
     for k in range(sides):
-        f.append([0, tb(0, k + 1), tb(0, k)])                       # the top fan
-        f.append([bp, bb(0, k), bb(0, k + 1)])                      # the bottom fan
+        # the fans wind as the rings do (round 3 wound them the other way: every pad's pole was a hole the bone
+        # showed through in the ecorche, the round-3 review's "holes")
+        f.append([0, tb(0, k), tb(0, k + 1)])                       # the top fan
+        f.append([bp, bb(0, k + 1), bb(0, k)])                      # the bottom fan
     for i in range(n - 1):
         for k in range(sides):
             a, b, c, d = tb(i, k), tb(i, k + 1), tb(i + 1, k + 1), tb(i + 1, k)
@@ -449,101 +489,347 @@ def _lens(top_pole, top_rings, bottom_pole, bottom_rings, wall: bool) -> Mesh:
     return _orient(Mesh(verts, np.asarray(f, dtype=np.int64)))
 
 
-PAD_STACK = 0.012          # each further pad lies this much deeper (units): where the pads overlap their tops
-                           # would coincide (one surface under the skin) and z-fight in a dissection
+# --------------------------------------------------------------------------
+# the muscles of the ecorche: sheets laid under the skin the junction moulds
+
+# The muscles of the wing's girdle as a dissection shows them (wing/H06 Sobotta, H05 Gray 409; H07 for the deep
+# layer). Each is an OUTLINE on the back in the body's own units (x / shx, (y - spine-1) / Lt; read off H06 with
+# its shoulder joints, C7 and the inferior scapular angles as the landmarks, scratchpad junction/S7_wing_out/
+# h06_grid.png), the LAYER it lies in (0 outermost: the wing's own deltoid over the root, then the trapezius kite,
+# the latissimus, the infraspinatus / teres on the blade, the rhomboid under the trapezius) and its own thickness
+# at the belly in s. The name is the MASS (PERMANENT_MASSES, CAP) whose relief the junction adds over it: that
+# relief is muscle, it thickens the sheet. The top of every sheet lies the skin's thickness under the moulded
+# skin (``MouldedSkin``) and, where an outer sheet covers it, under that sheet's own thickness: the skin is the
+# envelope of the muscle plus its thickness (tests/test_wing_root.py casts rays in from the pipeline's shaped,
+# subdivided skin of six bodies and measures it).
+SHEETS = (
+    # name, label, layer, thickness at the belly (s), outline ((x / shx, (y - spine-1) / Lt), ...)
+    ("trapezius", "trapezius: the kite from the nape and the thoracic spine to the acromion and the scapular spine",
+     1, 0.05, ((0.005, 1.18), (0.16, 1.15), (0.28, 1.06), (0.50, 0.94), (0.78, 0.86), (0.97, 0.82), (0.88, 0.73),
+               (0.64, 0.63), (0.44, 0.53), (0.31, 0.22), (0.16, -0.24), (0.005, -0.56))),
+    ("latissimus", "latissimus dorsi: the sheet from the lower thoracic spine over the inferior angle to the axilla",
+     2, 0.05, ((0.01, -0.12), (0.30, 0.02), (0.60, 0.04), (0.86, 0.24), (0.95, 0.04), (0.88, -0.45),
+               (0.76, -0.95), (0.54, -1.10), (0.30, -0.96), (0.01, -0.62))),
+    ("scapular", "infraspinatus / teres on the blade, below the scapular spine (the wing's root leaves through it)",
+     3, 0.12, ((0.43, 0.53), (0.63, 0.65), (0.87, 0.75), (0.98, 0.62), (0.99, 0.35), (0.86, 0.12),
+               (0.63, -0.02), (0.50, -0.03), (0.44, 0.20))),
+    ("supraspinatus", "supraspinatus: the supraspinous fossa above the scapular spine, under the trapezius",
+     3, 0.10, ((0.41, 0.87), (0.62, 0.87), (0.86, 0.86), (0.97, 0.82), (0.78, 0.74), (0.60, 0.66), (0.42, 0.60))),
+    ("rhomboid", "rhomboids: from the spines of C7-T5 to the blade's medial border, under the trapezius",
+     4, 0.08, ((0.01, 0.96), (0.18, 0.87), (0.45, 0.56), (0.51, 0.05), (0.40, -0.01), (0.01, 0.34))),
+)
+CAP_SHEET = ("deltoid", "the wing's deltoid: the cap over its humeral head that the arm leaves through", 0, 0.10)
+SHEET_RINGS, SHEET_SIDES = 7, 40
+EDGE_DIP = 0.025           # units: the top of a sheet rounds off this much further under the skin at its edge (bellies read)
+EDGE_FADE = 0.25           # the share of the radius over which a sheet's thickness (and its relief) closes to its edge
+MUSCLE_LEVEL = 1           # the subdivision of the moulded skin the sheets are laid under (the picture's is 1 or 2)
 
 
-def pad_mesh(mass: "Mass", surface: BodySurface, n_ring: int = PAD_RINGS, sides: int = PAD_SIDES,
-             acting=None, rank: int = 0) -> Mesh:
-    """The muscle mesh of a mass (left frame): a lens over the plain skin whose TOP is the skin relief
-    of the body minus the skin's thickness and whose thickness is the mass's own relief plus its depth
-    (it closes in an edge where the mass's footprint ends).
+def _polygon_centroid(poly) -> np.ndarray:
+    P = np.asarray(poly, dtype=np.float64)
+    a, b = P, np.roll(P, -1, axis=0)
+    cr = a[:, 0] * b[:, 1] - b[:, 0] * a[:, 1]
+    A = 0.5 * cr.sum()
+    if abs(A) < _EPS:
+        return P.mean(axis=0)
+    return np.array([((a[:, 0] + b[:, 0]) * cr).sum(), ((a[:, 1] + b[:, 1]) * cr).sum()]) / (6.0 * A)
 
-    ``acting`` are ALL the masses whose relief the skin carries over this patch (default: this one):
-    the skin of the junction is the plain skin plus the SUM of every mound (``junction_displacement``
-    adds them), so a pad whose top only followed its own mound would lie 2-3 skin thicknesses under
-    the skin wherever another mass overlaps it (the round-1 review measured 0.11 median, 0.2 at the
-    p90 against the 0.06 asked for); with the sum, the gap is the skin's thickness
-    (``tests/test_wing_root.py`` measures it against the shaped, subdivided skin). ``rank`` stacks the
-    pad ``rank`` x ``PAD_STACK`` deeper (the masses of a body are layered, not one sheet)."""
-    acting = [mass] if acting is None else list(acting)
-    c0 = np.asarray(mass.center)
-    n0 = surface.normal_at(c0)
-    u = _tangent(mass.axis, n0)
-    v = np.cross(n0, u)
+
+def _ray_polygon(c, dirs, poly) -> np.ndarray:
+    """How far a 2D ray from ``c`` along each of ``dirs`` (unit, (m, 2)) runs to the polygon ``poly`` ((k, 2),
+    closed): the FIRST crossing (``inf`` where a ray meets none)."""
+    c = np.asarray(c, dtype=np.float64)
+    d = np.asarray(dirs, dtype=np.float64).reshape(-1, 2)
+    a = np.asarray(poly, dtype=np.float64)
+    e = np.roll(a, -1, axis=0) - a
+    r = a - c
+    den = -d[:, None, 0] * e[None, :, 1] + d[:, None, 1] * e[None, :, 0]
+    safe = np.where(np.abs(den) > 1e-12, den, 1.0)
+    t = (-r[None, :, 0] * e[None, :, 1] + r[None, :, 1] * e[None, :, 0]) / safe
+    u = (d[:, None, 0] * r[None, :, 1] - d[:, None, 1] * r[None, :, 0]) / safe
+    ok = (np.abs(den) > 1e-12) & (t > 1e-9) & (u >= -1e-9) & (u <= 1.0 + 1e-9)
+    return np.where(ok, t, np.inf).min(axis=1)
+
+
+class MouldedSkin:
+    """The body's skin as the junction moulds it, subdivided (``MUSCLE_LEVEL``), as the surface the muscle
+    sheets are laid under: a :class:`~.collar.SkinPatch` around the back, in the LEFT frame (the right wing's
+    side mirrored onto it). :meth:`from_behind` finds where a ray from behind (+Z) first meets it."""
+
+    SEED_CELL = 0.05
+
+    def __init__(self, vertices, faces, centre, radius, mirror: bool = False):
+        from . import collar as CO
+        V = np.asarray(vertices, dtype=np.float64)
+        F = np.asarray(faces, dtype=np.int64)
+        if mirror:
+            V, F = V * MIRROR, F[:, ::-1]
+        self.patch = CO.SkinPatch(V, F, np.asarray(centre, dtype=np.float64), float(radius))
+        P = self.patch
+        back = np.nonzero(P.N[:, 2] < -0.05)[0]
+        xy = P.V[back, :2]
+        # a cell holds a vertex wherever the back is (1.5 edge lengths; the level-1 body: about 0.09)
+        edge = float(np.median(np.linalg.norm(P.V[P.F] - P.V[np.roll(P.F, 1, axis=1)], axis=2)))   # (any winding)
+        self.cell = max(self.SEED_CELL, 1.5 * edge)
+        self._o = xy.min(axis=0) - self.cell
+        ij = np.floor((xy - self._o) / self.cell).astype(np.int64) + 1
+        self._dims = ij.max(axis=0) + 2
+        grid = np.full(tuple(self._dims), -1, dtype=np.int64)
+        order = np.argsort(-P.V[back, 2])          # the smallest z (the backmost: the first skin seen from behind) is written last
+        grid[ij[order, 0], ij[order, 1]] = back[order]
+        self._grid = grid
+
+    def from_behind(self, xy, iterations: int = 3):
+        """``(points, normals, found)``: where a ray from behind (+Z) at each ``xy`` first meets the skin (a seed
+        on the backmost back-facing vertex near it, then the tangent plane solved for the ray's z and the closest
+        point, ``iterations`` times). ``found`` is False beyond the back (the skin there faces up or sideways)."""
+        Q = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+        P = self.patch
+        ij = np.floor((Q - self._o) / self.cell).astype(np.int64) + 1
+        best = np.full(len(Q), -1, dtype=np.int64)
+        bd = np.full(len(Q), np.inf)
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                ii, jj = ij[:, 0] + di, ij[:, 1] + dj
+                ok = (ii >= 0) & (ii < self._dims[0]) & (jj >= 0) & (jj < self._dims[1])
+                g = np.where(ok, self._grid[np.clip(ii, 0, self._dims[0] - 1), np.clip(jj, 0, self._dims[1] - 1)], -1)
+                d = np.where(g >= 0, ((P.V[np.maximum(g, 0), :2] - Q) ** 2).sum(axis=1), np.inf)
+                better = d < bd
+                best[better], bd[better] = g[better], d[better]
+        found = best >= 0
+        guess = np.maximum(best, 0)
+        pts = np.column_stack([Q, P.V[guess, 2]])
+        for _ in range(iterations):
+            pt, n, _, guess = P.closest(pts, guess)
+            nz = np.minimum(n[:, 2], -1e-3)
+            z = pt[:, 2] - ((Q[:, 0] - pt[:, 0]) * n[:, 0] + (Q[:, 1] - pt[:, 1]) * n[:, 1]) / nz
+            pts = np.column_stack([Q, z])
+        pt, n, _, _ = P.closest(pts, guess)
+        found &= (bd < (2.0 * self.cell) ** 2) & (n[:, 2] < -0.02)
+        found &= np.linalg.norm(pt[:, :2] - Q, axis=1) < 0.04
+        return pt, n, found
+
+    def closest(self, points):
+        return self.patch.closest(points)
+
+
+@dataclass(frozen=True)
+class Sheet:
+    """One muscle of the ecorche (left frame): its outline on the back (2D, units), the layer it lies in, its own
+    thickness at the belly (units) and the relief of its mass (``relief(points) -> heights``, or ``None``)."""
+
+    name: str
+    label: str
+    layer: int
+    thickness: float
+    outline: tuple
+    relief: object = None
+
+    @property
+    def centre(self) -> np.ndarray:
+        return _polygon_centroid(self.outline)
+
+    def radius_along(self, dirs) -> np.ndarray:
+        return _ray_polygon(self.centre, dirs, self.outline)
+
+    def rho(self, xy) -> np.ndarray:
+        """How far out each 2D point is: 0 at the centre, 1 on the outline (``inf`` off its rays)."""
+        q = np.asarray(xy, dtype=np.float64).reshape(-1, 2) - self.centre
+        r = np.linalg.norm(q, axis=1)
+        d = q / np.maximum(r, _EPS)[:, None]
+        return r / np.maximum(self.radius_along(d), _EPS)
+
+    def thick(self, rho, points) -> np.ndarray:
+        """The sheet's thickness at shares ``rho`` of its radius and skin ``points``: its own belly (a lens) plus
+        the relief its mass raises there, closing to nothing at the edge (0 outside)."""
+        rho = np.asarray(rho, dtype=np.float64)
+        inside = rho < 1.0
+        rr = np.where(inside, rho, 1.0)
+        own = self.thickness * np.sqrt(np.maximum(1.0 - rr * rr, 0.0))
+        rel = np.zeros_like(rr) if self.relief is None else np.asarray(self.relief(points), dtype=np.float64)
+        return np.where(inside, own + rel * _smooth((1.0 - rr) / EDGE_FADE), 0.0)
+
+
+def _sheet_grid(sh: Sheet, skin: MouldedSkin, rings: int, sides: int):
+    """The sample points of a sheet on the skin: ``(S, N, Q, rho)``: skin points, normals, their 2D ``xy`` and
+    the share of the radius, the pole first then ``rings`` x ``sides`` (ring-major), or ``None`` if the sheet's
+    centre is not on the back. Each spoke reaches the outline or, past the back (the skin turning up over the
+    shoulder or round the flank), the last point a ray from behind meets on it."""
     th = np.linspace(0.0, 2.0 * math.pi, sides, endpoint=False)
-    rho = np.arange(1, n_ring + 1) / n_ring
-    flat = (c0[None, None, :] + rho[:, None, None] * (
-        mass.half_long * np.cos(th)[None, :, None] * u[None, None, :]
-        + mass.half_wide * np.sin(th)[None, :, None] * v[None, None, :]))
-    skin, nrm = surface.project(flat.reshape(-1, 3), -n0)
-    relief = sum(J._mound_displacement(m.mound(), skin, nrm) for m in acting).reshape(n_ring, sides, 3)
-    w = mass.weight(skin).reshape(n_ring, sides)
-    w[-1] = 0.0                                                   # the edge of the footprint
-    P, N = skin.reshape(n_ring, sides, 3), nrm.reshape(n_ring, sides, 3)
-    top = P + relief - N * (SKIN_T + rank * PAD_STACK)
-    bottom = top - N * (mass.height * w + mass.pad * np.sqrt(w))[..., None]
-    pole_p, pole_n = surface.project(c0[None], -n0)
-    pole_r = sum(J._mound_displacement(m.mound(), pole_p, pole_n) for m in acting)[0]
-    tp = pole_p[0] + pole_r - pole_n[0] * (SKIN_T + rank * PAD_STACK)
-    bp = tp - pole_n[0] * (mass.height + mass.pad)
-    return _lens(tp, top, bp, bottom, wall=False)
-
-
-def _plate_outline(n_per_edge: int = 6) -> np.ndarray:
-    """The outline of a scapula in (along, across) shares: a rounded triangle."""
-    pts = np.asarray(SCAPULA_OUTLINE, dtype=np.float64)
-    for _ in range(2):                                            # Chaikin corner cutting, twice
-        nxt = []
-        for i in range(len(pts)):
-            a, b = pts[i], pts[(i + 1) % len(pts)]
-            nxt += [0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b]
-        pts = np.asarray(nxt)
-    return pts
-
-
-def scapula_plate(lm: Landmarks, surface: BodySurface, masses) -> Mesh | None:
-    """The wing's scapula (left frame): a thin curved plate lying on the back under the muscle
-    pads, about 1.7 s long and 0.9 s wide, long axis along the scapular plateau, its glenoid
-    angle toward the arm. ``None`` if the plateau is not on this body."""
-    plateau = next((m for m in masses if m.name == "scapular"), None)
-    if plateau is None:
+    dirs = np.column_stack([np.cos(th), np.sin(th)])
+    rho = np.arange(1, rings + 1) / rings
+    c = sh.centre
+    R = sh.radius_along(dirs)
+    if not np.all(np.isfinite(R)):
         return None
-    c0 = np.asarray(plateau.center)
-    n0 = surface.normal_at(c0)
-    u = _tangent(plateau.axis, n0)
-    v = np.cross(n0, u)
-    L, Wd = 1.7 * lm.s, 0.9 * lm.s
-    outline = _plate_outline()
-    pts = (c0[None, None, :] + np.asarray([0.33, 0.66, 1.0])[:, None, None] * (
-        (outline[:, 0] * L)[None, :, None] * u[None, None, :]
-        + (outline[:, 1] * Wd)[None, :, None] * v[None, None, :]))
-    skin, nrm = surface.project(pts.reshape(-1, 3), -n0)
-    P = skin.reshape(3, -1, 3)
-    d0, d1 = SCAPULA_DEPTH * lm.s, (SCAPULA_DEPTH + SCAPULA_THICK) * lm.s
-    # the plate is a flat bone that keeps its size: it is the projected outline moved straight in along the
-    # normal at its centre (offsetting along each point's own normal would shrink it on the curved back)
-    top, bottom = P - n0 * d0, P - n0 * d1
-    pp, _ = surface.project(c0[None], -n0)
-    pole_t, pole_b = pp[0] - n0 * d0, pp[0] - n0 * d1
-    return _lens(pole_t, top, pole_b, bottom, wall=True)
+    pole, pole_n, pole_ok = skin.from_behind(c[None])
+    if not pole_ok[0]:
+        return None
+    Q = c[None, None, :] + rho[:, None, None] * (R[None, :, None] * dirs[None])
+    _, _, ok = skin.from_behind(Q.reshape(-1, 2))
+    ok = ok.reshape(rings, sides)
+    # the share of each spoke on the back: the last ring found, then bisected toward the first one missed (the
+    # edge follows the body's outline, not the rings: a ring-wise cut drew a sawtooth on the flank)
+    lo, hi = np.ones(sides), np.ones(sides)
+    cut = ~ok.all(axis=0)
+    for j in np.nonzero(cut)[0]:
+        b = int(np.argmin(ok[:, j]))
+        lo[j], hi[j] = (rho[b - 1] if b > 0 else 0.0), rho[b]
+    for _ in range(5 if cut.any() else 0):
+        mid = 0.5 * (lo + hi)
+        _, _, okm = skin.from_behind(c[None] + (mid * R)[cut, None] * dirs[cut])
+        lo[cut] = np.where(okm, mid[cut], lo[cut])
+        hi[cut] = np.where(okm, hi[cut], mid[cut])
+    reach = np.maximum(lo, 0.5 / rings)
+    Q = c[None, None, :] + rho[:, None, None] * ((R * reach)[None, :, None] * dirs[None])
+    S, N, ok = skin.from_behind(Q.reshape(-1, 2))
+    S, N, ok = S.reshape(rings, sides, 3), N.reshape(rings, sides, 3), ok.reshape(rings, sides)
+    for i in range(rings):                         # a straggler: the ring inside it (or the pole)
+        miss = ~ok[i]
+        if miss.any():
+            S[i, miss] = S[i - 1, miss] if i else pole[0]
+            N[i, miss] = N[i - 1, miss] if i else pole_n[0]
+    r_all = np.concatenate([[0.0], np.repeat(rho, sides)])       # a shortened spoke closes at its own rim
+    return (np.vstack([pole, S.reshape(-1, 3)]), np.vstack([pole_n, N.reshape(-1, 3)]),
+            np.vstack([c[None], Q.reshape(-1, 2)]), r_all)
 
 
-def furcula(lm: Landmarks, surface: BodySurface, shoulder) -> Mesh | None:
-    """The strut from the humeral head to the sternum (left frame): a bone of the girdle that lies
-    inside the chest, from the joint forward and toward the midline, ending just under the front
-    of the sternum."""
-    S = np.asarray(shoulder, dtype=np.float64)
-    target_xy = (0.14 * lm.shx, S[1] + 0.18 * lm.lt)
-    front = surface.hit((target_xy[0], target_xy[1], 6.0), (0.0, 0.0, -1.0), near=9.0)
+def _grid_lens(top, bottom, rings: int, sides: int, wall: bool) -> Mesh:
+    return _lens(top[0], top[1:].reshape(rings, sides, 3), bottom[0], bottom[1:].reshape(rings, sides, 3), wall=wall)
+
+
+def sheet_meshes(sheets, skin: MouldedSkin, s: float, rings: int = SHEET_RINGS, sides: int = SHEET_SIDES) -> dict:
+    """``{name: Mesh}`` of the muscle ``sheets`` (left frame) laid under ``skin``: each a closed lens whose top is
+    the skin's thickness (``SKIN_T``) under the skin, rounding ``EDGE_DIP`` x ``s`` further down at its edge, and,
+    where outer sheets (a lower ``layer``) cover it, under their thickness too; whose bottom is its own thickness
+    (:meth:`Sheet.thick`) under its top. A sheet whose outline runs past the back (over the shoulder top, round
+    the flank) stops where rays from behind stop meeting the back."""
+    out = {}
+    ordered = sorted(sheets, key=lambda sh: sh.layer)
+    for k, sh in enumerate(ordered):
+        grid = _sheet_grid(sh, skin, rings, sides)
+        if grid is None:
+            continue
+        S, N, Q, r_all = grid
+        cover = np.zeros(len(S))
+        for up in ordered[:k]:
+            if up.layer < sh.layer:
+                cover += up.thick(up.rho(Q), S)
+        depth = SKIN_T + EDGE_DIP * _smooth((r_all - 0.55) / 0.45) + cover
+        top = S - N * depth[:, None]
+        bottom = top - N * sh.thick(r_all, S)[:, None]
+        out[sh.name] = _grid_lens(top, bottom, rings, sides, wall=False)
+    return out
+
+
+# --------------------------------------------------------------------------
+# the bones of the girdle
+
+
+def _xy(lm: Landmarks, pts) -> tuple:
+    """Points given as (x / shx, (y - spine-1) / Lt) as (x, y) of the left frame."""
+    return tuple((fx * lm.shx, lm.spine1[1] + fy * lm.lt) for fx, fy in pts)
+
+
+def scapula_blade(lm: Landmarks, skin: MouldedSkin, relief=None, rings: int = 5, sides: int = 36,
+                  depth: float | None = None) -> Mesh | None:
+    """The shoulder blade (left frame): ``SCAPULA_BLADE`` laid ``depth`` (default ``SCAPULA_DEPTH`` x s) under the
+    PLAIN skin (under a moulded ``skin`` by that plus the ``relief`` the masses raise there: muscle, not bone),
+    ``SCAPULA_THICK`` thick. ``None`` off the back."""
+    sh = Sheet("scapula", "the shoulder blade", 0, 0.0, _xy(lm, SCAPULA_BLADE))
+    grid = _sheet_grid(sh, skin, rings, sides)
+    if grid is None:
+        return None
+    S, N, _, _ = grid
+    rel = np.zeros(len(S)) if relief is None else np.asarray(relief(S), dtype=np.float64)
+    top = S - N * ((SCAPULA_DEPTH * lm.s if depth is None else depth) + rel)[:, None]
+    return _grid_lens(top, top - N * SCAPULA_THICK * lm.s, rings, sides, wall=True)
+
+
+def acromion(lm: Landmarks, surface: BodySurface) -> np.ndarray | None:
+    """The acromion (left frame): ``ACROMION_DEPTH`` x s under the skin at the top of the shoulder, over the back of the
+    human shoulder joint (seen from above)."""
+    x, z = 0.90 * lm.shx, lm.shoulder[2] - 0.22 * lm.s
+    top = surface.hit((x, lm.neck[1] + 3.0, z), (0.0, -1.0, 0.0), near=8.0)
+    if top is None:
+        return None
+    return top[1] - top[2] * (ACROMION_DEPTH + SPINE_RADIUS[1]) * lm.s
+
+
+def scapula_spine(lm: Landmarks, skin: MouldedSkin, surface: BodySurface, relief=None, n: int = 12,
+                  depth: float | None = None) -> tuple:
+    """``(Mesh, acromion)``: the spine of the scapula (left frame), a ridge from the medial border along
+    ``SCAPULA_SPINE`` rising from the blade toward the skin, to the acromion at the top of the shoulder
+    (:func:`acromion`); ``(None, None)`` off the back."""
+    poly = np.asarray(_xy(lm, SCAPULA_SPINE))
+    seg = np.linalg.norm(np.diff(poly, axis=0), axis=1)
+    t = np.concatenate([[0.0], np.cumsum(seg)]) / max(float(seg.sum()), _EPS)
+    u = np.linspace(0.0, 1.0, n)
+    xy = np.column_stack([np.interp(u, t, poly[:, 0]), np.interp(u, t, poly[:, 1])])
+    S, N, ok = skin.from_behind(xy)
+    top = acromion(lm, surface)
+    if not ok[0] or top is None:
+        return None, None
+    last = int(np.argmin(ok)) - 1 if not ok.all() else n - 1      # the back turns up into the shoulder top there
+    S, N, u = S[:last + 1], N[:last + 1], u[:last + 1]
+    rel = np.zeros(len(S)) if relief is None else np.asarray(relief(S), dtype=np.float64)
+    root = SCAPULA_DEPTH * lm.s if depth is None else depth
+    depth = root * (1.0 - _smooth(u)) + ACROMION_DEPTH * lm.s * _smooth(u) + rel * (1.0 - u)
+    path = np.vstack([S - N * depth[:, None], top[None]])
+    for _ in range(2):
+        path[1:-1] = 0.25 * path[:-2] + 0.5 * path[1:-1] + 0.25 * path[2:]
+    w = np.linspace(0.0, 1.0, len(path))
+    r = (SPINE_RADIUS[0] + (SPINE_RADIUS[1] - SPINE_RADIUS[0]) * w) * lm.s
+    return _path_tube(path, r), top
+
+
+def clavicle(lm: Landmarks, surface: BodySurface, acromion) -> Mesh | None:
+    """The strut of the girdle (left frame): the clavicle from the acromion over the top of the rib cage to the
+    sternum's manubrium beside the midline, ``CLAVICLE_DEPTH`` x s under the skin all the way (a bird's coracoid and
+    furcula brace its shoulder against the sternum, wing/A02, A07; on a winged human the clavicle is that strut: it
+    runs OVER the thorax, not through it as round 3's did)."""
+    if acromion is None:
+        return None
+    A0 = np.asarray(acromion, dtype=np.float64)
+    front = surface.hit((0.12 * lm.shx, lm.neck[1] - 0.08 * lm.lt, 6.0), (0.0, 0.0, -1.0), near=9.0)
     if front is None:
         return None
-    end = front[1] - front[2] * 0.45 * lm.s
-    mid = 0.5 * (S + end) + np.array([0.0, 0.0, -0.1 * lm.s])
-    t = np.linspace(0.0, 1.0, 12)[:, None]
-    path = (1 - t) ** 2 * S[None] + 2 * (1 - t) * t * mid[None] + t ** 2 * end[None]
-    r = (0.12 - 0.04 * t[:, 0]) * lm.s
+    B = front[1] - front[2] * (CLAVICLE_DEPTH + CLAVICLE_RADIUS[1]) * lm.s
+    t = np.linspace(0.0, 1.0, 16)
+    path = [A0]
+    for ti in t[1:-1]:
+        # the skin over the chord, seen from up at the shoulder and from the front at the sternum, then sunk under it
+        p = (1.0 - ti) * A0 + ti * B
+        out = _unit(np.array([0.0, 1.0 - 0.7 * ti, 0.25 + 0.9 * ti]))
+        hit = surface.hit(p + out * 3.0, -out, near=6.0)
+        rad = CLAVICLE_RADIUS[0] + (CLAVICLE_RADIUS[1] - CLAVICLE_RADIUS[0]) * ti
+        path.append(p if hit is None else hit[1] - hit[2] * (CLAVICLE_DEPTH + rad) * lm.s)
+    path.append(B)
+    path = np.asarray(path)
+    for _ in range(3):                                     # an S-curved bar, not a polyline
+        path[1:-1] = 0.25 * path[:-2] + 0.5 * path[1:-1] + 0.25 * path[2:]
+    r = (CLAVICLE_RADIUS[0] + (CLAVICLE_RADIUS[1] - CLAVICLE_RADIUS[0]) * t) * lm.s
     return _path_tube(path, r)
+
+
+def _torus(centre, normal, R: float, r: float, n: int = 24, m: int = 8) -> Mesh:
+    """A closed ring round ``centre`` in the plane of ``normal``: major radius ``R``, tube radius ``r``."""
+    nrm = _unit(normal)
+    a = _unit(np.cross(nrm, (1.0, 0.0, 0.0)) if abs(nrm[0]) < 0.9 else np.cross(nrm, (0.0, 1.0, 0.0)))
+    b = np.cross(nrm, a)
+    u = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
+    v = np.linspace(0.0, 2.0 * math.pi, m, endpoint=False)
+    radial = np.cos(u)[:, None] * a[None] + np.sin(u)[:, None] * b[None]
+    pts = (np.asarray(centre)[None, None] + R * radial[:, None]
+           + r * (np.cos(v)[None, :, None] * radial[:, None] + np.sin(v)[None, :, None] * nrm[None, None]))
+    verts = pts.reshape(-1, 3)
+    faces = []
+    for i in range(n):
+        for j in range(m):
+            p00, p10 = i * m + j, ((i + 1) % n) * m + j
+            p01, p11 = i * m + (j + 1) % m, ((i + 1) % n) * m + (j + 1) % m
+            faces += [[p00, p10, p11], [p00, p11, p01]]
+    return _orient(Mesh(verts, np.asarray(faces, dtype=np.int64)))
 
 
 def _path_tube(path, radii, sides: int = 10) -> Mesh:
@@ -603,9 +889,18 @@ _OWNER = {"owner": "trunk"} if "owner" in J.JunctionSpec.__dataclass_fields__ el
 # the skin meets the arm sleeve along a fillet this high over its width (junction.py)
 FILLET_HEIGHT = 0.3
 JOIN_GUARD = False                 # see WingRoot.spec
-COLLAR_MIN_EXIT = 43.0            # degrees: an arm leaving the plain skin more shallowly gets no root collar (collar_fits)
+# degrees: an arm leaving the plain skin more shallowly than COLLAR_MIN_EXIT gets no root collar, one leaving at
+# COLLAR_FULL_EXIT or more the whole collar, between them its strength ramps (``collar_strength``): a pose or a
+# slider that moves the exit by a degree changes the collar by a little, it does not switch it on or off (round 3:
+# a hard cut at 43 with the heavy dragon collared at 44.7 and the heavy feathered folded wing not at 40.4)
+COLLAR_MIN_EXIT = 40.0
+COLLAR_FULL_EXIT = 45.0
 FILLET_PULL = 1.0                 # the share of the in-plane redistribution of the fillet (junction.py)
-TUBE_STATIONS = (0.0, 0.25, 0.5, 0.75, 1.0)       # where along the humerus the junction tube is sampled
+# where along the humerus the junction tube is sampled (the feathered arm's from 0.15 of the way out: with the joint on
+# the blade its rounded buried end is narrower than its tube, and a tube from the joint itself called skin over the
+# heavy man's and the child's shoulders hidden that the arm does not cover)
+TUBE_STATIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
+TUBE_START = {"feathered": 0.15}
 MIRROR = np.array([-1.0, 1.0, 1.0])
 
 
@@ -664,6 +959,31 @@ def virtual_arm_profile(placed_rig, matrix, sleeve=None, rings: int = 9) -> ArmP
     return ArmProfile(S[None, :] + t[:, None] * (E - S)[None, :], r, r, t, 0)
 
 
+def visible_join(plain: BodySurface, skin: BodySurface, S, E, r: float, k: float = 1.3, n: int = 24) -> tuple:
+    """``(min, mean)`` of the angle (degrees) between the arm's axis (``S`` -> ``E``) and the tangent plane of the
+    skin ``skin`` on a ring ``k`` root radii (``r``) round where the axis crosses the ``plain`` skin: the join one
+    SEES (the angle where the axis itself meets the skin is hidden inside the arm). 90: the skin is square to the
+    arm; the minimum is the side the arm leans over (negative: the skin folds over the arm). ``None`` if the axis
+    does not cross the skin."""
+    S, E = np.asarray(S, dtype=np.float64), np.asarray(E, dtype=np.float64)
+    d = _unit(E - S)
+    h = plain.hit(S, d, near=float(np.linalg.norm(E - S)) + 2.0)
+    if h is None:
+        return None
+    X, nrm = h[1], h[2]
+    u = _unit(np.cross(nrm, d))
+    v = np.cross(nrm, u)
+    out = []
+    for th in np.linspace(0.0, 2.0 * math.pi, n, endpoint=False):
+        q = X + k * r * (math.cos(th) * u + math.sin(th) * v)
+        hh = skin.hit(q + 1.5 * nrm, -nrm, near=3.0)
+        if hh is not None:
+            out.append(math.degrees(math.asin(max(-1.0, min(1.0, float(d @ hh[2]))))))
+    if not out:
+        return None
+    return float(np.min(out)), float(np.mean(out))
+
+
 class WingRoot:
     """The shoulder anatomy of one placed wing (``Placed.model``): see the module docstring.
 
@@ -673,7 +993,7 @@ class WingRoot:
 
     def __init__(self, letter: str, rig, matrix, lm: Landmarks, surface: BodySurface,
                  profile: ArmProfile, fillet: float, style: str = "membrane",
-                 fillet_height: float = FILLET_HEIGHT, tube: bool = True):
+                 fillet_height: float = FILLET_HEIGHT, tube: bool = True, body=None):
         self.letter = letter
         self.rig = rig                      # a wingrig.PlacedWing
         self.matrix = np.asarray(matrix, dtype=np.float64)
@@ -689,6 +1009,10 @@ class WingRoot:
         self._left_masses = None
         self._left_keep = None
         self._exit_r = None
+        # ``(base, verts, controls -> JunctionSpec)``: the body this wing is placed on and its own junction, so the
+        # muscles are laid under the skin as the junction moulds it (``moulded``); None: no body (a synthetic test)
+        self.body = body
+        self._moulded: dict = {}
 
     def _keep(self) -> tuple:
         if self._left_keep is None:
@@ -761,15 +1085,21 @@ class WingRoot:
 
     def collar_fits(self, controls=None) -> bool:
         """Whether the root collar can be built for the arm in pose ``controls``: an arm with its own piece
-        that leaves the PLAIN skin at ``COLLAR_MIN_EXIT`` degrees or more. An arm lying along the back (the
-        folded wing: 21-40 degrees) leans over the skin on most of its ring: collar.py cuts the width to its
-        floor there and the hair-thin shell that is left crossed itself 300-1,200 times, with rim normals
-        175 degrees off and a leak on the heavy body (measured on six bodies; the worst such row leaves at 40.4,
-        the shallowest good one, the heavy dragon at rest, at 44.7)."""
+        that leaves the PLAIN skin more steeply than ``COLLAR_MIN_EXIT`` degrees. An arm lying along the back (the
+        folded wing: 12-35 degrees in the third placement) leans over the skin on most of its ring: collar.py cuts
+        the width to its floor there and the hair-thin shell that is left crossed itself 300-1,200 times, with rim
+        normals 175 degrees off and a leak on the heavy body (measured on six bodies before the cut-off)."""
+        return self.collar_strength(controls) > 0.0
+
+    def collar_strength(self, controls=None) -> float:
+        """How much of the root collar the arm in pose ``controls`` gets (0..1): nothing at an exit of
+        ``COLLAR_MIN_EXIT`` degrees or less, all of it at ``COLLAR_FULL_EXIT`` or more, a smoothstep between."""
         if not self.tube:
-            return False
+            return 0.0
         ang = self.exit_angle(controls)
-        return ang is not None and ang >= COLLAR_MIN_EXIT
+        if ang is None:
+            return 0.0
+        return float(_smooth((ang - COLLAR_MIN_EXIT) / (COLLAR_FULL_EXIT - COLLAR_MIN_EXIT)))
 
     def exit_angle(self, controls=None) -> float | None:
         """The angle (degrees, 90 = square) at which the posed arm's axis leaves the PLAIN skin, or ``None``
@@ -801,7 +1131,8 @@ class WingRoot:
 
     def spec(self, controls=None, name: str = "wing"):
         """The :class:`~.junction.JunctionSpec` of this wing's root under ``controls``."""
-        ts = np.asarray(TUBE_STATIONS)
+        ts = np.asarray(TUBE_STATIONS, dtype=np.float64)
+        ts[0] = max(ts[0], TUBE_START.get(self.style, 0.0))
         pts, _, r_in = self.profile.at(ts)
         # the rest arm's ring centres, carried by the pose (the humerus' skin follows the bone named after
         # its far joint, "elbow"; the sleeve is rigid over it): the tube lies on the arm's own axis, which
@@ -859,44 +1190,129 @@ class WingRoot:
         r = np.linalg.norm(rings - c, axis=2).mean(axis=1)
         r_mus = np.maximum(r - SKIN_T, 0.55 * r)
         r_bone = BONE_SHARE * r
-        out = {}
-        for key, rr, lo, hi in (("muscle", r_mus, 0, len(rings)), ("bone", r_bone, 1, len(rings) - 1)):
-            # the bone stops a ring short of each end of the sleeve, inside its caps
-            ring = c[lo:hi] + (rings[lo:hi] - c[lo:hi]) * (rr[lo:hi] / r[lo:hi])[:, None, None]
-            out[key] = _tube_from_rings(ring)
-        out["bone"] = Mesh.merge([out["bone"], self._head(rings, r_mus)])
+        out = {"muscle": _tube_from_rings(c + (rings - c) * (r_mus / r)[:, None, None])}
+        # the shaft runs from inside the head (on the joint) and stops a ring short of the elbow, inside the cap
+        bone = c[:-1] + (rings[:-1] - c[:-1]) * (r_bone[:-1] / r[:-1])[:, None, None]
+        step = float(np.linalg.norm(c[1, 0] - c[0, 0]))
+        w = min(0.7 * HEAD_SHARE * float(r_mus[0]) / max(step, _EPS), 0.9)
+        bone[0] = (1.0 - w) * bone[0] + w * bone[1]
+        out["shaft"] = _tube_from_rings(bone)
+        out["bone"] = Mesh.merge([out["shaft"], self._head(rings, r_mus, controls)])
         return out
 
-    def _head(self, rings, r_mus) -> Mesh:
-        """The humeral head: a ball inside the buried end of the sleeve (its cap)."""
-        c0 = rings[0].mean(axis=0)
-        axis = _unit(rings[1].mean(axis=0) - c0)
-        R = HEAD_SHARE * float(r_mus[0])
-        centre = c0 + axis * 1.2 * R
-        if self.letter == "r":          # built on the left and mirrored: the pair is an exact mirror pair
-            return _ball(centre * MIRROR, R).transform(np.diag([-1.0, 1.0, 1.0, 1.0]))
-        return _ball(centre, R)
+    def head_radius(self) -> float:
+        """The humeral head's radius (``HEAD_SHARE`` of the muscle sleeve's at the joint)."""
+        r = float(self.profile.radius[0])
+        return HEAD_SHARE * max(r - SKIN_T, 0.55 * r)
 
-    def muscles(self, skin: Mesh, controls=None) -> dict:
-        """``{name: Mesh}`` of every muscle mass in the placed frame: the pads of the masses (their
-        top is the skin relief minus the skin's thickness) and the arm's own belly."""
+    def _head(self, rings, r_mus, controls=None) -> Mesh:
+        """The humeral head: a ball ON the joint (the pivot the rig turns the arm about), inside the buried end of
+        the sleeve."""
+        S, _ = self.joints(controls)
+        R = HEAD_SHARE * float(r_mus[0])
+        if self.letter == "r":          # built on the left and mirrored: the pair is an exact mirror pair
+            return _ball(S, R).transform(np.diag([-1.0, 1.0, 1.0, 1.0]))
+        return _ball(S, R)
+
+    def glenoid(self) -> Mesh | None:
+        """The socket the head sits in (left frame): a rim on the blade round the rest joint, under the head's centre
+        (the joint does not move when the arm turns about it)."""
+        S, _ = self.joints(None)
+        over = self.surface.hit(S, (0.0, 0.0, -1.0), near=4.0)
+        n = np.array([0.0, 0.0, -1.0]) if over is None else over[2]          # outward
+        R = self.head_radius()
+        k, t, down = GLENOID
+        return _torus(S - n * down * R, n, k * R, t * R)
+
+    # -- the muscles -------------------------------------------------------------------
+
+    def moulded(self, controls=None, shaped=None) -> MouldedSkin | None:
+        """The skin the muscles lie under (left frame): ``shaped`` (the body's vertices after every junction, as a
+        view meshes them) or, without it, the body moulded by this wing's own junction under ``controls``,
+        subdivided ``MUSCLE_LEVEL`` times. ``None`` without a body."""
+        if self.body is None:
+            return None
+        import json
+        from . import collar as CO
+        base, verts, junction = self.body
+        key = (json.dumps(controls or {}, sort_keys=True, default=str),
+               None if shaped is None else CO.verts_digest(shaped))
+        if key in self._moulded:
+            return self._moulded[key]
+        if shaped is None:
+            spec = junction(controls) if junction is not None else None
+            shaped = verts if spec is None else J.apply_junctions(base, verts, [spec])
+        V, F = CO.shaped_skin(base, shaped, MUSCLE_LEVEL)
+        lm = self.lm
+        centre = np.array([0.5 * lm.shx, lm.spine1[1] + 0.15 * lm.lt, lm.spine1[2]])
+        skin = MouldedSkin(V, F, centre, 1.3 * math.hypot(0.75 * lm.shx, 1.45 * lm.lt), mirror=self.letter == "r")
+        if len(self._moulded) >= 2:
+            self._moulded.pop(next(iter(self._moulded)))
+        self._moulded[key] = skin
+        return skin
+
+    def sheets(self, controls=None) -> list:
+        """The muscle :class:`Sheet` s of this wing (left frame) under ``controls``: ``SHEETS`` on this body, each
+        carrying the relief of the mass of its name, and the wing's deltoid over the root (``CAP_SHEET``)."""
+        lm = self.lm
+        masses = {m.name: m for m in self.masses(controls)}
+        out = []
+        for name, label, layer, thick, outline in SHEETS:
+            poly = tuple((fx * lm.shx, lm.spine1[1] + fy * lm.lt) for fx, fy in outline)
+            out.append(Sheet(name, label, layer, thick * lm.s, poly, _relief(masses.get(name))))
+        cap = self._cap_outline(controls, masses.get(CAP[0]))
+        if cap is not None:
+            name, label, layer, thick = CAP_SHEET
+            out.append(Sheet(name, label, layer, thick * lm.s, cap, _relief(masses.get(CAP[0]))))
+        return out
+
+    def _cap_outline(self, controls, cap: Mass | None, n: int = 24):
+        """The wing's deltoid on the back (2D, left frame): the shoulder boss' footprint (``cap_mass``), or, where
+        the arm leaves steeply and has none, a round cap 1.7 root radii about where the arm crosses the skin."""
+        r = self.exit_radius()
+        if cap is not None:
+            c, a, lo, wi = np.asarray(cap.center), _unit(cap.axis), cap.half_long, cap.half_wide
+        else:
+            S, E = self.joints(controls)
+            d = _unit(E - S)
+            hit = self.surface.hit(S, d, near=float(np.linalg.norm(E - S)) + 2.0)
+            if hit is None:
+                return None
+            c, a, lo, wi = hit[1], _tangent(d, hit[2]), 1.7 * r, 1.7 * r
+        n0 = self.surface.normal_at(c)
+        a = _tangent(a, n0)
+        b = np.cross(n0, a)
+        t = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
+        ring = c[None] + lo * np.cos(t)[:, None] * a[None] + wi * np.sin(t)[:, None] * b[None]
+        return tuple(map(tuple, ring[:, :2]))
+
+    def muscles(self, skin: Mesh, controls=None, shaped=None, moulded: MouldedSkin | None = None) -> dict:
+        """``{name: Mesh}`` of every muscle in the placed frame: the sheets (:func:`sheet_meshes`, laid under the
+        moulded skin: ``moulded``, or :meth:`moulded` of ``shaped`` / of this wing's own junction) and the arm's
+        own belly (the sleeve)."""
         out = {}
-        masses = self.masses(controls)
-        for rank, m in enumerate(masses):
-            mesh = pad_mesh(m, self.surface, acting=masses, rank=rank)
-            if self.letter == "r":
-                mesh = mesh.transform(np.diag([-1.0, 1.0, 1.0, 1.0]))
-            out[m.name] = mesh
+        ms = moulded if moulded is not None else self.moulded(controls, shaped)
+        if ms is not None:
+            for name, mesh in sheet_meshes(self.sheets(controls), ms, self.lm.s).items():
+                out[name] = mesh.transform(np.diag([-1.0, 1.0, 1.0, 1.0])) if self.letter == "r" else mesh
         out["sleeve"] = self.sleeve_meshes(skin, controls)["muscle"]
         return out
 
-    def bones(self, skin: Mesh, controls=None) -> dict:
-        """``{name: Mesh}`` of the bones in the placed frame: the wing's scapula plate on the back, the
-        strut to the sternum, the humerus with its head."""
+    def bones(self, skin: Mesh, controls=None, shaped=None, moulded: MouldedSkin | None = None) -> dict:
+        """``{name: Mesh}`` of the bones in the placed frame: the shoulder blade with its spine and acromion
+        (``scapula``), the clavicle that braces it against the sternum, the humerus with its head (the wing's joint
+        sits on the blade in version 3 of the placement, under the root of the spine)."""
         left = {}
-        S, _ = self.joints(controls)
-        left["scapula"] = scapula_plate(self.lm, self.surface, self.permanent())
-        left["furcula"] = furcula(self.lm, self.surface, S)
+        # the bones keep their depth under the PLAIN skin (the relief over them is muscle): they are laid under
+        # the body as it is without any junction (the fillet climbing the arm would cut the blade round the root)
+        ms = moulded if moulded is not None else (self.moulded(controls, self.body[1]) if self.body else None)
+        if ms is not None:
+            blade = scapula_blade(self.lm, ms)
+            spine, acro = scapula_spine(self.lm, ms, self.surface)
+            parts = [m for m in (blade, spine, self.glenoid() if self.tube else None) if m is not None]
+            if parts:
+                left["scapula"] = Mesh.merge(parts)
+            left["clavicle"] = clavicle(self.lm, self.surface, acro)
         out = {}
         for k, mesh in left.items():
             if mesh is None:
@@ -905,8 +1321,9 @@ class WingRoot:
         out["humerus"] = self.sleeve_meshes(skin, controls)["bone"]
         return out
 
-    def layers(self, skin: Mesh, controls=None) -> dict:
-        """``{"bone", "muscle", "skin"}`` (merged meshes, the placed frame): see the module docstring."""
-        return {"bone": Mesh.merge(list(self.bones(skin, controls).values())),
-                "muscle": Mesh.merge(list(self.muscles(skin, controls).values())),
+    def layers(self, skin: Mesh, controls=None, shaped=None) -> dict:
+        """``{"bone", "muscle", "skin"}`` (merged meshes, the placed frame): see the module docstring. ``shaped``:
+        the body as a view meshes it (every appendage's junction), else this wing's own junction moulds it."""
+        return {"bone": Mesh.merge(list(self.bones(skin, controls, shaped).values())),
+                "muscle": Mesh.merge(list(self.muscles(skin, controls, shaped).values())),
                 "skin": skin}

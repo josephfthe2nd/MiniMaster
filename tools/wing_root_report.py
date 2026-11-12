@@ -126,6 +126,14 @@ def measure(base, lib, cat, body: str, style: str, pose, with_crossings: bool = 
            "limited": info.get("limited", 0), "area_min": float(ratio.min()), "area_max": float(ratio.max()),
            "edge_max": float(growth.max()), "exit_before": angles[0], "exit_after": angles[1],
            "relief_litres": quads_to_mesh(cv1, cq).volume() - quads_to_mesh(cv0, cq).volume()}
+    # the join one SEES: the skin's angle to the arm on a ring 1.3 / 1.8 root radii round the crossing (min: the side
+    # the arm leans over; the exit angles above are where the axis meets the skin, inside the arm)
+    s0, s1 = WR.BodySurface(cv0, cq), WR.BodySurface(cv1, cq)
+    r = p.model.exit_radius()
+    for k in (1.3, 1.8):
+        for key, sf in (("before", s0), ("after", s1)):
+            v = WR.visible_join(s0, sf, S, E, r, k)
+            out[f"ring{k}_{key}"] = (float("nan"), float("nan")) if v is None else v
     if with_crossings:
         region = moved.copy()
         region[cq[moved[cq].any(1)].ravel()] = True
@@ -145,7 +153,7 @@ def main(argv) -> int:
     base, lib = mh.load()
     cat = SliderCatalog(lib.names)
     print(f"{'body':8s} {'style':9s} {'pose':18s} {'ms':>5s} {'moved':>5s} {'lim':>4s} {'area':>11s} {'edge':>5s} "
-          f"{'exit deg':>10s} {'litres':>6s} {'cross':>5s}")
+          f"{'exit deg':>10s} {'litres':>6s} {'cross':>5s}  {'seen 1.3r min/mean':>19s} {'seen 1.8r min/mean':>19s}")
     for body in opt["--bodies"].split(","):
         for style in opt["--styles"].split(","):
             for ps in opt["--poses"].split(";"):
@@ -155,7 +163,9 @@ def main(argv) -> int:
                 print(f"{body:8s} {style:9s} {label:18s} {r['ms']:5.0f} {r['moved']:5d} {r['limited']:4d} "
                       f"{r['area_min']:5.2f}-{r['area_max']:4.2f} {r['edge_max']:5.2f} "
                       f"{r['exit_before']:4.0f}->{r['exit_after']:3.0f} {r['relief_litres']:6.2f} "
-                      f"{r.get('new_crossings', '-'):>5}")
+                      f"{r.get('new_crossings', '-'):>5}  "
+                      + "  ".join(f"{r[f'ring{k}_before'][0]:3.0f}/{r[f'ring{k}_before'][1]:3.0f}->"
+                                  f"{r[f'ring{k}_after'][0]:3.0f}/{r[f'ring{k}_after'][1]:3.0f}" for k in (1.3, 1.8)))
     return 0
 
 

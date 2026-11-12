@@ -681,9 +681,19 @@ def test_the_skin_meets_the_root_at_a_smaller_angle_and_without_new_creases(worl
     # skin met its arm at 101 degrees, round 1's 8-degree exception is gone: it gains 29 now, S6b, with the arm
     # leaving the back over the shoulder blade, the fillet 0.45 high and the tube on the arm's own axis)
     gain = 15.0
-    assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - gain, m
-    if text == "wing":          # and lower than the round-1 wing's 78.7 (the generic S1 wing's: 67.4)
-        assert m["join_angle_deg_after"] < 75.0, m
+    if text == "wing":
+        # the join angle above is the skin within a quarter fillet width of the BURIED tube: with the wing's joint on
+        # the shoulder blade (its placement's third version, round 4) the humerus is buried 0.35 units and that band
+        # is the few skin points over its capped end (3 vertices, 75 with the joint on the ribs). The wing's join is
+        # measured where it is seen: on the skin round the arm (wingroot.visible_join; tests/test_wing_root.py)
+        from minimaster.character import wingroot as WR
+        p = placed[0]
+        S, E = p.model.joints(p.controls)
+        seen = WR.visible_join(WR.BodySurface(*base.body_cage(v)), WR.BodySurface(*base.body_cage(out)), S, E,
+                               p.model.exit_radius(), 1.3)
+        assert seen[0] >= 20.0 and seen[1] >= 45.0, (seen, m)
+    else:
+        assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - gain, m
     # no crease the body did not already have: the 99th percentile of what the junction adds to
     # the crease of an edge, on the twice-subdivided skin (S1: 14), and the 95th percentile of the zone
     assert m["dihedral_increase_p99_deg"] < 10.0, m
@@ -718,8 +728,10 @@ def test_the_cli_png_and_stl_use_the_shaped_body(world, tmp_path, monkeypatch):
     from minimaster.__main__ import main
     from minimaster.core.stl import read_stl
     a, b = tmp_path / "a.stl", tmp_path / "b.stl"
+    # (level 0 pinned: with a collar the default level is 1 since round 4, and --no-junction, which has no collar,
+    # would mesh the body at 0: the two STLs would differ in topology, not only in positions)
     common = ["character", "--gender", "1", "--muscle", "0.55", "--add", "tail", "--add", "horn",
-              "--size", "medium"]
+              "--subdivide", "0", "--size", "medium"]
     assert main(common + ["-o", str(a)]) == 0
     assert main(common + ["--no-junction", "-o", str(b)]) == 0
     assert a.read_bytes() != b.read_bytes()
@@ -924,15 +936,17 @@ def test_the_lab_export_equals_the_cli_stl_with_the_junction(tmp_path):
     doc.add_appendage("harvest", preset="upper_arms")
     mm = doc.save(tmp_path / "c.mmchar")
     lab_stl, cli_stl = tmp_path / "lab.stl", tmp_path / "cli.stl"
+    # (``Engine.export`` takes its level explicitly, 0 by default; the CLI's default is 1 since round 4 when a collar is
+    # asked for, so the CLI is pinned to 0 here: the comparison is of the two pipelines, not of their defaults)
     doc.engine.export(doc.character, lab_stl, size="small", force=True)
     assert main(["character", "--character", str(mm), "-o", str(cli_stl), "--size", "small",
-                 "--force"]) == 0
+                 "--subdivide", "0", "--force"]) == 0
     assert lab_stl.read_bytes() == cli_stl.read_bytes()
     doc.set_anatomy(junction=False)
     mm2 = doc.save(tmp_path / "c2.mmchar")
     doc.engine.export(doc.character, tmp_path / "lab2.stl", size="small", force=True)
     assert main(["character", "--character", str(mm2), "-o", str(tmp_path / "cli2.stl"),
-                 "--size", "small", "--force"]) == 0
+                 "--size", "small", "--subdivide", "0", "--force"]) == 0
     assert (tmp_path / "lab2.stl").read_bytes() == (tmp_path / "cli2.stl").read_bytes()
     assert (tmp_path / "lab2.stl").read_bytes() != lab_stl.read_bytes()
 
@@ -1259,20 +1273,25 @@ def test_a_wing_pose_does_not_puff_the_back_into_lobes_and_a_child_is_not_a_neut
         c, v, placed, out, info = _shaped(world, "wing", macro, poses)
         q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=(1,))
         assert J.quality_violations(q) == [], label
-        assert q["max_move"] < 0.35 and q["moved"] > 0, (label, q["max_move"])
-        # beyond the root's fillet only the mound moves the skin (S1: up to 0.22 on the whole back)
+        # (round 4: 0.38 folded: the wing's boss, its supraspinatus mound and the fillet of the folded arm add up
+        # beside the arm, under the folded wing; the back beyond the fillet is held below)
+        assert q["max_move"] < 0.40 and q["moved"] > 0, (label, q["max_move"])
+        # beyond the root's fillet only the mound moves the skin (S1: up to 0.22 on the whole back; round 4: the
+        # infraspinatus plateau and the supraspinatus mound behind and above the root stand up to 0.15 over the blade,
+        # each on its own part of it)
         cv0, cq = base.body_cage(v)
         cv1, _ = base.body_cage(out)
         far = np.ones(len(cv0), dtype=bool)
         for sp in J.junction_specs(placed):
             far &= J.tube_distance(cv0, np.asarray(sp.points), np.asarray(sp.radii))[0] > sp.fillet_width
-        assert np.linalg.norm(cv1 - cv0, axis=1)[far].max() < 0.12, label
+        assert np.linalg.norm(cv1 - cv0, axis=1)[far].max() < 0.17, label
         results[label] = (q["max_move"], J.junction_specs(placed)[0], BF.frame_or_none(
             base, lib.apply(base.verts, mh.macro_weights(**macro))))
     for label in ("neutral", "folded"):
-        # the mound the spec carries is relative; resolved on the body it is a scapula, not a back
+        # the mound the spec carries is relative; resolved on the body it is a scapula, not a back (round 4: the
+        # infraspinatus plateau, 0.14 s high over half the round-2 footprint: 0.15 units on this body)
         m = J.resolve_spec(results[label][1], results[label][2]).mounds[0]
-        assert m.radius < 0.9 and m.height < 0.12, (label, m)
+        assert m.radius < 0.9 and m.height < 0.17, (label, m)
     rn = J.resolve_spec(results["neutral"][1], results["neutral"][2]).mounds[0]
     rc = J.resolve_spec(results["child"][1], results["child"][2]).mounds[0]
     assert rc.radius < 0.8 * rn.radius and rc.height < 0.8 * rn.height     # the child's is smaller
@@ -1293,10 +1312,12 @@ def test_a_swung_arm_does_not_make_spikes_on_the_chest(world):
     # the cone was a stretch signature: the unguarded S1 law grew a quad 3x and made neighbours move 2
     # edge lengths apart there. Since the girdle placement (round 1: the swing is clamped to the girdle's
     # range, 26 degrees here) and the tube cut to the mesh (S6 core) the raw law no longer makes the cone;
-    # what is left of it is a quad stretched more than 2x, which the guards remove (above: no violation)
+    # what was left of it was a quad stretched more than 2x, which the guards removed (above: no violation). Round 4
+    # (the limb track): the girdle's tube climbs half as high (0.15 of the fillet) and its masses are local to the
+    # root, so even the raw law stretches no quad past the guards' bounds any more: nothing the guards had to remove
     raw = J.apply_junctions(base, v, specs, **LAW_ONLY)
     bad = J.quality_violations(J.junction_quality(base, v, raw, specs, levels=()))
-    assert any("quad grew" in m for m in bad), bad
+    assert bad == [], bad
     cv0, cq = base.body_cage(v)
     cv1, _ = base.body_cage(out)
     nrm = J.vertex_normals(cv0, cq)

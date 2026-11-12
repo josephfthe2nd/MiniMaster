@@ -20,6 +20,8 @@ from minimaster.character.appendage_spec import AppendageSpec
 
 assets = pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not fetched")
 SHAPES = HR.SHAPE_NAMES
+# (round 4: the keratin shapes; the skin-covered ossicone has no cuff, its own foot is the fillet: test_horn_ossicone.py)
+KERATIN = tuple(s for s in SHAPES if HR.SHAPES[s]["collar"] is not None)
 
 
 @pytest.fixture(scope="module")
@@ -40,18 +42,22 @@ def figure(world, v, text):
     return placed, shaped
 
 
-def test_every_shape_asks_for_a_skin_cuff_and_the_ossicone_for_a_fillet():
-    for shape in SHAPES:
+def test_every_keratin_shape_asks_for_a_skin_cuff_and_the_ossicone_for_none():
+    """A keratin sheath gets a narrow low rim of skin tucked round it (no fillet: A06, A22), the ram a wider one (its root
+    is on the temple crest); the ossicone (skin over bone, A29) none: round 3's cuff drew a pale scalloped lip round a
+    surface that is skin all over, and its own foot is the fillet now (``test_horn_ossicone.py``)."""
+    assert KERATIN == ("curved", "ram", "spiral", "antelope")
+    for shape in KERATIN:
         w, h = HR.SHAPES[shape]["collar"]
         assert 0.3 <= w <= 1.0 and 0.2 <= h <= 0.8
-    # a keratin sheath gets a narrow low rim (no fillet: A06, A22), an ossicone a wide one (A29: 0.5 base radii)
-    assert HR.SHAPES["ossicone"]["collar"][0] > 1.5 * HR.SHAPES["curved"]["collar"][0]
+    assert HR.SHAPES["ram"]["collar"][0] > 1.5 * HR.SHAPES["curved"]["collar"][0]
+    assert HR.SHAPES["ossicone"]["collar"] is None
     assert K.KINDS["horn"].defaults()["collar"] == 1.0
     assert K.KINDS["horn"].defaults()["ring_verts"] == 24          # (a 16-gon's facets poked through the cuff)
 
 
 @assets
-@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("shape", KERATIN)
 @pytest.mark.parametrize("levels", [1, 2])
 def test_the_collar_is_a_closed_cuff_tangent_to_the_skin_and_the_sheath_on_both_sides(world, neutral, shape, levels):
     """On both horns of the pair (the right one has a mirroring frame: the collar was never run on one before), at the

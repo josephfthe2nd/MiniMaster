@@ -113,7 +113,14 @@ def _shell_colors(shell: Shell, cam, view, rig, ao_strength, cache, ao=True):
     mesh = shell.mesh
     strength = ao_strength * shell.ao_strength
     use_ao = ao and shell.ao
-    if cache is False:
+    carried = getattr(mesh, "shading_normals", None)
+    if carried is not None:
+        # a mesh that carries its own shading (collar.CollarMesh: a root collar drawn with the skin's
+        # normals and occlusion at its rim, so it shades as the skin it lies on)
+        vn = carried
+        term = getattr(mesh, "shading_cavity", None)
+        occ = sh.ao_from_term(term, strength) if use_ao and term is not None else None
+    elif cache is False:
         vn = sh.vertex_normals(mesh.vertices, mesh.faces)
         occ = (sh.cavity_ao(mesh.vertices, mesh.faces, vn, strength=strength)
                if use_ao else None)

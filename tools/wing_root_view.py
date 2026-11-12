@@ -86,11 +86,13 @@ def build(specs, macro, base, lib, cat, pose=None):
     return c, verts, placed, shaped, info
 
 
-def layer_shells(placed, layers, cut, plane, window=None):
+def layer_shells(placed, layers, cut, plane, window=None, shaped=None):
     xf = po.MH_TO_Z_UP
     out = []
     for k, p in enumerate(placed):
-        meshes = p.layers()
+        # the muscles lie under the skin this view meshes (every appendage's junction), as the ecorche draws them
+        on = getattr(p.kind, "layers_on", None)
+        meshes = on(p, shaped) if (callable(on) and shaped is not None) else p.layers()
         for name in layers:
             m = meshes.get(name)
             if m is None or not len(m.faces):
@@ -131,7 +133,7 @@ def render(base, body_verts, placed, views, size, rad, levels, skin_only=False, 
                     if i == 0 else s for i, s in enumerate(body)]
     shells = [] if no_body else list(body)
     if layers:
-        shells += layer_shells(placed, layers, cut, plane, win)
+        shells += layer_shells(placed, layers, cut, plane, win, shaped=body_verts)
     elif not skin_only:
         shells += [po.Shell(p.mesh().transform(po.MH_TO_Z_UP), p.material) for p in placed]
     ctr = to_z(anchor) if anchor is not None else (body[0].mesh.bounds[0] + body[0].mesh.bounds[1]) / 2

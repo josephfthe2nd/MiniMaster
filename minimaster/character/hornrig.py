@@ -69,7 +69,9 @@ FLARE_MAX = 0.6          # the root flare is limited to this (a flare of 1.5 is 
 CAP_DEPTH = 0.5          # the buried end is a rounded cap this many root radii deep
 CORE_BASE = 0.82         # the cornual process' radius at the skin, in base radii
 CORE_MIN_WALL = 0.12     # the keratin wall is at least this thick (base radii) over the core
-CORE_PEDESTAL = 1.12     # the process widens into the skull to this many base radii
+CORE_FLARE = 0.6         # the cornual process flares into the skull's outer table along a concave quarter circle of this
+                         # many base radii (A05: the goat's core grows out of the frontal bone with no step; round 3's
+                         # pedestal, 1.12 R wide under the skin, stepped to the cone at the foot's top like a pipe reducer)
 RING_PITCH = 0.8         # annulus pitch at the root, in base radii
 RING_PITCH_TIP = 0.55    # ... falling to this fraction of it at the tip
 RING_START = 0.25        # no ring below this many base radii over the skin point (the root collar's top edge lies there)
@@ -101,6 +103,12 @@ LYRE_PSI_MAX = 0.5 * math.pi  # a lyre turns out at most this much (radians), an
 PSI_MAX = 1.75 * math.pi # the planar spiral turns at most this much (radians): past it the log spiral meets its first coil
 HUG = 0.97               # the skin hugs this fraction of the (inscribed) sheath radius
 HALFWIDTH_CAP = 0.40     # the base radius is at most this share of the head's half-width at that height
+TILT_MAX = 45.0          # degrees: the most a horn leans off the skull's normal (round 4: the slider went to 60, where the
+                         # low side of the sheath lay along the scalp as a keratin tongue and the skin's cuff split in two;
+                         # the research's rule for a horn that reads as grown out of the bone is 15 to 45)
+RING_VERTS_MIN = 24      # the sheath's polygon has at least this many sides (round 4: the slider went down to 5; a hexagonal
+                         # sheath tore the skin's cuff into teeth at its corners, and a 16-gon's facets poked through it)
+RING_VERTS_MAX = 48
 
 # the skin around the root (junction_spec): in base radii
 TENT_RADIUS = 2.2        # rho_m: the tent's radius
@@ -127,6 +135,30 @@ def smoothstep(u):
     return u * u * (3.0 - 2.0 * u)
 
 
+# the fillet foot of a skin-covered shape (the ossicone, round 4): see ``HornModel._fillet_foot``
+FILLET_RHO = (0.2, 1.0)  # the fillet's radius is ``flare`` base radii, within these (A29: 0.5)
+FILLET_STEP = 5.0        # degrees of the fillet's arc between two rings (the profile turns at most this much a ring)
+FILLET_BLEND = 1.2       # base radii of the column above the fillet over which its rings go from following the skin
+                         # to the planar rings of the shaft
+
+
+def fillet_reach(rho: float, R: float, row: dict) -> float:
+    """How far out of the column a fillet foot reaches under the skin (its deepest ring), local units."""
+    g = math.radians(float(row.get("gamma", 12.0)))
+    d1, d2 = (float(x) * R for x in row.get("dive", (0.06, 0.12)))
+    f_g, h_g = rho * (1.0 - math.sin(g)), rho * (1.0 - math.cos(g))
+    return f_g + (h_g + d1) / math.tan(g) + (d2 - d1) / math.tan(math.radians(40.0))
+
+
+def fillet_rim(rho: float, row: dict):
+    """``(f, h)`` of the point where a fillet foot of radius ``rho`` meets the skin it was built on: how far out of
+    the column (``f``) and how high (``h`` = 0: on the skin), along the straight line that continues the arc where it
+    is ``row["gamma"]`` degrees off the skin."""
+    g = math.radians(float(row.get("gamma", 12.0)))
+    f_g, h_g = rho * (1.0 - math.sin(g)), rho * (1.0 - math.cos(g))
+    return f_g + h_g / math.tan(g), 0.0
+
+
 # --------------------------------------------------------------------------
 # the shapes
 
@@ -141,7 +173,7 @@ SHAPES = {
                 tip=0.07, profile="spiral", q=1.35, aspect=0.80, lobe=0.06, rings=0.06,
                 flare=0.0, tilt=41.0, lean=(0.14, 0.49, -0.86), bend=(0.45, -0.65, -0.55),
                 core=0.6, material="bone", site="horn_temple_crest", collar=(0.9, 0.3), ring_verts=32,
-                silhouette=0.12),
+                silhouette=0.12, temporalis=True),
     # a markhor / kudu corkscrew (A01, A26): thick at the root, an open helix of 1.5 turns twice the local radius
     # wide (the first one, 4.0 x 0.13 with 2.25 turns, crossed itself and printed fragile)
     "spiral": dict(length=2.4, base_radius=0.17, curve=0.35, twist=0.0, turns=1.5, segments=48,
@@ -154,11 +186,19 @@ SHAPES = {
                      flare=0.0, tilt=40.0, lean=(-0.31, 0.80, -0.52), bend=(0.7, 0.0, -0.7),
                      core=0.62, material="bone", site="horn_crown", collar=(0.45, 0.3)),
     # a giraffe's ossicone: bone that stays under the skin and hair, so the whole surface is skin
-    # material; it tapers by only a quarter, ends in a dome and meets the head in a concave fillet
-    "ossicone": dict(length=0.45, base_radius=0.15, curve=0.2, twist=0.0, turns=0.0, segments=16,
-                     tip=0.105, profile="spiral", q=2.0, aspect=1.0, lobe=0.0, rings=0.0,
-                     flare=0.45, tilt=20.0, lean=(-0.31, 0.80, -0.52), bend=(0.0, 0.0, -1.0),
-                     core=1.0, material="skin", site="horn_crown", collar=(0.8, 0.7)),
+    # material; it tapers by only a quarter, ends in a dome and meets the head in a concave fillet.
+    # Round 4: ONE surface. The skin's cuff (collar.py) was a second shell whose top edge drew a pale scalloped lip round
+    # the base and whose foot rings bunched into a tone band at 55 % of the height; skin over bone has no seam (A29, A30).
+    # The fillet is the sheath's own foot (``foot="fillet"``): a concave quarter circle of ``flare`` base radii (A29:
+    # 0.5) from the column down to the skin, which it meets at ``gamma`` degrees and then dives under; no collar.
+    # Length 0.55 (0.45 read stubby beside A29 / the giraffe silhouette's H/W 1.5-1.75), tip 0.75 R (A29's taper
+    # 0.94 / 0.88 / 0.82 of the column at 25 / 50 / 75 %), a finer dome, 40 facets (skin: no keratin facets to match)
+    "ossicone": dict(length=0.55, base_radius=0.15, curve=0.2, twist=0.0, turns=0.0, segments=20,
+                     tip=0.1125, profile="spiral", q=2.0, aspect=1.0, lobe=0.0, rings=0.0,
+                     flare=0.5, tilt=20.0, lean=(-0.31, 0.80, -0.52), bend=(0.0, 0.0, -1.0),
+                     core=1.0, material="skin", site="horn_crown", collar=None, ring_verts=40,
+                     foot="fillet", gamma=6.0, dive=(0.06, 0.12), cap=(12.0, 24.0, 36.0, 48.0, 60.0, 71.0, 81.0, 88.0),
+                     tube=(0.5, 0.4), tent=(2.6, 0.2, 0.03)),
 }
 SHAPE_NAMES = tuple(SHAPES)
 
@@ -190,11 +230,34 @@ class HornParams:
 
     @property
     def root_radius(self) -> float:
-        """The radius of the sheath at the skin (flare included)."""
+        """The radius of the sheath at the skin (flare included; a fillet foot's where it meets the skin)."""
+        if self.fillet_foot:
+            return self.base_radius + fillet_rim(self.fillet_rho, self.row)[0]
         return self.base_radius * (1.0 + self.flare_eff)
 
     @property
+    def fillet_foot(self) -> bool:
+        """Is the foot a concave fillet of the sheath's own surface (the skin-covered ossicone) rather than a flare
+        under a skin cuff?"""
+        return self.row.get("foot") == "fillet"
+
+    @property
+    def footprint(self) -> float:
+        """How far the sheath reaches from its axis at the skin, in base radii (a fillet foot's buried rim)."""
+        if self.fillet_foot:
+            return 1.0 + fillet_reach(self.fillet_rho, self.base_radius, self.row) / max(self.base_radius, 1e-12)
+        return 1.0 + self.flare_eff
+
+    @property
+    def fillet_rho(self) -> float:
+        """A fillet foot's radius (local units): ``flare`` base radii, within ``FILLET_RHO``."""
+        lo, hi = FILLET_RHO
+        return min(max(float(self.flare), lo), hi) * self.base_radius
+
+    @property
     def flare_eff(self) -> float:
+        if self.fillet_foot:
+            return 0.0                    # (the fillet is the foot's own: no exponential flare on the column)
         return min(max(float(self.flare), 0.0), FLARE_MAX)
 
     @property
@@ -216,6 +279,9 @@ class HornParams:
 
     @property
     def tent_height(self) -> float:
+        tent = self.row.get("tent")
+        if tent is not None:
+            return float(tent[1])
         return TENT_HEIGHT_RAM if self.shape == "ram" else TENT_HEIGHT
 
 
@@ -236,6 +302,8 @@ class Head:
     up: np.ndarray             # up the head,
     fwd: np.ndarray            # and forward (left x up = fwd)
     skull: float = SKULL_REF   # the skull's half-width (``skull_halfwidth``)
+    mid: float = 0.0           # the x of the head's own midline (round 4: the skull-base joint's; a random face
+                               # moves the whole head sideways, by 0.16 on the CLI's default seeds 0 and 9)
 
     @property
     def k(self) -> float:
@@ -258,13 +326,17 @@ def head_frame(base, verts, cage) -> Head:
     eye = A.joint_position(base, "l-eye", verts)
     top = A.joint_position(base, "head-2", verts)
     root = A.joint_position(base, "head", verts)
-    iod = 2.0 * abs(float(eye[0]))
+    # the head's own midline: a random face translates the whole head sideways (the skull-base and crown joints,
+    # the eyes and every slab of the skull move together: measured on --randomize-face seeds 0, 9, 21, 57), so
+    # widths and the distance from the midline are measured from it, not from world x = 0
+    mid = 0.5 * float(root[0] + top[0])
+    iod = abs(float(eye[0]) - float(A.joint_position(base, "r-eye", verts)[0]))
     cv = cage[0]
     skull = skull_halfwidth(cv, root, top)
     k = skull / SKULL_REF
     head = cv[cv[:, 1] > root[1] - 0.3 * k]
     band = ((head[:, 1] > root[1] - 0.15 * k) & (head[:, 1] < eye[1] + 0.25 * k)
-            & (head[:, 2] < root[2] + 0.5 * k) & (head[:, 0] > 0))
+            & (head[:, 2] < root[2] + 0.5 * k) & (head[:, 0] > mid))
     hb = head[band]
     xm = float(hb[:, 0].max())
     ear = hb[hb[:, 0] > xm - 0.08 * k].mean(axis=0)
@@ -277,24 +349,27 @@ def head_frame(base, verts, cage) -> Head:
     left = np.cross(up, fwd)
     return Head(np.asarray(eye, dtype=np.float64), np.asarray(top, dtype=np.float64),
                 np.asarray(root, dtype=np.float64), np.asarray(ear, dtype=np.float64), iod,
-                left, up, fwd, skull)
+                left, up, fwd, skull, mid)
 
 
 def skull_halfwidth(cage_v, root, top) -> float:
-    """The skull's half-width: the largest ``|x|`` of the cage in a slab ``SKULL_AT`` of the way from the
-    skull base joint to the crown joint (the parietal eminences; above the ears and the eyes, which a face
-    slider moves on the same skull), ``SKULL_SLAB`` of that height thick."""
+    """The skull's half-width: half the width of the cage in a slab ``SKULL_AT`` of the way from the skull
+    base joint to the crown joint (the parietal eminences; above the ears and the eyes, which a face slider
+    moves on the same skull), ``SKULL_SLAB`` of that height thick. Half the WIDTH, not the largest ``|x|``:
+    a random face moves the head sideways (seed 0 by 0.16: the largest ``|x|`` read 0.881 where the skull is
+    0.719 wide each side, a horn 22 % too big)."""
     h = float(top[1] - root[1])
     y = float(root[1]) + SKULL_AT * h
     sl = np.abs(cage_v[:, 1] - y) < SKULL_SLAB * abs(h)
-    return float(np.abs(cage_v[sl, 0]).max()) if sl.any() else SKULL_REF
+    return 0.5 * float(np.ptp(cage_v[sl, 0])) if sl.any() else SKULL_REF
 
 
-def local_halfwidth(cage_v, point, radius: float = 0.35) -> float:
-    """The head's half-width at the height of ``point``: the largest |x| of the cage vertices in a
-    slab 0.08 thick around it (within ``radius`` front and back of it in z: not the ears)."""
+def local_halfwidth(cage_v, point, radius: float = 0.35, mid: float = 0.0) -> float:
+    """The head's half-width at the height of ``point``: the largest ``|x - mid|`` of the cage vertices in a
+    slab 0.08 thick around it (within ``radius`` front and back of it in z: not the ears), ``mid`` the x of the
+    head's own midline (``Head.mid``)."""
     sl = (np.abs(cage_v[:, 1] - point[1]) < 0.08) & (np.abs(cage_v[:, 2] - point[2]) < radius * 2.0)
-    return float(np.abs(cage_v[sl, 0]).max()) if sl.any() else 0.61
+    return float(np.abs(cage_v[sl, 0] - mid).max()) if sl.any() else 0.61
 
 
 def smooth_normal(cage_v, quads, point, radius: float) -> np.ndarray:
@@ -332,6 +407,8 @@ class Site:
     scale: float               # local units -> world units: the head's size over the neutral head's
     base_radius: float         # the base radius in LOCAL units after the limits
     limited: str = ""          # what limited the radius ("" = nothing)
+    mid: float = 0.0           # the x of the head's own midline (``Head.mid``)
+    side: int = 0              # +1 the left horn, -1 the right one (0: by the point's side of ``mid``)
 
     @property
     def radius(self) -> float:
@@ -340,7 +417,14 @@ class Site:
 
     @property
     def right(self) -> bool:
-        return float(self.point[0]) < 0.0
+        if self.side:
+            return self.side < 0
+        return float(self.point[0]) < self.mid
+
+    @property
+    def offset(self) -> float:
+        """How far the skin point is from the head's own midline (world units)."""
+        return abs(float(self.point[0]) - self.mid)
 
     def matrix(self, sink_offset: float = 0.0) -> np.ndarray:
         """The 4x4 that puts the local horn (``z`` = axis, ``x`` = bend, ``y = z x x``) on the head. On
@@ -356,13 +440,15 @@ class Site:
 
 
 def horn_site(cage, head: Head, point, params: HornParams, *, scale: float = 1.0, roll: float = 0.0,
-              tilt: float | None = None) -> Site:
-    """The site of a horn at the skin ``point`` of the left half (``x`` > 0; a point on the right is
-    treated as its mirror image): the radius from the head, the axis from the skull's surface normal.
+              tilt: float | None = None, side: int = 0) -> Site:
+    """The site of a horn at the skin ``point`` of the left half (``x`` > the head's midline ``head.mid``; a
+    point on the right, or ``side`` -1, is treated as its mirror image): the radius from the head, the axis from
+    the skull's surface normal.
 
-    * the size follows the head: ``scale x (iod / IOD_REF)`` times the parameters, with the base
-      radius limited to 0.35 of the head's half-width at that height and so that the tent keeps
-      ``TENT_MARGIN`` off the midline;
+    * the size follows the head: ``scale x head.k`` (the skull's half-width over the neutral one) times the
+      parameters, with the base radius limited to ``HALFWIDTH_CAP`` of the head's half-width at that height and
+      so that the tent keeps ``TENT_MARGIN`` off the head's OWN midline (round 4: it was world x = 0, and a random
+      face that moved the head 0.16 sideways was limited by a midline that was not there);
     * the axis is the smoothed surface normal tilted by ``tilt`` degrees (default: the shape's, 15 to
       45 for a horn that reads as grown out of the skull) toward the shape's lean direction,
       expressed in the head's own axes;
@@ -370,7 +456,8 @@ def horn_site(cage, head: Head, point, params: HornParams, *, scale: float = 1.0
       the axis by ``roll`` degrees."""
     cv, cq = cage
     point = np.asarray(point, dtype=np.float64)
-    side = 1.0 if point[0] >= 0 else -1.0
+    mid = float(head.mid)
+    side = int(side) if side else (1 if point[0] >= mid else -1)
     row = params.row
     k = head.k * scale
     R = params.base_radius * k
@@ -382,7 +469,7 @@ def horn_site(cage, head: Head, point, params: HornParams, *, scale: float = 1.0
     if float(np.linalg.norm(t)) < 1e-6:
         t = head.up - float(head.up @ n) * n
     t /= np.linalg.norm(t)
-    tau = math.radians(min(max(float(params.tilt if tilt is None else tilt), 0.0), 60.0))
+    tau = math.radians(min(max(float(params.tilt if tilt is None else tilt), 0.0), TILT_MAX))
     axis = n * math.cos(tau) + t * math.sin(tau)
     axis /= np.linalg.norm(axis)
     w = bend - float(bend @ axis) * axis
@@ -391,17 +478,120 @@ def horn_site(cage, head: Head, point, params: HornParams, *, scale: float = 1.0
     w /= np.linalg.norm(w)
     if roll:
         w = _rotate(w, axis, math.radians(roll))
-    hw = local_halfwidth(cv, point)
+    hw = local_halfwidth(cv, point, mid=mid)
     limit, why = R, ""
     cap = HALFWIDTH_CAP * hw
     if limit > cap:
         limit, why = cap, "head width"
-    margin = (abs(float(point[0])) - TENT_MARGIN) / MIDLINE_RADII
+    # (a fillet foot reaches further out under the skin than the column: the ossicone's, 2.1 base radii)
+    margin = (abs(float(point[0]) - mid) - TENT_MARGIN) / max(MIDLINE_RADII, params.footprint + 0.1)
     if limit > margin > 0.0:
         limit, why = margin, "midline"
     return Site(point=point, normal=n, axis=axis, bend=w, halfwidth=hw, scale=k,
-                base_radius=limit / k, limited=why)
+                base_radius=limit / k, limited=why, mid=mid, side=side)
 
+
+
+TWIST_MARGIN = 0.5       # a twisted sheath keeps this many TENT_MARGINs off the head's midline (the pair never meets)
+
+
+def midline_room(model: "HornModel", matrices, mids) -> float:
+    """The least distance (world units) between a horn's sheath above its skin point and the head's midline, over
+    the sites ``matrices`` (local -> world) with ``mids`` = ``(midline x, +1 left / -1 right)``: the centreline's
+    distance from the midline less the sheath's largest radius there (the keel's lobes and the rings included)."""
+    s, pos, *_ = model.path()
+    up = s >= 0.0
+    r = model.radius(s[up]) * (1.0 + float(model.p.row["lobe"]))
+    room = math.inf
+    for m, (mid, side) in zip(matrices, mids):
+        m = np.asarray(m, dtype=np.float64)
+        sc = float(abs(np.linalg.det(m[:3, :3])) ** (1.0 / 3.0))
+        x = pos[up] @ m[0, :3] + m[0, 3]
+        room = min(room, float(((x - mid) * side - r * sc).min()))
+    return room
+
+
+def twist_room(params: HornParams, matrices, mids, iterations: int = 10) -> float:
+    """The share of its twist (``HornModel.twist_scale``) a horn of ``params`` keeps so that, on the sites
+    ``matrices`` / ``mids`` (:func:`midline_room`), no part of its sheath comes nearer the head's midline than
+    ``TWIST_MARGIN x TENT_MARGIN``: 1 when the full twist does (or when the untwisted horn does not either: then
+    the twist is not what brings it there), else the largest share that does, by bisection."""
+    need = TWIST_MARGIN * TENT_MARGIN
+    if midline_room(HornModel(params), matrices, mids) >= need:
+        return 1.0
+    if midline_room(HornModel(params, twist_scale=0.0), matrices, mids) < need:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    for _ in range(iterations):
+        f = 0.5 * (lo + hi)
+        if midline_room(HornModel(params, twist_scale=f), matrices, mids) >= need:
+            lo = f
+        else:
+            hi = f
+    return lo
+
+
+# --------------------------------------------------------------------------
+# a skin-covered foot shaded as the skin it comes out of
+
+
+class ShadedMesh(Mesh):
+    """A shell that carries the normals and the cavity term it is SHADED with (``shading_normals`` (n, 3),
+    ``shading_cavity`` (n,)): the protocol of ``collar.CollarMesh`` (the renderer, ``portrait._shell_colors``, uses
+    them where it knows them; a renderer that does not draws the mesh with its own). The skin-covered ossicone's foot
+    carries the SKIN's normals and occlusion where it meets the skin, blending to its own up the fillet (``shade_foot``):
+    the renderer shades every shell with its own area weighted normals and its own cavity term, so the line where the
+    foot dives under the skin at a few degrees was drawn as a ragged ring of two shadings (round 4, before this). The
+    geometry, hence the print, is not changed by it; every transform keeps the attributes (normals by the inverse
+    transpose), ``Mesh.merge`` and the print path drop them."""
+
+    def __init__(self, vertices, faces, shading_normals=None, shading_cavity=None):
+        super().__init__(vertices, faces)
+        self.shading_normals = None if shading_normals is None else np.asarray(shading_normals, dtype=np.float64)
+        self.shading_cavity = None if shading_cavity is None else np.asarray(shading_cavity, dtype=np.float64)
+
+    def _like(self, out: Mesh, linear=None) -> "ShadedMesh":
+        n = self.shading_normals
+        if n is not None and linear is not None:
+            n = n @ np.linalg.inv(np.asarray(linear, dtype=np.float64))
+            n = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+        return ShadedMesh(out.vertices, out.faces, n, self.shading_cavity)
+
+    def copy(self) -> "ShadedMesh":
+        return self._like(Mesh.copy(self))
+
+    def transform(self, m) -> "ShadedMesh":
+        return self._like(Mesh.transform(self, m), np.asarray(m, dtype=np.float64)[:3, :3])
+
+    def translated(self, v) -> "ShadedMesh":
+        return self._like(Mesh.translated(self, v))
+
+    def scaled(self, s) -> "ShadedMesh":
+        s = np.asarray(s, dtype=np.float64)
+        return self._like(Mesh.scaled(self, s), np.diag(np.broadcast_to(s, (3,))) if s.ndim else np.eye(3) * float(s))
+
+
+SHADE_BAND = (0.05, 0.3) # the foot is shaded as the skin up to the first share of the fillet's radius over the skin,
+                         # blending to its own shading by the second (the fillet is then about 45 degrees up its arc)
+
+
+def shade_foot(mesh: Mesh, skin, centre, radius: float, rho: float) -> ShadedMesh:
+    """``mesh`` (world frame) as a :class:`ShadedMesh` that carries the skin's shading where it meets the skin: the
+    skin (``(vertices, triangles)`` of the drawn body near ``centre``, within ``radius``) gives the normal and the cavity
+    term under each vertex (``collar.SkinPatch``: the renderer's own area weighted normals); the weight is 1 at and
+    under the skin and falls to 0 between ``SHADE_BAND[0]`` and ``SHADE_BAND[1]`` fillet radii ``rho`` over it."""
+    from . import collar as CO
+    from . import shading as sh
+    patch = CO.SkinPatch(skin[0], skin[1], centre, radius)
+    _, n_skin, sd, nearest = patch.closest(mesh.vertices)
+    own = sh.vertex_normals(mesh.vertices, mesh.faces)
+    c_own = sh.cavity_term(mesh.vertices, mesh.faces, own)
+    c_skin = sh.cavity_term(patch.V, patch.F, patch.N)[nearest]
+    u = (sd - SHADE_BAND[0] * rho) / max((SHADE_BAND[1] - SHADE_BAND[0]) * rho, 1e-9)
+    w = 1.0 - smoothstep(u)
+    n = w[:, None] * n_skin + (1.0 - w)[:, None] * own
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    return ShadedMesh(mesh.vertices, mesh.faces, n, w * c_skin + (1.0 - w) * c_own)
 
 
 # --------------------------------------------------------------------------
@@ -440,32 +630,68 @@ class SkinField:
         self.fallback = fallback
         self.reach = reach
 
+    def _grid(self):
+        """A uniform grid over the triangles' ``xy`` boxes (round 4: the ossicone's foot is fitted to the cage
+        subdivided once, four times the triangles, and testing every point against every triangle took 2 s a pair):
+        ``(origin, cell, ny, keys, tris)``, the triangle ids sorted by the key of each cell they overlap."""
+        if getattr(self, "_g", None) is not None:
+            return self._g
+        tri = self.tri
+        lo, hi = tri[:, :, :2].min(axis=1), tri[:, :, :2].max(axis=1)
+        cell = max(1.5 * float(np.median((hi - lo).max(axis=1))), 1e-4)
+        origin = lo.min(axis=0) - 1e-9
+        i0 = np.floor((lo - origin) / cell).astype(np.int64)
+        i1 = np.floor((hi - origin) / cell).astype(np.int64)
+        ny = int(i1[:, 1].max()) + 2
+        span = i1 - i0 + 1
+        cnt = span[:, 0] * span[:, 1]
+        t = np.repeat(np.arange(len(tri)), cnt)
+        k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        sy = np.repeat(span[:, 1], cnt)
+        ix = np.repeat(i0[:, 0], cnt) + k // sy
+        iy = np.repeat(i0[:, 1], cnt) + k % sy
+        key = ix * ny + iy
+        order = np.argsort(key, kind="stable")
+        self._g = (origin, cell, ny, key[order], t[order])
+        return self._g
+
     def height(self, xy, hits: bool = False):
         """The skin's ``z`` over each point of ``xy``; ``hits=True`` also returns which points the rays found
-        the skin under (the others are the fallback plane's: a ray past the head's silhouette)."""
-        xy = np.asarray(xy, dtype=np.float64)
+        the skin under (the others are the fallback plane's: a ray past the head's silhouette). Of the triangles a
+        ray hits, the one nearest ``z = 0``."""
+        xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
         out = self.fallback.height(xy)
         found = np.zeros(len(xy), dtype=bool)
         if not len(self.tri) or not len(xy):
             return (out, found) if hits else out
-        a, b, c = self.tri[:, 0], self.tri[:, 1], self.tri[:, 2]
-        e1, e2 = b[:, :2] - a[:, :2], c[:, :2] - a[:, :2]
-        det = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
-        ok = np.abs(det) > 1e-14
+        origin, cell, ny, keys, tris = self._grid()
+        ij = np.floor((xy - origin) / cell).astype(np.int64)
+        pk = ij[:, 0] * ny + ij[:, 1]
+        start = np.searchsorted(keys, pk, side="left")
+        end = np.searchsorted(keys, pk, side="right")
+        n = end - start
+        if not n.any():
+            return (out, found) if hits else out
+        kmax = int(n.max())
+        idx = start[:, None] + np.arange(kmax)[None, :]
+        valid = np.arange(kmax)[None, :] < n[:, None]
+        cand = tris[np.where(valid, idx, 0)]
+        a, b, c = self.tri[cand, 0], self.tri[cand, 1], self.tri[cand, 2]           # (n, k, 3)
+        e1, e2 = b[..., :2] - a[..., :2], c[..., :2] - a[..., :2]
+        det = e1[..., 0] * e2[..., 1] - e1[..., 1] * e2[..., 0]
+        ok = valid & (np.abs(det) > 1e-14)
         det = np.where(ok, det, 1.0)
-        za, zb, zc = a[:, 2], b[:, 2], c[:, 2]
-        for lo in range(0, len(xy), 96):                      # all the points of a chunk against all the triangles
-            p = xy[lo:lo + 96]
-            d = p[:, None, :] - a[None, :, :2]
-            u = (d[:, :, 0] * e2[None, :, 1] - d[:, :, 1] * e2[None, :, 0]) / det[None, :]
-            w = (e1[None, :, 0] * d[:, :, 1] - e1[None, :, 1] * d[:, :, 0]) / det[None, :]
-            hit = ok[None, :] & (u >= -1e-9) & (w >= -1e-9) & (u + w <= 1.0 + 1e-9)
-            z = za[None, :] + u * (zb - za)[None, :] + w * (zc - za)[None, :]
-            nearest = np.where(hit, np.abs(z), np.inf)
-            j = np.argmin(nearest, axis=1)
-            got = np.isfinite(nearest[np.arange(len(p)), j])
-            out[lo:lo + 96][got] = z[np.arange(len(p)), j][got]
-            found[lo:lo + 96] = got
+        d = xy[:, None, :] - a[..., :2]
+        u = (d[..., 0] * e2[..., 1] - d[..., 1] * e2[..., 0]) / det
+        w = (e1[..., 0] * d[..., 1] - e1[..., 1] * d[..., 0]) / det
+        hit = ok & (u >= -1e-9) & (w >= -1e-9) & (u + w <= 1.0 + 1e-9)
+        z = a[..., 2] + u * (b[..., 2] - a[..., 2]) + w * (c[..., 2] - a[..., 2])
+        nearest = np.where(hit, np.abs(z), np.inf)
+        j = np.argmin(nearest, axis=1)
+        rows = np.arange(len(xy))
+        got = np.isfinite(nearest[rows, j])
+        out[got] = z[rows, j][got]
+        found[:] = got
         return (out, found) if hits else out
 
 
@@ -488,8 +714,9 @@ class HornModel:
     Everything derives from one :class:`HornParams`. The meshes are built on demand
     (:meth:`skin`, :meth:`bone`), the skin is the one that is printed."""
 
-    def __init__(self, params: HornParams):
+    def __init__(self, params: HornParams, twist_scale: float = 1.0):
         self.p = params
+        self.twist_scale = float(min(max(twist_scale, 0.0), 1.0))   # see ``psi_b``
         self.R = float(params.base_radius)
         self.L = float(params.length)
         self._stations = self._make_stations()
@@ -557,7 +784,7 @@ class HornModel:
         p, R, L = self.p, self.R, self.L
         row = p.row
         psi = self.psi
-        psi_b = float(p.twist) * L / 2.0
+        psi_b = self.psi_b
         s = np.asarray(s, dtype=np.float64)
         if row["profile"] == "lyre":
             w1 = 0.55 * L
@@ -599,6 +826,16 @@ class HornModel:
         psi = float(self.p.curve) * self.L / 2.0
         cap = LYRE_PSI_MAX if self.p.row["profile"] == "lyre" else PSI_MAX
         return math.copysign(min(abs(psi), cap), psi)
+
+    @property
+    def psi_b(self) -> float:
+        """The out-of-plane turn ``twist x L / 2`` (radians): the bend plane turns by ``atan(psi_b / psi)`` and the
+        total turn is ``hypot(psi, psi_b)``, which is held to the same cap as ``psi`` alone (round 4: it was not
+        capped, and an antelope at twist 3 turned 5.1 radians sideways and crossed itself 166 times)."""
+        psi_b = float(self.p.twist) * self.L / 2.0
+        cap = LYRE_PSI_MAX if self.p.row["profile"] == "lyre" else PSI_MAX
+        room = math.sqrt(max(cap * cap - self.psi * self.psi, 0.0))
+        return math.copysign(min(abs(psi_b), room), psi_b) * self.twist_scale if psi_b else 0.0
 
     def helix_offset(self, s, N, B, rho_scale=None):
         """The corkscrew's displacement from the axis curve at ``s`` (``(n, 3)``): a circle of radius
@@ -758,12 +995,13 @@ class HornModel:
 
     # -- the meshes -----------------------------------------------------------------------------
 
-    def _cap_rings(self, centre, direction, nvec, bvec, a, b, ring_verts, lobe, keel, height=None):
+    def _cap_rings(self, centre, direction, nvec, bvec, a, b, ring_verts, lobe, keel, height=None, degrees=TIP_CAP):
         """Rings of a rounded end on a quarter ellipsoid, from the section outward (``direction``);
-        ``height`` is how far it reaches (default: the major radius: a dome)."""
+        ``height`` is how far it reaches (default: the major radius: a dome); ``degrees`` where the rings are on the
+        quarter (an ossicone's dome is in plain sight: more of them)."""
         h = a if height is None else height
         out = []
-        for deg in TIP_CAP:
+        for deg in degrees:
             phi = math.radians(deg)
             out.append(_ring(centre + direction * h * math.sin(phi), nvec, bvec,
                              a * math.cos(phi), b * math.cos(phi), ring_verts, lobe, keel))
@@ -785,6 +1023,8 @@ class HornModel:
         if field is None:
             tau = math.radians(p.tilt)
             field = PlaneField((-math.sin(tau), 0.0, math.cos(tau)))
+        if p.fillet_foot:
+            return self._fillet_foot(field)
         Ra = float(self.radius(0.0))                   # the root radius (flare included)
         a0, b0 = (float(x) for x in self.semi_axes(0.0))
         z_skin = field.height(np.stack([a0 * ct, b0 * st_], axis=1))
@@ -870,6 +1110,94 @@ class HornModel:
         bowl.append(stem)
         return bowl, foot, shaft_s
 
+    def fillet_generatrix(self, room: float | None = None):
+        """``(h, f, t)`` of a fillet foot (``HornParams.fillet_foot``: the skin-covered ossicone), from its buried end
+        up: the nominal height over the LOCAL skin, what the fillet adds to the column's radius there, and how far the
+        ring has gone from following the skin (0) to the planar ring of the shaft (1).
+
+        The fillet is a quarter circle of radius ``rho`` (``HornParams.fillet_rho``; A29: 0.5 base radii), tangent
+        to the column at ``h = rho`` and, continued, to the skin. It is cut where it is ``gamma`` degrees off the
+        skin and goes on straight from there, through the skin and ``dive[0]`` base radii under it (a sheet that
+        ends tangent to the skin it lies on stands off it wherever the two surfaces' facets disagree: the lip the
+        round-3 cuff drew), then more steeply to ``dive[1]``. The arc is sampled every ``FILLET_STEP`` degrees, so
+        the profile turns that much a ring at most; above it the column's rings take ``FILLET_BLEND`` base radii to
+        become planar, spaced like the shaft's. The radius is the column's own taper at each vertex's height plus
+        the fillet: the profile is C1 everywhere (round 3's foot rings bunched under the first shaft ring and its
+        slope jumped from -0.30 to -0.09 there: the tone band at 55 % of the height).
+
+        ``room`` is how high the foot may reach over the skin point (a stub: the head limits a big radius and the length
+        keeps the proportions): the fillet and the blend are scaled down together to fit under it."""
+        p, R = self.p, self.R
+        row = p.row
+        rho = p.fillet_rho
+        blend = FILLET_BLEND * R
+        if room is not None and rho + blend > room:
+            f = max(room / (rho + blend), 0.15)
+            rho, blend = rho * f, blend * f
+        g = math.radians(float(row.get("gamma", 12.0)))
+        d1, d2 = (float(x) * R for x in row.get("dive", (0.06, 0.12)))
+        phis = np.radians(np.append(np.arange(math.degrees(g), 90.0 - 1e-6, FILLET_STEP), 90.0))
+        arc_h, arc_f = rho * (1.0 - np.cos(phis)), rho * (1.0 - np.sin(phis))
+        f_g, h_g = float(arc_f[0]), float(arc_h[0])
+        line_h = np.array([-d1, -0.6 * d1, -0.25 * d1, 0.3 * h_g])
+        line_f = f_g + (h_g - line_h) / math.tan(g)
+        deep_f = float(line_f[0]) + (d2 - d1) / math.tan(math.radians(40.0))
+        top = rho + blend
+        step = min(self.L / max(int(p.segments), 3), 0.25 * blend)
+        col_h = np.linspace(rho, top, max(int(math.ceil((top - rho) / step)), 4) + 1)[1:]
+        h = np.concatenate([[-d2], line_h, arc_h, col_h])
+        f = np.concatenate([[deep_f], line_f, arc_f, np.zeros(len(col_h))])
+        t = smoothstep((h - rho) / (top - rho))
+        return h, f, t
+
+    def _fillet_foot(self, field):
+        """``(bowl, foot, shaft_s)`` of a fillet foot (:meth:`fillet_generatrix`): every ring lowered onto the skin
+        under its OWN vertices (three passes: a wide ring on a tilted, curved scalp), the column's rings blended into
+        planar ones standing on the skin's highest point round the column, the buried stem and bowl as for a keratin
+        foot."""
+        p, R = self.p, self.R
+        nv = int(p.ring_verts)
+        th = np.linspace(0.0, 2.0 * np.pi, nv, endpoint=False)
+        ct, st_ = np.cos(th), np.sin(th)
+        a0, b0 = (float(x) for x in self.semi_axes(0.0, flare=False))
+        z_col = field.height(np.stack([a0 * ct, b0 * st_], axis=1))
+        Z0 = float(z_col.max())
+        # (a stub's foot is scaled to end under 0.85 of its length: a big radius the head limited, length kept in proportion)
+        h_all, f_all, t_all = self.fillet_generatrix(room=0.85 * self.L - max(Z0, 0.0))
+        foot = []
+        for h, f, t in zip(h_all, f_all, t_all):
+            z = (1.0 - t) * (z_col + h) + t * (Z0 + h)
+            for _ in range(3):
+                zc = np.maximum(z, 0.0)
+                c, tt, nn, bb = self.frames_at(zc)
+                a, b = self.semi_axes(zc, flare=False)
+                v = c + ((a + f) * ct)[:, None] * nn + ((b + f) * st_)[:, None] * bb
+                z = (1.0 - t) * (field.height(v[:, :2]) + h) + t * (Z0 + h)
+            zc = np.maximum(z, 0.0)
+            c, tt, nn, bb = self.frames_at(zc)
+            a, b = self.semi_axes(zc, flare=False)
+            v = c + ((a + f) * ct)[:, None] * nn + ((b + f) * st_)[:, None] * bb
+            v[:, 2] = np.where(z > 0.0, v[:, 2], z)
+            foot.append(v)
+        s_top = Z0 + float(h_all[-1])
+        st = self._stations
+        shaft_s = st[st > s_top + 0.04 * R]
+        if not len(shaft_s):
+            shaft_s = np.array([min(s_top + 0.5 * (self.L - s_top), self.L)])
+        # the buried stem (level, under the deepest ring, at the COLUMN's width: the dive turns in under the skin, a stem
+        # as wide as the dive put three quarters of the horn's volume in the head) and the bowl that closes it
+        Ra = p.root_radius
+        z_stem = min(float(foot[0][:, 2].min()), -TUBE_DEPTH * p.sink) - STEM_DROP * Ra
+        stem = np.stack([a0 * ct, b0 * st_, np.full(nv, z_stem)], axis=1)
+        c0 = stem.mean(axis=0)
+        bowl = []
+        for deg in BOWL_RINGS[::-1]:
+            phi = math.radians(deg)
+            ring = c0 + (stem - c0) * math.cos(phi)
+            bowl.append(ring - np.array([0.0, 0.0, 1.0]) * BOWL_DEPTH * Ra * math.sin(phi))
+        bowl.append(stem)
+        return bowl, foot, shaft_s
+
     def skin(self, field=None) -> Mesh:
         """The keratin sheath, closed: from the bottom of the buried bowl up the foot, the shaft, to a
         rounded tip (see :meth:`foot_rings`)."""
@@ -883,59 +1211,113 @@ class HornModel:
         a, bb = self.semi_axes(shaft_s, flare=False)
         for i in range(len(shaft_s)):
             rings.append(_ring(c[i], n[i], b[i], a[i], bb[i], nv, lobe, keel))
-        rings += self._cap_rings(c[-1], t[-1], n[-1], b[-1], a[-1], bb[-1], nv, lobe, keel)
+        rings += self._cap_rings(c[-1], t[-1], n[-1], b[-1], a[-1], bb[-1], nv, lobe, keel,
+                                 degrees=p.row.get("cap", TIP_CAP))
         return A._loft(rings)
 
     # -- the bone ---------------------------------------------------------------------------------
 
-    def core_radius(self, s):
-        """The cornual process' mean radius at ``s``: 0.82 R at the skin, a cone to the end of the
-        core (``core`` x L), never closer than ``CORE_MIN_WALL`` R to the sheath's surface; below the
-        skin it widens into the skull (the pedestal)."""
+    def core_radius(self, s, skin_thick: float | None = None):
+        """The cornual process' mean radius at ``s`` (local units).
+
+        A keratin horn (A05, goat, scale bar): a LINEAR cone, ``CORE_BASE`` x R at the skin point, 0.75 / 0.5 / 0.25
+        of that at 25 / 50 / 75 % of the core (``core`` x L), continued straight into the skull below the skin point,
+        never nearer the sheath's surface than ``CORE_MIN_WALL`` R. (Round 3 widened it below the skin into a
+        pedestal 1.12 R wide that stepped to the cone at the foot's top: the critic's "plumbing reducer"; the cone now
+        flares into the skull along a concave fillet, :meth:`bone`.)
+
+        A skin-covered horn (the ossicone, A29 / A30 / A16): the bone FILLS it, the column a skin thickness
+        (``skin_thick``, local units; default 0.35 R) under the surface, to a dome under the skin's dome."""
         p, R, L = self.p, self.R, self.L
         s = np.asarray(s, dtype=np.float64)
+        if p.row["material"] == "skin":
+            t = self.bone_inset(skin_thick)
+            return np.maximum(self.taper(np.clip(s, 0.0, L)) - t, 0.05 * R) * (s <= L)
         Lc = max(float(p.row["core"]) * L, 1e-9)
-        u = np.clip(s / Lc, 0.0, 1.0)
-        cone = CORE_BASE * R * (1.0 - u) ** 1.0
-        ped = CORE_BASE * R + (CORE_PEDESTAL - CORE_BASE) * R * smoothstep(-s / (0.9 * p.sink + 1e-9))
-        core = np.where(s > 0, cone, ped)
-        cap = self.radius(s) - CORE_MIN_WALL * R * np.where(s > 0, 1.0, 1.0)
-        return np.minimum(core, np.maximum(cap, 0.02 * R)) * (s <= Lc)
+        cone = CORE_BASE * R * (1.0 - np.minimum(s / Lc, 1.0))
+        cap = self.radius(np.maximum(s, 0.0)) - CORE_MIN_WALL * R
+        return np.minimum(cone, np.maximum(cap, 0.02 * R)) * (s <= Lc)
 
-    def bone(self, field=None) -> Mesh:
-        """The cornual process: a closed solid, the sheath's own foot and bowl inset so that it is inside
-        the sheath everywhere (the pedestal in the skull follows the skin the sheath comes out of), then a
-        cone of ``core_radius`` up the shaft to the end of the core (``core`` x L)."""
-        p = self.p
+    def bone_inset(self, skin_thick: float | None = None) -> float:
+        """How far under a skin-covered horn's surface its bone is (local units): the skin's thickness, at most
+        ``0.35`` base radii (a slender ossicone keeps a bone column)."""
+        t = 0.35 * self.R if skin_thick is None else float(skin_thick)
+        return min(t, 0.35 * self.R)
+
+    def bone(self, field=None, plate=None, skin_thick: float | None = None) -> Mesh:
+        """The cornual process as one closed solid (local frame): a column of :meth:`core_radius` that flares into
+        the skull's outer table along a concave quarter circle of ``CORE_FLARE`` base radii (tangent to the table,
+        A05: the core grows out of the frontal bone with no step), up the shaft to the end of the core: a blunt
+        point on a keratin horn, a dome under the skin's dome on an ossicone.
+
+        ``plate`` is the outer table's height over the horn's local ``xy`` (a callable ``xy -> z``: the unmoulded skin
+        less the scalp, ``HornPlacement.layers_local``); without it, ``field`` (the skin) less ``SCALP_THICK``. The
+        rings near the table follow it (each vertex at its own height over the table) and become planar over
+        ``FILLET_BLEND`` base radii above the fillet, as the ossicone's skin does."""
+        p, R = self.p, self.R
         nv = int(p.ring_verts)
-        Lc = float(p.row["core"]) * self.L
-        bowl, foot, shaft_s = self.foot_rings(field)
-        rings = []
-        for ring in list(bowl[1:]) + list(foot):          # (the bone's bottom is shallower than the sheath's)
-            c = ring.mean(axis=0)
-            r = float(np.linalg.norm(ring - c, axis=1).mean())
-            # the cornual process is CORE_BASE x R wide at the skin and widens into the skull (the
-            # pedestal) by at most CORE_PEDESTAL / CORE_BASE; never nearer the surface than the keratin wall
-            f = min(CORE_PEDESTAL * self.R / max(r, 1e-12), 1.0 - CORE_MIN_WALL * self.R / max(r, 1e-12), 0.9)
-            q = ring.copy()                                   # inset in the xy plane
-            q[:, :2] = c[:2] + (ring[:, :2] - c[:2]) * f
-            if len(rings) < len(bowl) - 1:                    # the bone's bowl is shallower than the sheath's
-                q[:, 2] = ring[:, 2] + 0.25 * (foot[0][:, 2] - ring[:, 2])
-            rings.append(q)
         asp = float(p.row["aspect"])
-        up = shaft_s[shaft_s < Lc * 0.995]
+        th = np.linspace(0.0, 2.0 * np.pi, nv, endpoint=False)
+        ct, st_ = np.cos(th), np.sin(th)
+        if field is None:
+            tau = math.radians(p.tilt)
+            field = PlaneField((-math.sin(tau), 0.0, math.cos(tau)))
+        if plate is None:
+            plate = lambda xy: field.height(xy) - SCALP_THICK          # noqa: E731
+        skin = p.row["material"] == "skin"
+        end = self.L if skin else float(p.row["core"]) * self.L
+        if skin:
+            end -= self.bone_inset(skin_thick)
+        rho = CORE_FLARE * R
+        # the generatrix: h over the table (the fillet's arc, then the column, blending to planar rings)
+        phis = np.radians(np.arange(0.0, 90.0 + 1e-6, 10.0))
+        arc_h, arc_f = rho * (1.0 - np.cos(phis)), rho * (1.0 - np.sin(phis))
+        top = rho + FILLET_BLEND * R
+        col_h = np.linspace(rho, top, 6)[1:]
+        h_all = np.concatenate([[-0.5 * rho], arc_h, col_h])
+        f_all = np.concatenate([[rho + 0.5 * rho / math.tan(math.radians(40.0))], arc_f, np.zeros(len(col_h))])
+        t_all = smoothstep((h_all - rho) / (top - rho))
+        r0 = float(self.core_radius(0.0, skin_thick))
+        z_col = plate(np.stack([r0 * ct, r0 * asp * st_], axis=1))
+        Z0 = float(z_col.max())
+        rings = []
+        for h, f, t in zip(h_all, f_all, t_all):
+            z = (1.0 - t) * (z_col + h) + t * (Z0 + h)
+            for _ in range(3):
+                rc = self.core_radius(np.minimum(z, end * 0.999), skin_thick)
+                xy = np.stack([(rc + f) * ct, (rc * asp + f) * st_], axis=1)
+                z = (1.0 - t) * (plate(xy) + h) + t * (Z0 + h)
+            zc = np.minimum(z, end * 0.999)
+            rc = self.core_radius(zc, skin_thick)
+            c, tt, nn, bb = self.frames_at(np.maximum(zc, 0.0))
+            v = c + ((rc + f) * ct)[:, None] * nn + ((rc * asp + f) * st_)[:, None] * bb
+            v[:, 2] = np.where(z > 0.0, v[:, 2], z)
+            rings.append(v)
+        z_top = Z0 + float(h_all[-1])
+        st = self._stations
+        up = st[(st > z_top + 0.04 * R) & (st < end * 0.995)]
         if len(up):
             c, t, n, b = self.frames_at(up)
-            rr = self.core_radius(up)
+            rr = self.core_radius(up, skin_thick)
             for i in range(len(up)):
                 rings.append(_ring(c[i], n[i], b[i], rr[i], rr[i] * asp, nv))
-            tail = self._cap_rings(c[-1], t[-1], n[-1], b[-1], rr[-1], rr[-1] * asp, nv, 0.0, 0.0)
+            tail = self._cap_rings(c[-1], t[-1], n[-1], b[-1], rr[-1], rr[-1] * asp, nv, 0.0, 0.0,
+                                   degrees=p.row.get("cap", TIP_CAP) if skin else TIP_CAP)
         else:
-            top = rings[-1]
-            c = top.mean(axis=0)
-            tail = [c + (top - c) * math.cos(math.radians(d)) + np.array([0.0, 0.0, 1.0]) * 0.05 * self.R
+            top_ring = rings[-1]
+            c = top_ring.mean(axis=0)
+            tail = [c + (top_ring - c) * math.cos(math.radians(d)) + np.array([0.0, 0.0, 1.0]) * 0.3 * R
                     * math.sin(math.radians(d)) for d in TIP_CAP]
-        return A._loft(rings + tail)
+        # the bottom: a shallow bowl under the deepest ring (inside the table)
+        low = rings[0]
+        c0 = low.mean(axis=0)
+        bowl = []
+        for deg in BOWL_RINGS[::-1]:
+            phi = math.radians(deg)
+            ring = c0 + (low - c0) * math.cos(phi)
+            ring[:, 2] = low[:, 2] - 0.25 * rho * math.sin(phi)
+            bowl.append(ring)
+        return A._loft(bowl + rings + tail)
 
     # -- numbers -----------------------------------------------------------------------------------
 
@@ -966,14 +1348,21 @@ def skin_plan(params: HornParams, site: Site, fillet: float, fillet_height: floa
     0.125 an edge, and a tent under three edges across cannot be resolved), kept ``TENT_MARGIN`` off
     the midline; height ``tent_height`` base radii (at least ``TENT_MIN``)."""
     R = site.radius
-    x0 = abs(float(site.point[0]))
-    rho = min(max(TENT_RADIUS * R, TENT_FLOOR * site.scale), max(x0 - TENT_MARGIN, 0.5 * TENT_FLOOR))
-    H = max(params.tent_height * R, TENT_MIN * site.scale)
+    x0 = site.offset                   # from the head's own midline (round 4: it was world x = 0)
+    tent = params.row.get("tent") or (TENT_RADIUS, params.tent_height, TENT_MIN)
+    rho = min(max(float(tent[0]) * R, TENT_FLOOR * site.scale), max(x0 - TENT_MARGIN, 0.5 * TENT_FLOOR))
+    H = max(params.tent_height * R, float(tent[2]) * site.scale)
     # the scalp's fillet is at most FILLET_MAX base radii wide (the parameter goes to 4: a ram's 4 moved 400
     # vertices of the temple and the validity pass backed tens of them off), and it stays TENT_MARGIN off the
     # midline like the tent (a horn close to the midline, a random face's, has a narrow fillet on that side)
     room = (x0 - TENT_MARGIN) / max(R, 1e-9) - (1.0 + params.flare_eff)
-    return SkinPlan(rho, H, min(float(fillet), FILLET_MAX, max(room, MIN_FILLET)), float(fillet_height))
+    width = min(float(fillet), FILLET_MAX, max(room, MIN_FILLET))
+    # a shape whose own foot is the fillet (the ossicone) asks the skin for a narrower, lower one of its own under it
+    # (``row["tube"]``: width and height factors): the scalp only has to meet the foot's fillet, not to be it
+    tube = params.row.get("tube")
+    if tube is not None and width > 0.0:
+        width, fillet_height = width * float(tube[0]), float(fillet_height) * float(tube[1])
+    return SkinPlan(rho, H, width, float(fillet_height))
 
 
 def moulded_cage(base, verts, specs):
@@ -986,8 +1375,57 @@ def moulded_cage(base, verts, specs):
     return J.moulded_cage(base, verts, specs)
 
 
+# the temporalis under a horn on the temple crest (the ram): H05 (Gray 382: the fan fills the temporal fossa under the
+# superior temporal line, its bulk behind the orbit) and H14 (a hypertrophied one bulges the temple from the brow up to
+# the temporal line). In head units (x ``Head.k``): its centre this far down the head and back from the horn's root,
+# its radius across the fan, how much longer it is front to back, and the swell it lifts the skin by
+TEMPORALIS = dict(down=0.24, back=0.10, radius=0.30, stretch=1.45, height=0.032)
+
+
+def temporalis_site(cage, head: Head, site: Site):
+    """``(centre, normal, axis)`` (world) of the temporalis under a horn on the temple crest: ``TEMPORALIS`` down and
+    back from the root in the head's own axes, on the skull's surface (the unmoulded cage), its long axis forward."""
+    from . import collar as CO
+    k = head.k
+    T = TEMPORALIS
+    c0 = np.asarray(site.point, dtype=np.float64) - T["down"] * k * head.up - T["back"] * k * head.fwd
+    v, q = cage
+    q = np.asarray(q)
+    patch = CO.SkinPatch(v, np.concatenate([q[:, [0, 1, 2]], q[:, [0, 2, 3]]]), c0, 0.8 * k + 0.2)
+    pt, n, _, _ = patch.closest(c0[None, :])
+    fwd = head.fwd - float(head.fwd @ n[0]) * n[0]
+    return pt[0], n[0], fwd / max(float(np.linalg.norm(fwd)), 1e-12)
+
+
+def temporalis_lens(moulded, raw, frame, k: float, skin_thick: float, scalp_thick: float,
+                    n_rho: int = 6, n_theta: int = 32) -> Mesh:
+    """The temporalis as a lens in ``frame`` (world, 4x4: ``z`` the skull's normal at its centre, ``x`` forward): over an
+    ellipse ``TEMPORALIS`` wide, between the skull's outer table (the unmoulded skin, ``raw``, less the scalp) and the
+    moulded skin less the skin (``moulded``): thickest where the junction's swell lifts the skin. Both fields are
+    :class:`SkinField` in that frame. Returned in the world frame."""
+    T = TEMPORALIS
+    r = T["radius"] * k
+    theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
+    u = np.linspace(0.06, 1.0, n_rho)[:, None]
+    ex = r * T["stretch"] * np.cos(theta)[None, :] * u
+    ey = r * np.sin(theta)[None, :] * u
+    xy = np.stack([ex, ey], axis=2).reshape(-1, 2)
+    z_top = (moulded.height(xy) - skin_thick).reshape(n_rho, n_theta)
+    z_bot = (raw.height(xy) - scalp_thick).reshape(n_rho, n_theta)
+    z_top = np.maximum(z_top, z_bot + 0.2 * (scalp_thick - skin_thick))
+    mesh = _annulus_solid(np.hypot(ex, ey), theta, z_top, z_bot, n_theta)
+    # (the annulus helper lays its rings out on circles: put them back on the ellipse)
+    pts = mesh.vertices.copy()
+    nb = n_rho * n_theta
+    for half in (0, nb):
+        pts[half:half + nb, 0] = ex.reshape(-1)
+        pts[half:half + nb, 1] = ey.reshape(-1)
+    m = np.asarray(frame, dtype=np.float64)
+    return Mesh(pts @ m[:3, :3].T + m[:3, 3], mesh.faces)
+
+
 def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, keeps_world=(),
-                  silhouette: float | None = HEAD_SILHOUETTE):
+                  silhouette: float | None = HEAD_SILHOUETTE, temporalis=None):
     """The :class:`~.junction.JunctionSpec` of one LEFT horn in the horn's LOCAL frame (the kind
     carries it to each side with ``transformed``): the sheath's first part as the tube the scalp
     flows into, and the pedestal's tent as a mound that lifts the skin along the horn's own axis
@@ -1006,10 +1444,15 @@ def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, kee
     if plan.tent_height > 0 and plan.tent_radius > 0:
         mounds = (J.Mound((0.0, 0.0, 0.0), plan.tent_radius / sc, plan.tent_height / sc,
                           direction=(0.0, 0.0, 1.0)),)
+    if temporalis is not None:
+        # the skin's swell over the temporalis (H14), along the skin's own normal (``temporalis``: centre and long axis in
+        # the horn's local frame, radius and height in local units)
+        ctr, axis_l, rad, height = temporalis
+        mounds = mounds + (J.Mound(tuple(ctr), rad, height, axis=tuple(axis_l), stretch=TEMPORALIS["stretch"]),)
     keep = tuple(J.Keep(tuple(ctr), rad, 0.6) for ctr, rad in keeps_world)
     tube_w = plan.fillet
     H_f = plan.fillet_height * tube_w * R
-    move = 1.2 * (plan.tent_height / sc + H_f)
+    move = 1.2 * (max(plan.tent_height / sc, temporalis[3] if temporalis is not None else 0.0) + H_f)
     # owner: the head (a horn moulds no other part); conform=False: the tube is the sheath's own first
     # part, inside it by construction (the core would cut it to the finished mesh, which does not exist
     # yet when the foot is built against the moulded skin: tests check the tube lies in the built sheath)
@@ -1037,6 +1480,56 @@ def collar_axis(model: "HornModel", matrix, spec):
     world = c @ np.asarray(matrix)[:3, :3].T + np.asarray(matrix)[:3, 3]
     r = np.maximum(model.inscribed(s) * HUG * sc, 1e-4)
     return np.concatenate([pts, world]), np.concatenate([rad, r])
+
+
+LAYER_DEPTH = 0.02       # units: the soft tissue keeps at least this far under the DRAWN skin, the bone outside the sheath
+BONE_DEPTH = 0.04        # ... this far (under the soft tissue: a lens pressed in by the skin uncovered the plate below it)
+
+
+def tuck_under_skin(layers: dict, skin, matrix, sheath: Mesh, centre, radius: float, inside=None) -> dict:
+    """``layers`` (``{name: Mesh}`` in the horn's LOCAL frame) with every vertex that is not ``LAYER_DEPTH`` under the
+    drawn skin (nor, for the bone, inside the sheath) moved in along the skin's normal to that depth. ``skin`` is the drawn skin near
+    the horn as ``(vertices, quads)`` (the moulded cage subdivided once: the figure's default level; level 2 lies within
+    0.006 of it). The lens and the plate are height fields along the horn's axis: where the skull curves away from the
+    axis (the ram's temple) their rims stood out of the head (round 3: 4-13 vertices, up to 0.1 base radii)."""
+    from . import collar as CO
+    from . import junction_checks as JC
+    v, q = skin
+    m = np.asarray(matrix, dtype=np.float64)
+    inv = np.linalg.inv(m)
+    tris = np.concatenate([np.asarray(q)[:, [0, 1, 2]], np.asarray(q)[:, [0, 2, 3]]])
+    patch = CO.SkinPatch(v, tris, centre, radius)
+    sw = sheath.transform(m)
+    shells = JC.Shells(sw.vertices, sw.faces)
+    out = {}
+    for name, mesh in layers.items():
+        P = mesh.vertices @ m[:3, :3].T + m[:3, 3]
+        # (the bone's core stands in the sheath above the skin; the soft tissue is under the skin everywhere)
+        keep = shells.inside(P) if name == "bone" else np.zeros(len(P), dtype=bool)
+        depth = BONE_DEPTH if name == "bone" else LAYER_DEPTH
+        for _ in range(3):                    # (a moved vertex can find another nearest point: settle it)
+            _, n, sd, _ = patch.closest(P)
+            move = (sd > -depth) & ~keep
+            if not move.any():
+                break
+            P = P.copy()
+            P[move] -= (sd[move] + depth)[:, None] * n[move]
+        _, _, sd, _ = patch.closest(P)
+        left = np.nonzero((sd > -depth) & ~keep)[0]
+        if len(left) and inside is not None:
+            # (a vertex between two sheets of skin, the eyelid's fold, finds the other sheet's normal and does not settle:
+            # slide it toward a point deep in the head until it is under the skin by the depth)
+            c_in = np.asarray(inside, dtype=np.float64)
+            for t in np.linspace(0.05, 1.0, 20):
+                q = P[left] + t * (c_in - P[left])
+                _, _, sq, _ = patch.closest(q)
+                ok = sq <= -depth
+                P[left[ok]] = q[ok]
+                left = left[~ok]
+                if not len(left):
+                    break
+        out[name] = Mesh(P @ inv[:3, :3].T + inv[:3, 3], mesh.faces)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -1082,7 +1575,7 @@ def _annulus_solid(rho, theta, z_top, z_bot, n_theta):
     return mesh
 
 
-def _outline(model: "HornModel", raw, rho_max: float, n_rho: int, n_theta: int):
+def _outline(model: "HornModel", raw, rho_max: float, n_rho: int, n_theta: int, avoid=()):
     """``(rho, theta)`` of the annulus the layers under the skin are built over: from the cornual process
     out to ``rho_max``, but per angle no farther than the rays along the horn's axis still find the skull
     (on a strongly curved temple, the ram's, the far side of the annulus is past the head's silhouette and the
@@ -1092,7 +1585,12 @@ def _outline(model: "HornModel", raw, rho_max: float, n_rho: int, n_theta: int):
     theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
     probe = np.linspace(rho_in, rho_out, 25)
     xy = np.stack([np.outer(probe, np.cos(theta)), np.outer(probe, np.sin(theta))], axis=2).reshape(-1, 2)
-    _, hit = raw.height(xy, hits=True)
+    z, hit = raw.height(xy, hits=True)
+    # (round 4: nor where the skin under it is the eye's or the ear's, ``avoid`` = the junction's keeps in the horn's
+    # frame: the ram's lens reached the brow, into the eyelid's fold, and stood out of it)
+    pts = np.concatenate([xy, z[:, None]], axis=1)
+    for ctr, rad in avoid:
+        hit &= np.linalg.norm(pts - np.asarray(ctr, dtype=np.float64), axis=1) > float(rad)
     hit = hit.reshape(len(probe), n_theta)
     # the first miss along each ray from the inside ends the annulus there (at least a quarter of the way out)
     miss = ~hit
@@ -1107,14 +1605,14 @@ def _outline(model: "HornModel", raw, rho_max: float, n_rho: int, n_theta: int):
 
 
 def soft_tissue(model: "HornModel", moulded, raw, rho_max: float, skin_thick: float, scalp_thick: float,
-                n_rho: int = 7, n_theta: int = 32) -> Mesh:
+                n_rho: int = 7, n_theta: int = 32, avoid=()) -> Mesh:
     """The ``muscle`` layer in the horn's local frame: the soft tissue the scalp is tented over (galea,
     periosteum, the horn's germinal cuff), a lens around the cornual process from its surface out to
     ``rho_max`` (the tent's radius; less where the skull curves away, ``_outline``): its upper surface is the
     MOULDED skin less the skin's thickness, its lower one the skull's outer table, the RAW skin less the whole
     scalp's thickness. So it is thickest at the horn (the tent's height more) and ``scalp - skin`` thick where
     the skin is not lifted."""
-    rho, theta = _outline(model, raw, rho_max, n_rho, n_theta)
+    rho, theta = _outline(model, raw, rho_max, n_rho, n_theta, avoid)
     xy = np.stack([rho * np.cos(theta)[None, :], rho * np.sin(theta)[None, :]], axis=2).reshape(-1, 2)
     z_top = (moulded.height(xy) - skin_thick).reshape(n_rho, n_theta)
     z_bot = (raw.height(xy) - scalp_thick).reshape(n_rho, n_theta)
@@ -1123,10 +1621,10 @@ def soft_tissue(model: "HornModel", moulded, raw, rho_max: float, skin_thick: fl
 
 
 def skull_plate(model: "HornModel", raw, rho_max: float, scalp_thick: float, bone_thick: float,
-                n_rho: int = 7, n_theta: int = 32) -> Mesh:
+                n_rho: int = 7, n_theta: int = 32, avoid=()) -> Mesh:
     """The skull's outer table around the horn, a plate ``bone_thick`` thick (the cornual process grows
     out of it): the lower boundary of the soft tissue, over the same outline (``_outline``)."""
-    rho, theta = _outline(model, raw, rho_max, n_rho, n_theta)
+    rho, theta = _outline(model, raw, rho_max, n_rho, n_theta, avoid)
     xy = np.stack([rho * np.cos(theta)[None, :], rho * np.sin(theta)[None, :]], axis=2).reshape(-1, 2)
     z_top = (raw.height(xy) - scalp_thick - PLATE_GAP).reshape(n_rho, n_theta)
     return _annulus_solid(rho, theta, z_top, z_top - bone_thick, n_theta)

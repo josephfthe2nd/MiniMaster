@@ -335,7 +335,9 @@ class CharacterPanel(ttk.Frame):
             self.view.refresh_overlay()
             return
         self.L = L
-        self.lab = L.Lab(self._resources, size=(640, 560), levels=0)
+        # the final preview and the export mesh the body at level 1 when a root collar needs it (Lab.final_levels);
+        # the draft is the proxy either way
+        self.lab = L.Lab(self._resources, size=(640, 560), levels=None)
         self.lab.on_change = self._on_change
         self.lab.on_error = lambda exc: self._say(f"preview failed: {exc}", error=True)
         self.view.bind_lab(self.lab)
@@ -545,7 +547,8 @@ class CharacterPanel(ttk.Frame):
         self.enabled_check.grid(row=0, column=2)
         ttk.Label(f, text="side").grid(row=1, column=0, sticky="w")
         self.side_var = StringVar(value=spec.side)
-        cb = ttk.Combobox(f, textvariable=self.side_var, values=self.L.SIDES, state="readonly",
+        sides = tuple(s for s in self.L.SIDES if s in getattr(kind, "allowed_sides", self.L.SIDES))
+        cb = ttk.Combobox(f, textvariable=self.side_var, values=sides or self.L.SIDES, state="readonly",
                           width=8)
         cb.grid(row=1, column=1, sticky="w", padx=4, pady=2)
         cb.bind("<<ComboboxSelected>>",

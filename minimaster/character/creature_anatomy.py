@@ -162,14 +162,18 @@ CONSEQUENCES: dict[str, AnatomyEffect] = {
         sliders={
             # the sliders that reach the flank where the second girdle sits (measured on the base
             # mesh, docs/anatomy_limb.md): the lateral ribs widen, the back deepens, the latissimus
-            # and the serratus thicken; the primary girdle only gets a little (it is unchanged)
-            "torso.torso_scale_horiz": 0.45,
-            "measure.measure_bust_circ": 0.30,
-            "torso.torso_muscle_dorsi": 0.40,
-            "measure.measure_waist_circ": 0.20,
-            "torso.torso_scale_depth": 0.15,
-            "measure.measure_shoulder_dist": 0.25,
-            "torso.torso_muscle_pectoral": 0.20,
+            # and the serratus thicken; the primary girdle only gets a little (it is unchanged).
+            # Round 4: about a third of round 1's (0.45 / 0.30 / 0.40 / 0.20 / 0.15 / 0.25 / 0.20): the
+            # coupling widened the whole flank 12 % at the girdle and, with the root's own masses on top,
+            # read as a barrel or a saddlebag above the arm (the round-3 review: +26 % at the girdle on the
+            # neutral body, a squared box with a ledge on the heavy one's back). The second shoulder is the
+            # girdle's own masses at the root now (limbgirdle.ARM_MASSES), the waist is left alone
+            "torso.torso_scale_horiz": 0.12,
+            "measure.measure_bust_circ": 0.08,
+            "torso.torso_muscle_dorsi": 0.12,
+            "torso.torso_scale_depth": 0.05,
+            "measure.measure_shoulder_dist": 0.10,
+            "torso.torso_muscle_pectoral": 0.15,
         },
         reason="a second limb pair needs a second girdle to hang from: the lower ribs widen and "
                "deepen and the latissimus and serratus thicken under the second shoulders",
@@ -275,6 +279,7 @@ def consequences(appendages, cap: float = 1.0):
     sliders: dict[str, float] = {}
     macro: dict[str, float] = {}
     notes: list[str] = []
+    parts: dict[str, list] = {}          # slider -> what each record asks of it (stacked below, STACK_SHARE)
     for app in appendages:
         if getattr(app, "enabled", True) is False:       # a switched-off record costs nothing
             continue
@@ -287,12 +292,31 @@ def consequences(appendages, cap: float = 1.0):
             continue
         s, m = eff.scaled(load)
         for k, v in s.items():
-            sliders[k] = sliders.get(k, 0.0) + v
+            parts.setdefault(k, []).append(v)
         for k, v in m.items():
             macro[k] = macro.get(k, 0.0) + v
         notes.append(f"{app.kind} (load {load:.2f}): {eff.reason}")
+    for k, vals in parts.items():
+        sliders[k] = stack(vals)
     sliders = {k: max(-cap, min(cap, v)) for k, v in sliders.items()}
     return sliders, macro, notes
+
+
+STACK_SHARE = 0.5       # round 4: the second-largest ask of a slider counts half, the third a quarter ...
+
+
+def stack(values) -> float:
+    """What several appendages together ask of ONE slider: SUB-additive (the round-3 review: a wing pair's
+    and an extra arm pair's latissimus and bust asks added up into one lump on the lower lateral back, and a
+    tail's with extra legs' on the hips). The asks of one sign are sorted by size and the k-th largest counts
+    ``STACK_SHARE ** k``: one appendage gets exactly what it asks (a single record is unchanged), two equal
+    asks give 1.5 x one, and no number of them more than twice the largest. Asks of opposite signs (a wing's
+    slimmer waist and another's wider one) are stacked separately and then added. Independent of the order."""
+    out = 0.0
+    for sign in (1.0, -1.0):
+        same = sorted((abs(v) for v in values if v * sign > 0.0), reverse=True)
+        out += sign * sum(v * STACK_SHARE ** i for i, v in enumerate(same))
+    return out
 
 
 def anatomy_delta(appendages, catalog=None, cap: float = 1.0):

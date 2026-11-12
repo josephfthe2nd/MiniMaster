@@ -517,7 +517,9 @@ def test_every_preset_buries_its_cut_end_in_the_torso_on_every_body(world, bodie
             overlap = pr.embedded_volume_share(m, _original_limb(base, v, limb), 8192)
             # (a second hip girdle sits on the pelvis a radius and a half above the first hip, inside the
             # region the first leg is cut from: 7% on the neutral body, 13% on a child, and the fan pair shares the shoulder)
-            limit = {"upper_arms": 0.22, "extra_legs": 0.15}.get(preset, 0.03)
+            # (round 4: the hip girdle is on the buttock, 0.6 R above the first hip joint: more of it lies in the
+            # region within reach of the first thigh's bones that this "original limb" is cut from: 7-20 % on five bodies)
+            limit = {"upper_arms": 0.22, "extra_legs": 0.22}.get(preset, 0.03)
             assert overlap <= limit, (preset, name, overlap)
 
 

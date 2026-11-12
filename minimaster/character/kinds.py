@@ -216,7 +216,15 @@ TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.35, 0.5
 HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
 WING_FILLET, WING_FILLET_HEIGHT = 2.0, 0.45       # in elbow radii of the arm (the mounds of the shoulder anatomy carry the bulk, wingroot.py)
 HARVEST_FILLET, HARVEST_FILLET_HEIGHT = 1.0, 0.7
-GIRDLE_FILLET_HEIGHT = 0.30       # a girdle limb: the dome is a visible form, the skin climbs it only a third of the fillet width
+GIRDLE_FILLET_HEIGHT = 0.15       # a girdle limb: the dome is a visible form, the skin climbs it a sixth of the fillet width
+                                  # (round 4: 0.30 before; with the pad that climb buried the top of the heavy body's dome
+                                  # in the faceted cage, a notched step at level 0; the root collar carries the seam now)
+# round 4: the root collar of a girdle limb (collar.CollarProfile, in root radii), ON by default (``collar`` = 1), per
+# girdle: the lower pair's opens upward (the flank runs over the top of the second shoulder, the axilla below is a
+# crease) but goes all round, narrow below (a run end at the axilla showed a notch); the fan pair's all round; the hip has none
+GIRDLE_COLLAR = {"lower": dict(width=2.0, height=0.5, falloff=2.5, ventral=0.6, up=(0.0, 1.0, 0.0)),
+                 "fan": dict(width=1.6, ventral=1.0, height=0.7, falloff=3.0, up=(0.0, 1.0, 0.0)),
+                 "leg": None}           # (the hip's: tried, it covered 15-25 % of the ring and changed nothing seen: off)
 # the radius of the neutral body's own limb along its bones, as a fraction of the upper bone:
 # (positions along the upper bone, radii there, positions along the forearm from the elbow,
 # radii there), measured on the base mesh (the median distance of the surface to the bone).
@@ -919,6 +927,10 @@ class TailKind(_LoftKind):
             name, letter = names[idx]
             frame = app._anchor_frame(body_v, body_q, idx, app._point(idx), ctx.base)
             frame = self._root_frame(frame, pl, k_body, app, body_v, body_q, idx, ctx)
+            tp = tparams
+            if pl.get("midline"):                  # a midline tail's lift stops at the vertical (tailrig.LIFT_MAX_ELEVATION)
+                ax = frame[:3, 2] / max(float(np.linalg.norm(frame[:3, 2])), 1e-12)
+                tp = tparams.with_(elevation=math.degrees(math.asin(max(-1.0, min(1.0, float(ax[1]))))))   # (Y is up)
             ctrl = {}
             ctrl, notes = self.clean_controls(side_controls(spec.controls, letter),
                                               f"appendage {spec.id!r}: ")
@@ -932,12 +944,16 @@ class TailKind(_LoftKind):
 
             def patch(body_v=body_v, body_q=body_q, frame=frame, R=tparams.base_radius):
                 return T.SkinPatch.from_cage(body_v, body_q, frame, R)         # the layers' only need: sampled on first use
-            pt = T.PlacedTail(tparams, frame, clamp, patch)
-            out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
-                              anchor=self._surface(ctx, app, idx), matrix=frame,
-                              params=dict(values), controls=ctrl, static=pt.skin(ctrl),
-                              repose=pt.skin, model=pt,
-                              root_depth=tparams.stem * pt.scale))
+            holder: list = []                  # the Placed, once built: the layers mould the skin with its own junction
+            pt = T.PlacedTail(tp, frame, clamp, patch,
+                              body=(ctx.base, ctx.verts, lambda c, holder=holder: holder[0].junction(c)))
+            placed = Placed(name=name, spec_id=spec.id, kind=self, side=letter,
+                            anchor=self._surface(ctx, app, idx), matrix=frame,
+                            params=dict(values), controls=ctrl, static=pt.skin(ctrl),
+                            repose=pt.skin, model=pt,
+                            root_depth=tp.stem * pt.scale)
+            holder.append(placed)
+            out.append(placed)
         return out
 
     def _root_frame(self, frame, pl, k_body, app, body_v, body_q, idx, ctx):
@@ -993,10 +1009,15 @@ class TailKind(_LoftKind):
     def layers(self, placed, controls=None):
         return placed.model.layers(controls)
 
+    def layers_on(self, placed, shaped, controls=None):
+        """The layers with the body-side muscles laid under the skin of ``shaped`` (the body verts a view meshes, with
+        every appendage's junction: ``ecorche.layer_shells``) rather than under this tail's own moulding."""
+        return placed.model.layers(placed.controls if controls is None else controls, shaped=shaped)
+
     def layer_colors(self, placed, name, controls=None):
-        """The muscle sleeve is muscle belly on the proximal part and tendon beyond (1 -> 0); the lenses
-        at the root of the body-side masses are all muscle."""
-        return placed.model.muscle_with_belly(controls)[1] if name == "muscle" else None
+        """The muscle sleeve is muscle belly on the proximal part and tendon beyond (1 -> 0); the body-side
+        muscles at the root are all muscle."""
+        return placed.model.model(controls).muscle_belly_whole() if name == "muscle" else None
 
     def builder_args(self, build_values, controls):
         """The arguments of the LEGACY tube builder (``appendages.make_tail``) for these parameters and
@@ -1048,7 +1069,8 @@ PRESET_FACES.update(HORN_PRESET_FACES)
 LEGACY_HORN_FACE = PRESET_FACES["temples"]
 HORN_LOAD_REF = 1.6 * 0.17 ** 2       # length x radius^2 of the default horn: load 1
 HORN_LOAD_CAP = 2.5
-LIMIT_NOTE = 0.9          # a horn the head limits to less than this share of its size says so in the build report
+LIMIT_NOTE = 0.98         # a horn the head limits to less than this share of its size says so in the build report
+                          # (round 4: 0.9; a horn built at 0.9-0.98 of the record's size was silent)
 
 
 def _horn_param_specs() -> tuple:
@@ -1057,7 +1079,7 @@ def _horn_param_specs() -> tuple:
                      help="curved | ram | spiral | antelope | ossicone: sets the defaults below")]
     for key, label, field, lo, hi, step, typ, help_ in (
             ("length", "Length", "length", 0.3, 12.0, 0.1, "float",
-             "on the neutral head; scaled with the head (the eye distance)"),
+             "on the neutral head; scaled with the head (the skull's width)"),
             ("base_radius", "Base radius", "base_radius", 0.05, 0.6, 0.005, "float",
              "on the neutral head, scaled with it and never over 0.4 of the head's half-width"),
             ("segments", "Segments", "segments", 3, 60, 1, "int", ""),
@@ -1072,23 +1094,31 @@ def _horn_param_specs() -> tuple:
              "over about a third of a base radius"),
             ("rings", "Growth rings", "rings", 0.0, 0.15, 0.005, "float",
              "annulus amplitude in radii (a bovid sheath's transverse ridges); 0 = smooth"),
-            ("tilt", "Tilt from the skull", "tilt", 0.0, 60.0, 1.0, "float",
+            ("tilt", "Tilt from the skull", "tilt", 0.0, HR.TILT_MAX, 1.0, "float",
              "degrees between the horn's axis and the skull's surface normal (15 to 45 reads as "
              "grown out of the bone)")):
         for shape, row in rows.items():
-            out.append(ParamSpec(key, label, typ, row[field], lo, hi, step, help=help_,
+            lo_, hi_, h = lo, hi, help_
+            if key == "flare" and row.get("foot") == "fillet":
+                # (the ossicone's flare is its fillet's radius: FILLET_RHO, the range it is built in)
+                lo_, hi_ = HR.FILLET_RHO
+                h = "the concave fillet the skin makes into it, its radius in base radii (A29: 0.5)"
+            out.append(ParamSpec(key, label, typ, row[field], lo_, hi_, step, help=h,
                                  when=("shape", (shape,))))
     # (24 around, 32 for the ram's thick base: the root collar meets the sheath tangentially and a coarser polygon's
-    # corners poke through it along the join)
+    # corners poke through it along the join; round 4: the range starts at 24, a 6-gon tore the cuff into teeth)
     for shape, row in rows.items():
-        out.append(ParamSpec("ring_verts", "Ring vertices", "int", row.get("ring_verts", HORN_RING_VERTS), 5, 32, 1,
-                             when=("shape", (shape,))))
+        out.append(ParamSpec("ring_verts", "Ring vertices", "int", row.get("ring_verts", HORN_RING_VERTS),
+                             HR.RING_VERTS_MIN, HR.RING_VERTS_MAX, 1, when=("shape", (shape,)),
+                             help="facets around the sheath (at least 24: the skin's cuff meets it tangentially)"))
     out.append(ParamSpec("boss", "Skin boss", "float", 1.0, 0.0, 2.0, 0.05,
                          help="how high the scalp is tented around the root, in tents (the base "
                               "radius x 0.35, 0.5 for a ram); 0 = none"))
+    # (round 4: a keratin sheath's only; the ossicone is skin all over and its own foot is the fillet)
     out.append(ParamSpec("collar", "Root collar", "float", 1.0, 0.0, 2.0, 0.05,
+                         when=("shape", tuple(s for s, r in rows.items() if r.get("collar"))),
                          help="the skin's cuff around the root (collar.py): a narrow rim tucked around a "
-                              "keratin sheath, a wide fillet into an ossicone; 0 = none"))
+                              "keratin sheath; 0 = none"))
     out.append(fillet_param(HORN_FILLET))
     return tuple(out)
 
@@ -1099,13 +1129,26 @@ class HornPlacement:
     The layers under the skin (``bone``, ``muscle``) are built from it on demand, in the horn's local
     frame, and carried to each side."""
 
-    def __init__(self, model, site, plan, keeps, cage, head, matrix, field, raw_field, spec=None):
+    def __init__(self, model, site, plan, keeps, cage, head, matrix, field, raw_field, spec=None, fit=None,
+                 temporalis=None):
         self.model, self.site, self.plan, self.keeps = model, site, plan, keeps
         self.spec = spec                  # the junction spec (MakeHuman frame) the foot was built against
         self.cage, self.head, self.matrix = cage, head, matrix
-        self.field, self.raw_field = field, raw_field
+        self.field = field
+        self._raw = raw_field             # (None: the unmoulded cage subdivided like ``fit``, built when asked for)
+        self.fit = fit                    # ``(vertices, quads)`` the foot was fitted to (the moulded cage, or it subdivided)
+        self.temporalis = temporalis      # ``(centre, normal, forward)`` (world) of the temporalis under a temple horn
         self._skin = None
         self._layers = None
+
+    @property
+    def raw_field(self):
+        """The UNmoulded skin as a field in the horn's frame, at the level the foot was fitted at."""
+        if self._raw is None:
+            from ..core.subdiv import subdivide_quads
+            self._raw = HR.SkinField(subdivide_quads(self.cage[0], self.cage[1], 1), self.matrix,
+                                     reach=self.field.reach, fallback=self.field.fallback)
+        return self._raw
 
     def skin(self):
         """The sheath in the horn's local frame (each side's own: its foot follows its own skin)."""
@@ -1114,16 +1157,42 @@ class HornPlacement:
         return self._skin
 
     def layers_local(self):
-        """``{name: Mesh}`` of the bone and the soft tissue in the horn's local frame."""
+        """``{name: Mesh}`` of the bone and the soft tissue in the horn's local frame, each vertex either in the sheath
+        or at least ``HR.LAYER_DEPTH`` under the skin the figure is DRAWN with (``HR.tuck_under_skin``; round 3: the
+        ram's lens and plate stood up to 0.1 base radii out of the temple)."""
         if self._layers is None:
             sc = self.site.scale
             rho_max = self.plan.tent_radius / sc * 1.05
-            bone = self.model.bone(self.field)
-            plate = HR.skull_plate(self.model, self.raw_field, rho_max, HR.SCALP_THICK / sc,
-                                   0.5 * HR.SCALP_THICK / sc)
-            soft = HR.soft_tissue(self.model, self.field, self.raw_field, rho_max,
-                                  HR.SKIN_THICK / sc, HR.SCALP_THICK / sc)
-            self._layers = {"bone": Mesh.merge([bone, plate]), "muscle": soft}
+            table = HR.SCALP_THICK / sc + HR.PLATE_GAP          # the skull's outer table under the unmoulded skin
+            raw = self.raw_field
+            bone = self.model.bone(self.field, plate=lambda xy: raw.height(xy) - table,
+                                   skin_thick=HR.SKIN_THICK / sc)
+            plate = HR.skull_plate(self.model, raw, rho_max, HR.SCALP_THICK / sc, 0.5 * HR.SCALP_THICK / sc,
+                                   avoid=self.keeps)
+            soft = HR.soft_tissue(self.model, self.field, raw, rho_max, HR.SKIN_THICK / sc, HR.SCALP_THICK / sc,
+                                  avoid=self.keeps)
+            if self.temporalis is not None and self.fit is not None:
+                c, n, fwd = self.temporalis
+                frame = np.eye(4)
+                frame[:3, 0], frame[:3, 2] = fwd, n
+                frame[:3, 1] = np.cross(n, fwd)
+                frame[:3, 3] = c
+                reach = HR.TEMPORALIS["radius"] * self.head.k * HR.TEMPORALIS["stretch"] * 1.3 + 0.1
+                flat = HR.PlaneField((0.0, 0.0, 1.0))
+                lens = HR.temporalis_lens(HR.SkinField(self.fit, frame, reach, flat),
+                                          HR.SkinField(self.cage, frame, reach, flat), frame, self.head.k,
+                                          HR.SKIN_THICK, HR.SCALP_THICK)
+                inv = np.linalg.inv(self.matrix)
+                soft = Mesh.merge([soft, Mesh(lens.vertices @ inv[:3, :3].T + inv[:3, 3],
+                                              lens.faces if np.linalg.det(inv[:3, :3]) > 0 else lens.faces[:, [0, 2, 1]])])
+            layers = {"bone": Mesh.merge([bone, plate]), "muscle": soft}
+            if self.fit is not None:
+                from ..core.subdiv import subdivide_quads
+                drawn = self.fit if self.model.p.fillet_foot else subdivide_quads(self.fit[0], self.fit[1], 1)
+                layers = HR.tuck_under_skin(layers, drawn, self.matrix, self.skin(), self.site.point,
+                                            8.0 * self.site.radius + 0.6,
+                                            inside=0.5 * (self.head.root + self.head.top))
+            self._layers = layers
         return self._layers
 
 
@@ -1131,8 +1200,8 @@ class HornKind(_LoftKind):
     """A horn: the frontal bone's cornual process, the scalp tented around it and the keratin
     sheath over both (``hornrig.py``), placed on the frontal bone (the crown, the brow or the
     frontotemporal crest) and sized by the head (``length`` and ``base_radius`` are the values on
-    the neutral head: the eye distance sets the scale, and the radius is never more than 0.40 of
-    the head's half-width, nor more than keeps the tent 0.075 off the midline). The axis is the skull's own surface normal tilted by ``tilt`` toward the
+    the neutral head: the skull's half-width sets the scale, and the radius is never more than 0.40 of
+    the head's half-width, nor more than keeps the tent 0.075 off the head's own midline). The axis is the skull's own surface normal tilted by ``tilt`` toward the
     shape's lean, and the bend plane comes from the head's axes: neither is a hint in the record.
     ``shape`` picks a variant (curved, ram, spiral, antelope, or an ossicone: skin-covered bone).
     The curve is an equiangular spiral (``curve`` x length / 2 radians in total). No pose controls
@@ -1174,8 +1243,9 @@ class HornKind(_LoftKind):
                               ["material"])
 
     def draft_params(self, values):
-        # the growth rings make 3x the rings: a draft does without them
-        return {"rings": 0.0}
+        # the growth rings make 3x the rings: a draft does without them; an ossicone's foot is fitted to the cage and
+        # carries no skin shading in a draft (the level-1 fit and the transfer are 0.2 s of a pair's 0.3)
+        return {"rings": 0.0, "_draft": True}
 
     def resolve_placement(self, spec, values, ctx):
         """The record's placement, with two readings of the first version's records:
@@ -1218,7 +1288,9 @@ class HornKind(_LoftKind):
         names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
         idxs = list(app._indices())
         points = {i: self._surface(ctx, app, i) for i in idxs}
-        sites = {i: HR.horn_site(ctx.cage, head, points[i], hp, scale=pl["scale"], roll=pl["roll"])
+        # (the side from the record, not from the sign of world x: a random face moves the head sideways)
+        sites = {i: HR.horn_site(ctx.cage, head, points[i], hp, scale=pl["scale"], roll=pl["roll"],
+                                 side=-1 if names[i][1] == "r" else 1)
                  for i in idxs}
         R = min(s.base_radius for s in sites.values())
         boss = float(values.get("boss", 1.0))
@@ -1234,8 +1306,21 @@ class HornKind(_LoftKind):
             hp = hp.with_(length=hp.length * f, tip_radius=hp.tip_radius * f)
         hp = hp.with_(base_radius=R, boss=boss)
         model = HR.HornModel(hp)
+        if hp.twist:
+            # the twist turns the bend plane, and one sign turns the pair toward each other: a curved horn at twist 3
+            # met its partner over the head (140 crossing faces, round 3). The twist keeps the share of its turn
+            # that leaves each sheath off the head's midline (HR.twist_room)
+            mats = [dataclasses.replace(s, base_radius=R).matrix(float(pl["offset"])) for s in sites.values()]
+            mids = [(s.mid, -1.0 if s.right else 1.0) for s in sites.values()]
+            f = HR.twist_room(hp, mats, mids)
+            if f < 1.0:
+                model = HR.HornModel(hp, twist_scale=f)
+                ctx.report.append(f"appendage {spec.id!r}: the twist is built at {f:.2f} of its turn: more turns "
+                                  "the pair over the head into each other")
         fillet = float(values.get("fillet", self.fillet_default))
+        # the right side's keeps (the ear, the eye) mirrored about the head's OWN midline
         flip = np.diag([-1.0, 1.0, 1.0])
+        shift = np.array([2.0 * head.mid, 0.0, 0.0])
         sides = {}
         for i in idxs:
             site = sites[i]
@@ -1247,31 +1332,58 @@ class HornKind(_LoftKind):
             plan = HR.skin_plan(hp, site, fillet, self.fillet_height)
             plan = HR.SkinPlan(plan.tent_radius, plan.tent_height * max(boss, 0.0), plan.fillet,
                                plan.fillet_height)
-            mir = flip if site.right else np.eye(3)
-            keeps = tuple(((inv @ np.append(mir @ ctr, 1.0))[:3], rad * head.k / site.scale)
+            mir, sh_ = (flip, shift) if site.right else (np.eye(3), np.zeros(3))
+            keeps = tuple(((inv @ np.append(mir @ ctr + sh_, 1.0))[:3], rad * head.k / site.scale)
                           for ctr, rad in ((head.ear, 0.30), (head.eye, 0.30)))
+            temporal = local_t = None
+            if hp.row.get("temporalis"):
+                # a horn on the temple crest sits on the temporalis (H05, H14): the skin swells over it (a mound of the
+                # spec) and the muscle layer has it (HornPlacement.layers_local)
+                temporal = HR.temporalis_site(ctx.cage, head, site)
+                k_l = head.k / site.scale
+                local_t = ((inv @ np.append(temporal[0], 1.0))[:3], inv[:3, :3] @ temporal[2] * site.scale,
+                           HR.TEMPORALIS["radius"] * k_l, HR.TEMPORALIS["height"] * k_l)
             jspec = (HR.junction_spec(names[i][0], model, site, plan, keeps,
-                                      silhouette=hp.row.get("silhouette", HR.HEAD_SILHOUETTE)).transformed(m)
+                                      silhouette=hp.row.get("silhouette", HR.HEAD_SILHOUETTE),
+                                      temporalis=local_t).transformed(m)
                      if plan.fillet > 0 else None)
-            sides[i] = (site, m, plan, keeps, jspec)
+            sides[i] = (site, m, plan, keeps, jspec, temporal)
         # the skin the sheaths come out of: the cage as the junction moulds it around the pair (the
         # foot must lie on the surface the body will have, not the unmoulded one)
         specs = [v[4] for v in sides.values() if v[4] is not None]
         cage = HR.moulded_cage(ctx.base, ctx.verts, specs) if specs else ctx.cage
+        fit = cage
+        draft = bool(build_values.get("_draft", False))
+        if hp.fillet_foot and not draft:
+            # a foot that meets the skin at a few degrees (the ossicone's fillet) is fitted to the skin as it is DRAWN,
+            # the moulded cage subdivided once (the level the figure is meshed at; level 2 lies within 0.006 of it
+            # under the foot, and the foot dives under it by more): on the cage itself it stood up to 0.03 units
+            # (0.2 base radii) off the drawn skin where the junction lifts the scalp toward the root
+            from ..core.subdiv import subdivide_quads
+            fit = subdivide_quads(cage[0], cage[1], 1)
         out = []
         for i in idxs:
             name, letter = names[i]
-            site, m, plan, keeps, jspec = sides[i]
+            site, m, plan, keeps, jspec, temporal = sides[i]
             inv = np.linalg.inv(m)
             n_local = inv[:3, :3] @ site.normal
             n_local /= np.linalg.norm(n_local)
             reach = model.R * (1.0 + hp.flare) * 2.4 + 0.2
             fallback = HR.PlaneField(n_local)
-            field = HR.SkinField(cage, m, reach=reach, fallback=fallback)
-            raw_field = field if cage is ctx.cage else HR.SkinField(ctx.cage, m, reach=reach,
-                                                                    fallback=fallback)
-            hpl = HornPlacement(model, site, plan, keeps, ctx.cage, head, m, field, raw_field, jspec)
+            field = HR.SkinField(fit, m, reach=reach, fallback=fallback)
+            # (the unmoulded skin at the level the foot was fitted at: the cage itself, or built when the layers ask)
+            raw_field = (field if fit is ctx.cage else
+                         None if hp.fillet_foot and not draft else
+                         HR.SkinField(ctx.cage, m, reach=reach, fallback=fallback))
+            hpl = HornPlacement(model, site, plan, keeps, ctx.cage, head, m, field, raw_field, jspec, fit=fit,
+                                temporalis=temporal)
             mesh = hpl.skin().transform(m)
+            if hp.fillet_foot and not draft:
+                # shaded as the skin it comes out of where it meets it (HR.ShadedMesh: the renderer draws each shell
+                # with its own normals, and the foot's dive under the skin at a few degrees drew a ragged ring)
+                fq = np.asarray(fit[1])
+                tris = (fit[0], np.concatenate([fq[:, [0, 1, 2]], fq[:, [0, 2, 3]]]))
+                mesh = HR.shade_foot(mesh, tris, site.point, 4.0 * site.radius + 0.4, hp.fillet_rho * site.scale)
 
             def repose(controls, mesh=mesh):
                 return mesh
@@ -1300,11 +1412,15 @@ class HornKind(_LoftKind):
         that covers it (A29: 0.5 radii). ``collar`` scales it; 0 switches it off."""
         if placed is None:
             return None
+        row = HR.SHAPES.get(placed.params.get("shape", "curved"), HR.SHAPES["curved"])
+        if row.get("collar") is None:
+            # skin-covered bone (the ossicone): no cuff, its own foot is the fillet (round 4: the cuff's top edge drew
+            # a pale scalloped lip round a surface that is skin all over, A29)
+            return None
         k = float(placed.params.get("collar", 1.0))
         if k <= 0.0 or getattr(placed.repose, "horn", None) is None:
             return None
         from . import collar as CO
-        row = HR.SHAPES.get(placed.params.get("shape", "curved"), HR.SHAPES["curved"])
         width, height = row["collar"]
         return CO.CollarProfile(width=width, ventral=width, height=height, sink=HR.COLLAR_SINK, up=None,
                                 strength=k)
@@ -1356,12 +1472,44 @@ def wing_sleeve(style: str, muscle: float, s: float):
     return W.Sleeve(gain=base.gain * float(muscle) * k * k, sides=base.sides)
 
 
+# a stowed feathered wing stands off a bulkier back by this many units per unit of the back's extra thickness
+# (``stow_root``); the bulk the neutral man's back has over the shoulder joint, in s
+WING_STOW_BULK = (1.5, 0.95)
+
+
+def stow_root(root_point, lm, surface):
+    """The stow root (the feathered wing's aim, relative to the anchor's surface point) of a version-3 record on this
+    body: ``appendages.WING_PLACEMENT``'s, moved further behind the back by how much thicker the back is behind the
+    shoulder joints than the neutral man's (the heavy man's stowed wing passed 14.5% into his flanks and its feathers
+    stood out of his shoulder tops; the first 0.27-unit stand-off was tuned on the neutral man)."""
+    x, y, z = (float(v) for v in root_point)
+    over = surface.hit((A.WING_SOCKET_X * lm.shx, lm.spine1[1] + A.WING_SOCKET_Y * lm.lt, -6.0),
+                       (0.0, 0.0, 1.0), near=9.0)
+    if over is None:
+        return (x, y, z)
+    bulk = (lm.shoulder[2] - over[1][2]) / lm.s
+    gain, ref = WING_STOW_BULK
+    return (x, y, z - gain * max(0.0, bulk - ref) * lm.s)
+
+
 # the wing's root collar (collar.CollarProfile, in root radii): width on the open side (the back), width on
 # the side the arm leans over, how high it climbs the arm, how deep it is sunk
 WING_COLLAR = (1.1, 0.35, 0.55, 0.2)    # (1.3: the two skirts met under the skin of a child's spine: a print warning)
 
-# the placement versions of a wing record (``placement["version"]``, WingKind.resolve_placement)
-WING_PLACEMENT_VERSION = 2
+# the ranges of the wing's ``muscle`` and ``collar`` (the round-3 review: muscle 2 drew a drumstick as wide as the
+# shoulder with a crease to the neck, muscle 0 a rod in a frayed collar, collar 2 a doubled stripe on the arm)
+WING_MUSCLE_RANGE = (0.5, 1.4)
+WING_COLLAR_MAX = 1.3
+# a collar ramped in less than this is left out: under a fifth of its height the collar keeps only a fragment of its
+# ring (heavy man, the arm lowered, round-4 core: strength 0.07 kept 10% of the ring with a 93-degree crease, 0.11 35%
+# / 47 degrees, 0.17 63% / 25, 0.30 89% / 14; the round-3 construction's join report failed on the 0.07 collar)
+WING_COLLAR_MIN_STRENGTH = 0.2
+
+# the placement versions of a wing record (``placement["version"]``, WingKind.resolve_placement): 1 the first
+# versions' (the joint 0.9 units in), 2 the joint on the ribs under the shoulder blade (S6b), 3 that joint slid
+# out along the arm onto the blade (``appendages.WING_SLIDE``, round 4): the exit is the same, the bone coherent
+WING_PLACEMENT_VERSION = 3
+WING_SOCKET_VERSIONS = (2, 3)        # the versions whose joint is the body's socket landmark
 
 _MEMBRANE_STYLES = ("membrane", "dragon")
 # the DRAGON style differs from the bat in these (wings.DRAGON); a test pins the defaults
@@ -1420,21 +1568,25 @@ class WingKind(Kind):
         ParamSpec("coverts", "Coverts", "bool", True, when=("style", ("feathered",))),
         ParamSpec("underwing", "Underwing coverts", "bool", True, when=("style", ("feathered",))),
         ParamSpec("bones", "Show the arm bones", "bool", True),
-        ParamSpec("muscle", "Upper-arm muscle", "float", 1.0, 0.0, 2.0, 0.05,
+        ParamSpec("muscle", "Upper-arm muscle", "float", 1.0, WING_MUSCLE_RANGE[0], WING_MUSCLE_RANGE[1], 0.05,
                   help="how thick the upper arm is where it leaves the back, as a share of the shoulder "
-                       "anatomy's (0.14 of the humerus on the neutral man, scaled with the body); 0 is the "
-                       "first versions' bone-thin rod (a record of the first placement keeps the rod "
-                       "unless it sets this)"),
+                       "anatomy's (0.14 of the humerus on the neutral man, scaled with the body). 0.5-1.4: "
+                       "past 1.4 the arm is a drumstick as wide as the shoulder, under 0.5 a rod in its "
+                       "collar (a record pinned to the first placement, version 1, keeps the first versions' "
+                       "bone-thin rod unless it sets this)"),
         fillet_param(WING_FILLET),
-        ParamSpec("collar", "Root collar", "float", 1.0, 0.0, 2.0, 0.05,
+        ParamSpec("collar", "Root collar", "float", 1.0, 0.0, WING_COLLAR_MAX, 0.05,
                   help="the transition shell where the back's skin meets the wing's arm, tangent to both "
-                       "(collar.py): 1 = the default size, 0 = none"),
+                       "(collar.py): 1 = the default size, 0 = none (under 0.2 none either: a fragment "
+                       "of a ring), at most 1.3 (wider, the two wings' skirts meet under the spine and the "
+                       "collar read as a second ring on the arm)"),
     )
     fillet_default = WING_FILLET
     fillet_height = WING_FILLET_HEIGHT
-    # the second version of the placement (appendages.WING_*_V2: the joint on the ribs under the shoulder
-    # blade, the sink in units of the body size, the span tilted back); ``stamp`` is written into every
-    # new record, so it is read as that version on any later build (resolve_placement)
+    # the third version of the placement (appendages.WING_*_V2: the socket on the ribs under the shoulder blade,
+    # the sink in units of the body size, the span tilted back; WING_SLIDE: the joint slid out along the arm onto
+    # the blade); ``stamp`` is written into every new record, so it is read as that version on any later build
+    # (resolve_placement)
     presets = {"shoulder_blades": {
         "label": "Shoulder blades", "face": "shoulder_blades", "up_hint": A.WING_UP_HINT_V2,
         "roll": A.WING_ROLL, "offset": A.WING_OFFSET_V2, "side": "both",
@@ -1470,7 +1622,8 @@ class WingKind(Kind):
             return None
         from . import collar as CO
         up = placed.model.collar_up(placed.controls)
-        if up is None:
+        k *= placed.model.collar_strength(placed.controls)       # ramps in as the arm rises off the back
+        if up is None or k < WING_COLLAR_MIN_STRENGTH:
             return None
         return CO.CollarProfile(width=WING_COLLAR[0], ventral=WING_COLLAR[1], height=WING_COLLAR[2],
                                 sink=WING_COLLAR[3], strength=k, up=tuple(float(x) for x in up))
@@ -1491,11 +1644,19 @@ class WingKind(Kind):
         return placed.model.arm_mesh(placed.mesh(controls))
 
     def layers(self, placed, controls=None):
-        """bone (scapula plate, strut, humerus), muscle (the masses and the arm's belly) and skin
-        (the wing's shell): :meth:`wingroot.WingRoot.layers`; the skin only without an arm piece."""
+        """bone (scapula plate, strut, humerus), muscle (the girdle's muscles laid under the skin the wing's own
+        junction moulds, and the arm's belly) and skin (the wing's shell): :meth:`wingroot.WingRoot.layers`."""
         if placed.model is None:
             return Kind.layers(self, placed, controls)
         return placed.model.layers(placed.mesh(controls), controls)
+
+    def layers_on(self, placed, shaped, controls=None):
+        """The layers with the muscles laid under the skin of ``shaped`` (the body's vertices a view meshes, with
+        every appendage's junction: the ecorche) rather than under this wing's own moulding."""
+        if placed.model is None:
+            return Kind.layers(self, placed, controls)
+        ctl = placed.controls if controls is None else controls
+        return placed.model.layers(placed.mesh(ctl), ctl, shaped=shaped)
 
     def draft_params(self, values):
         if values.get("style") == "feathered":
@@ -1542,28 +1703,36 @@ class WingKind(Kind):
     # -- placement -------------------------------------------------------------------------
 
     def resolve_placement(self, spec, values, ctx):
-        """The placement of a wing, in one of two versions (``pl["version"]``).
+        """The placement of a wing, in one of three versions (``pl["version"]``).
 
-        **Version 2** (every record made since; ``placement["version"] = 2``): the shoulder joint is a
+        **Version 3** (every record made since round 4; ``placement["version"] = 3``): version 2's socket, the
+        joint then slid OUT along the arm's own axis by ``appendages.WING_SLIDE`` x s (the frame's orientation
+        kept, so the arm crosses the skin at the same point and angle): the joint lies on the shoulder blade,
+        the humerus leaves it through the muscle only (version 2's ran from the ribs under the blade up
+        through it, the round-3 review).
+
+        **Version 2** (``placement["version"] = 2``, records of S6b): the shoulder joint is a
         landmark of the body, ON THE RIBS UNDER THE SHOULDER BLADE (``appendages.WING_SOCKET_*``,
         :func:`wingroot.socket_anchor`); the record's ``offset`` is the sink in units of the body size
-        ``s``; the upper arm is the muscular sleeve (``muscle``), scaled with the body. A version-2
+        ``s``; the upper arm is the muscular sleeve (``muscle``), scaled with the body. A version-2 or 3
         record whose quad is not the preset's (or has weights) is a quad a person chose: it is the
-        skin point over the joint instead of the landmark (``pl["free"]``).
+        skin point over the socket instead of the landmark (``pl["free"]``).
 
         **Version 1** (``placement["version"] = 1``): the first versions' placement exactly (the joint
         on the anchor quad 0.9 units in, the span ``WING_UP_HINT``) and their bone-thin upper arm unless
-        the record sets ``muscle``.
+        the record sets ``muscle``. Only that explicit stamp gives the rod (``pl["pinned"]``).
 
         A record written before the versions existed has no stamp. If it holds the first preset's own
         numbers untouched (its quad without weights, the sink of 0.9, ``WING_UP_HINT``, ``WING_ROLL``,
-        or leaves them out) it is read as version 2: it MOVES, because that placement is the defect (the
+        or leaves them out) it is read as the latest version: it MOVES, because that placement is the defect (the
         joint inside the torso, the arm leaving through the human deltoid); the document is not
-        rewritten. A record in which a person changed any of them keeps what they chose: version 1."""
+        rewritten. A record in which a person changed any of them keeps what they chose: version 1, with
+        the muscular sleeve every tree that could write it drew (round 1 .. c808d60: the user saw the
+        sleeve on every wing), not the rod."""
         pl = super().resolve_placement(spec, values, ctx)
         raw = spec.placement.get("version")
         handle = PRESET_FACES["shoulder_blades"]
-        if raw in (1, 2) and not isinstance(raw, bool):
+        if raw in (1, 2, 3) and not isinstance(raw, bool):
             version = int(raw)
             if version == 1:                 # a pinned record: what it leaves out is the first version's
                 if spec.placement.get("offset") is None:
@@ -1583,8 +1752,8 @@ class WingKind(Kind):
                          and (stored.get("up_hint") is None
                               or (hint is not None and np.allclose(hint, A.WING_UP_HINT, atol=1e-9)))
                          and (roll is None or (_num(roll, None) is not None and abs(float(roll) - A.WING_ROLL) < 1e-9)))
-            version = 2 if untouched else 1
-            if version == 2:                # the first preset's numbers, read as the second's
+            version = WING_PLACEMENT_VERSION if untouched else 1
+            if version != 1:                # the first preset's numbers, read as the latest's
                 pl["up_hint"] = A.WING_UP_HINT_V2
                 pl["offset"] = A.WING_OFFSET_V2
             elif stored.get("offset") is None:
@@ -1592,8 +1761,12 @@ class WingKind(Kind):
             if version == 1 and stored.get("up_hint") is None:
                 pl["up_hint"] = A.WING_UP_HINT
         pl["version"] = version
-        pl["free"] = version == 2 and (pl["face"] != handle or pl["weights"] is not None)
-        if version == 2:
+        # an explicit ``version: 1`` stamp (a record pinned to the first versions); an UNSTAMPED record read as
+        # version 1 (a person edited the placement) was written by a tree that drew every wing with the
+        # muscular sleeve (round 1 .. c808d60): it keeps the sleeve, only the stamp gives the rod (build)
+        pl["pinned"] = raw == 1 and not isinstance(raw, bool)
+        pl["free"] = version in WING_SOCKET_VERSIONS and (pl["face"] != handle or pl["weights"] is not None)
+        if version in WING_SOCKET_VERSIONS:
             # the body's girdle (shared with build) and, unless a person chose the quad, the joint's skin
             # point as the anchor quad and weights: everything that reads the anchor without building (the
             # lab's markers, Engine.anchor_points) then sees the same point as the build
@@ -1632,23 +1805,31 @@ class WingKind(Kind):
         shape = {k: v for k, v in build_values.items() if k not in ("fillet", "muscle", "collar")}   # not builder keywords
         lm, surface = pl.get("wing_girdle") or (WR.landmarks(ctx.base, ctx.verts), WR.BodySurface(*ctx.cage))
         over = {}
-        if pl.get("version", WING_PLACEMENT_VERSION) == 2:
+        version = pl.get("version", WING_PLACEMENT_VERSION)
+        if version in WING_SOCKET_VERSIONS:
             # the joint is a landmark of the body (on the ribs under the shoulder blade: resolve_placement put
             # its skin point in the anchor) and the sink is a share of the body's size, as the muscle of the
-            # upper arm is
+            # upper arm is; version 3 slides it out along the arm onto the blade
             over["offset"] = pl["offset"] * lm.s
+            if version == 3:
+                over["slide"] = A.WING_SLIDE_STYLE.get(values["style"], A.WING_SLIDE) * lm.s
             muscle = float(values.get("muscle", 1.0))
-        else:                                        # the first version: the rod, unless the record asks
-            muscle = float(values["muscle"]) if "muscle" in spec.params else 0.0
+        elif pl.get("pinned") and "muscle" not in spec.params:
+            muscle = 0.0                             # pinned to the first versions: their bone-thin rod
+        else:                                        # an edited record of round 1 .. c808d60: the sleeve it had
+            muscle = float(values.get("muscle", 1.0))
         sleeve = wing_sleeve(values["style"], muscle, lm.s)
         if sleeve is not None:
             shape["sleeve"] = sleeve                 # the muscular upper arm of the shoulder anatomy
-        app = self._engine(side, pl, params=shape, **over,
-                           **self._aim(values["style"], pl["aim"], ctx))
+        aim = self._aim(values["style"], pl["aim"], ctx)
+        if version == 3 and pl["aim"] is None and aim.get("root_relative"):
+            aim["root_point"] = stow_root(aim["root_point"], lm, surface)
+        app = self._engine(side, pl, params=shape, **over, **aim)
         names = {i: (n, s) for i, n, s in self._names(spec, app._indices())}
         out = []
         for idx, pw in app.place_rigs(ctx.base, ctx.verts):
             name, letter = names[idx]
+            holder: list = []                # the Placed, once built: the muscles lie under the skin its junction moulds
             ctrl, notes = self.clean_controls(side_controls(controls_raw, letter),
                                               f"appendage {spec.id!r}: ")
             for note in notes:
@@ -1662,10 +1843,12 @@ class WingKind(Kind):
             model = WR.WingRoot(
                 letter or ("r" if idx else "l"), pw, pw.matrix, lm, surface, profile,
                 float(values.get("fillet", self.fillet_default)), values["style"], WING_FILLET_HEIGHT,
-                tube=arm is not None)
-            out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
-                              anchor=self._surface(ctx, app, idx), matrix=pw.matrix,
-                              params=dict(values), controls=ctrl, rig=pw, model=model))
+                tube=arm is not None, body=(ctx.base, ctx.verts, lambda c, holder=holder: holder[0].junction(c)))
+            placed = Placed(name=name, spec_id=spec.id, kind=self, side=letter,
+                            anchor=self._surface(ctx, app, idx), matrix=pw.matrix,
+                            params=dict(values), controls=ctrl, rig=pw, model=model)
+            holder.append(placed)
+            out.append(placed)
         return out
 
 
@@ -1719,10 +1902,10 @@ class HarvestKind(_NumericControls, Kind):
                        "a narrow root fits inside the torso (the legacy presets: a girdle preset ends "
                        "in the shoulder dome instead)"),
         fillet_param(HARVEST_FILLET),
-        ParamSpec("collar", "Root collar (experimental)", "float", 0.0, 0.0, 2.0, 0.05,
-                  help="a transition shell from the trunk onto the shoulder (hip) dome of a girdle limb "
-                       "(collar.py); OFF by default: on this geometry it leaves tabs where the arm leaves the "
-                       "dome (docs/anatomy_limb.md), the skin junction carries the transition"),
+        ParamSpec("collar", "Root collar", "float", 1.0, 0.0, 2.0, 0.05,
+                  help="the transition shell from the trunk's skin onto the shoulder (hip) dome of a girdle limb "
+                       "(collar.py), tangent to both: ON by default since round 4 (it needs a subdivided body: the "
+                       "figure is meshed at level 1); 0 switches it off (the dome meets the skin along a line)"),
     )
     fillet_default = HARVEST_FILLET
     presets = {
@@ -1734,10 +1917,10 @@ class HarvestKind(_NumericControls, Kind):
                        "face": "upper_arms", "offset": 0.0, "girdle_scale": 0.85, "side": "both",
                        "params": {"limb": "arm"},
                        "controls": {"raise_": 68.0, "swing": -30.0, "elbow": -10.0}},
-        "extra_legs": {"label": "Extra legs (a second hip girdle on the iliac wing; low confidence: they splay, they do not stand)",
+        "extra_legs": {"label": "Extra legs (a second hip girdle on the buttock; low confidence: they hang back, they do not stand)",
                        "face": "extra_legs", "offset": 0.0, "girdle_scale": 0.7, "side": "both",
                        "params": {"limb": "leg"},
-                       "controls": {"raise_": 49.0, "swing": 5.0, "knee": 25.0}},
+                       "controls": {"raise_": 38.0, "swing": -15.0, "knee": 30.0}},
         # the first version's presets: a straight copy at the original's own shoulder
         # (it overlaps the original arm); kept so older documents still build
         "shoulder_socket": {"label": "Shoulder socket (legacy: overlaps the original arm)",
@@ -1814,14 +1997,18 @@ class HarvestKind(_NumericControls, Kind):
         """The root collar of a girdle limb (``collar.py``): the transition from the trunk onto the
         dome, wide above it (the flank runs over the top of the second shoulder like the trapezius over
         the first), a crease below it (the axilla). ``collar`` scales it; 0 switches it off; a
-        first-version limb (no girdle) has none. OFF by default (``collar`` = 0): see the parameter."""
+        first-version limb (no girdle) has none. ON by default since round 4 (``GIRDLE_COLLAR``): the
+        round-4 collar (shading transfer, guarded construction) is what makes the seam vanish at levels 1
+        and 2 (docs/anatomy_limb.md, round 4)."""
         if placed is None or placed.model is None:
             return None
-        k = float(placed.params.get("collar", 0.0))
+        k = float(placed.params.get("collar", 1.0))
         if k <= 0.0:
             return None
         from . import collar as CO
-        return CO.CollarProfile(strength=k, up=(0.0, 1.0, 0.0), height=0.2, width=2.0)
+        g = placed.model.girdle
+        prof = GIRDLE_COLLAR["fan" if g.fan else ("leg" if g.limb == "leg" else "lower")]
+        return None if prof is None else CO.CollarProfile(strength=k, **prof)
 
     def collar_axis(self, placed, controls=None):
         if placed.model is None:
@@ -1883,6 +2070,7 @@ class HarvestKind(_NumericControls, Kind):
             if rig.girdle is not None:
                 from . import limbgirdle as LG
                 model = LG.LimbModel(rig, rig.girdle)
+                model.body = (ctx.base, ctx.verts)          # the layers are kept inside the trunk's moulded skin
             out.append(Placed(name=name, spec_id=spec.id, kind=self, side=letter,
                               anchor=self._surface(ctx, app, idx), matrix=None,
                               params=dict(values), controls=ctrl, limb=rig,

@@ -919,6 +919,10 @@ class LabDocument:
         spec = self.spec(spec_id)
         if side not in SIDES:
             raise LabError(f"unknown side {side!r}; use {', '.join(SIDES)}")
+        from . import kinds
+        kind = kinds.kind_of(spec)              # a kind may refuse a side (a tail is one midline structure)
+        if kind is not None and side != spec.side and side not in kind.allowed_sides:
+            raise LabError(kind.side_hint(side))
         return self._edit(Change("shape", spec_id, "side"), lambda: setattr(spec, "side", side))
 
     def set_placement_preset(self, spec_id: str, preset: str) -> bool:
@@ -1197,7 +1201,8 @@ class Engine:
 
         return self._shaped.get_or_build(key, shape)
 
-    def collars(self, character: Character, shaped: BodyState, builts, levels: int, skin_mesh) -> list:
+    def collars(self, character: Character, shaped: BodyState, builts, levels: int, skin_mesh,
+                notes: list | None = None) -> list:
         """The root collars (``collar.py``) of the built appendages that have one: ``[(spec,
         placed, name, Mesh, material)]`` in the MakeHuman frame. Final quality and export only (the
         draft proxy of a drag skips them: it says so). Fitted to the body as it is MESHED at
@@ -1230,7 +1235,11 @@ class Engine:
                             np.linalg.LinAlgError):
                         return []         # the picture and the print still come out without it
 
-                for name, mesh, material in self._collars.get_or_build(key, build):
+                got = self._collars.get_or_build(key, build)
+                if not got and notes is not None and int(levels) >= CO.MIN_LEVEL and profile.active:
+                    notes.append(f"{placed.name}: the root collar could not be fitted here (see the "
+                                 "appendage's warnings); the root is drawn without it")
+                for name, mesh, material in got:
                     out.append((spec, placed, name, mesh, material))
         return out
 
@@ -1493,7 +1502,7 @@ class Engine:
                     p.kind.collar_profile(p) is not None for _, b in builts for p in b.placed):
                 notes.append("the root collar needs a subdivided body (levels 1 or 2); it is not drawn at level 0")
             for spec, placed, _, cmesh, cmat in self.collars(character, shaped, builts, levels,
-                                                             shells[0].mesh):
+                                                             shells[0].mesh, notes):
                 shells.append(Shell(cmesh.transform(MH_TO_Z_UP), cmat))
                 owners.append((spec.id, placed.side))
         self.stats["final_scene"] += 1
@@ -1918,13 +1927,13 @@ class Lab:
 
     def __init__(self, resources: Resources | None = None, character: Character | None = None,
                  *, size=(900, 800), threaded: bool = True, clock=time.monotonic,
-                 debounce: float = DEBOUNCE_SECONDS, levels: int = 0):
+                 debounce: float = DEBOUNCE_SECONDS, levels: int | None = None):
         self.resources = resources or Resources.shared()
         self.engine = Engine(self.resources)
         self.doc = LabDocument(self.resources, character, clock=clock, engine=self.engine)
         self.view = ViewState()
         self.size = (int(size[0]), int(size[1]))
-        self.levels = levels
+        self.levels = levels               # the final render's and the export's subdivision; None: final_levels()
         self.frame: Frame | None = None
         self.on_frame = None
         self.on_change = None
@@ -1982,12 +1991,23 @@ class Lab:
         payload = {
             "live": (self.doc.character, view, self.size, self.draft_scale, mode, edited),
             "json": self.doc.snapshot(), "view": view, "size": self.size,
-            "levels": self.levels,
+            "levels": self.final_levels(),
         }
         return self.scheduler.request(payload)
 
     def tick(self) -> None:
         self.scheduler.tick()
+
+    def final_levels(self, character: Character | None = None) -> int:
+        """The subdivision the final render and the export mesh the body at: ``levels`` when it was given,
+        else 1 for a character with an appendage that has a root collar (the collar needs a subdivided body;
+        at level 0 every root is the bare pipe in a flange) and 0 for one without (the cage, as before).
+        The draft (orbit, drags) always draws the 4k-triangle proxy and says the collar is the final's."""
+        if self.levels is not None:
+            return int(self.levels)
+        from . import collar as CO
+        ch = self.doc.character if character is None else character
+        return CO.default_levels(ch.appendages, ch.collar_enabled)
 
     def _doc_changed(self, change: Change) -> None:
         if self.placing is not None and (
@@ -2100,12 +2120,15 @@ class Lab:
     # -- export ------------------------------------------------------------------------------
 
     def export_stl(self, path, **kw) -> ExportResult:
-        return self.engine.export(self.doc.character, path, levels=kw.pop("levels", 0), **kw)
+        levels = kw.pop("levels", None)
+        levels = self.final_levels() if levels is None else levels
+        return self.engine.export(self.doc.character, path, levels=levels, **kw)
 
     def export_async(self, path=None, **kw) -> BackgroundTask:
         """:meth:`export_stl` on a thread (an angel's report takes seconds), on a frozen copy of
         the document so edits made meanwhile do not leak into the file. ``path=None`` only checks
         printability. Poll the returned :class:`BackgroundTask`."""
         frozen = Character.from_dict(json.loads(self.doc.snapshot()))
-        levels = kw.pop("levels", 0)
+        levels = kw.pop("levels", None)
+        levels = self.final_levels(frozen) if levels is None else levels
         return BackgroundTask(lambda: self.engine.export(frozen, path, levels=levels, **kw))

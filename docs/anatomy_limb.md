@@ -7,6 +7,120 @@ Design context: [appendages_system_design.md](appendages_system_design.md), the 
 
 ![before (left pair of columns) and after (right pair): lower arms, upper arms, extra legs](images/limb_before_after.png)
 
+## Round 4 (what changed after the round-3 review: verdict REJECT)
+
+![lower arms, neutral body, real pipeline: BEFORE (c808d60) and HEAD (835af09) at level 1, round 4 at level 1 (the default
+now: the root collar is on) and at level 0](images/limb_r4_before_after.png)
+
+**The decision.** The round-3 review found the seam wrong at every level: at level 0 a saw-tooth cut where the pad buried the
+dome's top in the faceted cage, at level 2 a flat sleeve end with a crisp rim, the skin meeting the limb at 60-69 degrees all
+round. Two ways were tried in this round, on the real pipeline, before anything was written:
+
+* **the body's skin laid onto the dome** (a round fillet from each skin vertex's tangent plane onto an exact sphere, the dome made
+  a sphere for it): the law is exact (0.2 degrees on a plane) but the cage is not: one cage edge (0.23 units) spans 27 degrees of
+  a 0.48-unit dome, and the subdivided skin over the wrapped zone shrinks 0.03-0.08 inside the sphere, which moves the crossing
+  onto the fillet: 25-30 degrees at best (raw, 32-37 through the validity pass), and at level 0 a grazing crossing of a faceted
+  cage and a smooth dome is a scalloped line (the ripple is the facet sag over the tangent of the crease): finding 1 again;
+* **the root collar** (`collar.py`) on the round-4 core (shading transfer, guarded construction; `S7_core.patch`): its sheet is
+  fitted to the subdivided skin and meets it, and the dome, at a few degrees, and it is shaded with the skin's normals at its rim
+  and the dome's at its top. Round 2b had tried the first-version collar on the dome and found tabs; on the round-4 collar the
+  same root showed no rim at levels 1 and 2 on any body (`core_collar_*` in the work folder, then this round's profile).
+
+So the seam is the collar's at levels 1 and 2 (**on by default**: `collar` = 1 for the girdle presets, which also makes the core's
+`collar.default_levels` mesh such a figure at level 1, the CLI and the lab's final render and export), and the junction's job is
+the MASS: the skin is moulded into a slope onto the dome, not around it, so that at level 0 (now only what `--subdivide 0` or a
+lab level of 0 asks for) the cage cuts the dome along a clean steep line as the first version did, not along a saw-tooth. The
+lab's draft (orbit, drags) draws its own 4k-triangle proxy of the body and no collar (the core's rule: it says the collar is the
+final render's), so while a figure is being edited the root is seen without its collar.
+
+**What changed, finding by finding** (numbers on the real pipeline; the images in this section are level 1 with the collar
+unless they say otherwise; "the work folder" is `scratchpad/junction/S7_limb_out`).
+
+| finding (round 3) | what was done | measured |
+| --- | --- | --- |
+| (1) level 0: a flat, saw-toothed top where BEFORE had a rounded end | the pad no longer stands higher than the dome: `ARM_MASSES["pad"]` is 1.7 R wide, 0.4 of the mass unit high, centred at the pivot's height (round 2b: 2.3 R, 0.6, a radius above it, higher than the dome's own top); the girdle tube climbs 0.15 of the fillet (`GIRDLE_FILLET_HEIGHT`, 0.30 before: with the pad it buried the heavy body's dome top, the notched step) | raggedness of the level-0 contact line over its upper half (RMS residual about a smooth 4-harmonic fit, in R): BEFORE 0.005-0.009, HEAD 0.014-0.016, round 4 0.005-0.010 (tall 0.0061, heavy muscular 0.0097, neutral 0.0068, child 0.0051); `test_at_level_0_the_skin_cuts_the_dome_along_a_clean_line_not_a_saw_tooth` (4 bodies, < 0.011; fails on HEAD) |
+| (2) level 2: a flat sleeve end with a crisp rim (3/4 front) | the root collar on by default, `GIRDLE_COLLAR["lower"]`: width 2.0 root radii on top, 0.6 under the arm (all round: a collar that stopped at the axilla left a notch at its run ends in the 3/4 view), height 0.5, falloff 2.5, opening upward (the dome itself is round 2b's: a sphere tried for the fillet experiment changed none of the collar's numbers and cost the heavy body 0.09 R of clearance to the original arm, so it was taken out again) | `collar.join_report` at level 1, seven bodies: the collar covers the whole ring (kept share 1.0; heavy muscular 0.79), crosses the skin at 10.0-10.9 degrees (p95) and meets the dome at 7.3-11.8 (median), 0 self-crossings, p99 crease of the sheet 14-27 degrees; `test_with_the_round_4_collar_the_lower_root_meets_skin_and_dome_at_a_shallow_angle` (needs the round-4 collar, skipped on the old one) |
+| (3) the skin never meets the limb tangentially (meas.py: 60-69 degrees median) | see the decision above: tangency is the collar's | **meas.py measures the skin against the limb under the collar, not what is seen**: upper-half median 70-78 degrees at levels 0 and 1 on the lean bodies, 81-85 on the heavy muscular (HEAD 59-63 / 78; BEFORE 74-75 / 100-109). The visible surface at level 1 is the collar's (the row above). Not closed in meas.py's terms: see "Not done" |
+| (4) a barrel above the arm, a box with a ledge on the heavy back | the pad above (local to the root, lower than the dome); the anterior fold and the latissimus smaller and tapered (`ARM_MASSES`: 0.18 / 0.16 -> 0.07 of the mass unit); `CONSEQUENCES["harvest"]` about a third of round 1's and the waist left alone (creature_anatomy.py) | trunk width 1.25 R above the pivot, tracked plain-body vertices, pair against none: HEAD +36 % neutral / +17 % heavy muscular, round 4 +8 % / +5 %; at the pivot's height +32 % / +47 % -> +23 % / +28 % (that band holds the dome itself); the coupling alone at the pivot +14-17 % -> +4 %; `test_the_flank_above_the_second_shoulder_is_not_a_saddlebag` (< 12 % and the coupling < 8 %; fails on HEAD) |
+| M4 survived (the mass unit was computed and never used) | the test asserts the spec's mound heights ARE the table's times `mass_unit()` on the heavy muscular body, and what the masses move the skin by | `test_the_trunk_masses_are_capped_...`: the round-3 mutation (`H = self.R`) is killed |
+| (5) the fan pair: a pauldron or cup on the trapezius | the collar on all round its ring (`GIRDLE_COLLAR["fan"]`: width 1.6, 1.0 below, height 0.7, falloff 3) | kept share 0.72 (neutral, child), 0.75 (slim female); on the heavy muscular body the collar crosses itself and is cut away (none); it still reads as a cup from behind: **not closed** (images below) |
+| (6) the extra legs: a knee-pad on the lower back, no gluteal mass | the second hip girdle moved onto the buttock (`LEG_RISE` 1.5 -> 0.6 R above the hip joint, 55 degrees behind the lateral midline instead of 30; limb_023: a polymelic goat's extra legs hang from the rump), the preset's pose 38 / -15 / 30 (hanging back; 49 / 5 / 25 splayed sideways), the masses a gluteal swell behind and above the root (`LEG_MASSES`: 1.9 R, 0.30 R; limb_064 / 065), the medius up to the iliac crest and a small anterior mass, the dome sheared further into the pelvis (`lean` 0.7 -> 1.0: at 0.7 its pole stood outside the buttock on four bodies). No collar: tried, it covered 15-25 % of the ring and the renders with and without it could not be told apart (`GIRDLE_COLLAR["leg"]` is `None`) | the leg leaves the rump, not the waist; at level 0 on the heavy body the round-2b torn edge is gone; but from behind the dome reads as a second buttock with a crease (a shelf across its top in the critic's back view) and the front shows the legs behind the thighs: **still low confidence** (the preset's label says so). The preset's handle quad (10524) stays at the old site (a record that stores it must still be read as the preset), so the lab's handle sits above the root |
+| (6b) stacked couplings pile up | `creature_anatomy.stack`: what several records ask of ONE slider is sub-additive (the k-th largest counts `STACK_SHARE` ** k = 0.5 ** k: one record is unchanged, two equal asks give 1.5 x one, never more than twice the largest; signs apart) | wing + lower arms: latissimus 0.75 (HEAD) -> 0.41, bust 0.55 -> 0.29, flank width 0.45 -> 0.12; tail + wings + lower arms + extra legs on the heavy body: 11 new hidden crossings of the skin (14 on HEAD), all of them the TAIL's (the tail alone: 14; the legs alone: 0), none visible; `test_the_anatomy_of_stacked_appendages_is_sub_additive` |
+| (7a) muscle and bone come through the flank skin | `LimbModel.layers` pushes every piece's vertex at least the skin's thickness inside the nearer skin (`clamp_inside`): the limb's own, or the trunk's as the junction moulds it (`_moulded_trunk`: the cage moved by the limb's own spec, subdivided once near the root); the clavicle analogue runs along the ribs from the costal arch to the joint (it ran 2.4 R straight into the chest), the dome muscle is a cap that runs down the arm (it was a ball) | outside the figure (limb skin U the shaped body at level 1, ray parity, then the exact distance): HEAD lower arms 30-47 % of the latissimus strip by up to 0.15-0.45 R and the scapula plate by 0.07-0.40 R; round 4: no vertex on seven bodies, three presets, rest and posed; `test_every_bone_and_muscle_vertex_is_inside_the_figure_by_a_true_signed_distance` |
+| (7b) raise ranges narrowed (heavy muscular -16..-4) | `clear_limits`: the raise has to keep 0.4 R from the original limb or what the limb keeps at the preset's own pose when that is less (the dome stands 0.30 R from the heavy muscular body's original arm in every pose: pulling the raise in could not change it); the whole skin and limb near each other are measured (every other vertex was: the limit was decided on a gap the test then saw smaller) | heavy muscular -15.9..-0.9 (abduction limit 43 degrees, round 2b 40; gap 0.30 R there), lean bodies unchanged (-14.9..15.1); a document saved with `raise_ = 10` builds at -1 with the existing clamp note (-4 before), the record is not rewritten; the clearance is still bought by limiting the raise (limb_030 / 032 stagger the arms instead) (`test_a_saved_heavy_muscular_pair_raised_beyond_the_fitted_range_builds_clamped_with_a_note`) |
+
+![the lower arms at level 1 with the collar on seven bodies (neutral, tall, short, child, heavy muscular, slim female, old
+male), four views each](images/limb_r4_bodies.png)
+
+![silhouette: HEAD (left) and round 4 (right), neutral and heavy muscular, front, back, 3/4](images/limb_r4_silhouette.png)
+
+![level 0 on the heavy muscular body: BEFORE, HEAD, round 4 (mine), round 4 with the round-4 collar (the same at level 0: there is
+no collar there)](images/limb_r4_L0_heavy.png)
+
+![level 0 on the tall body](images/limb_r4_L0_tall.png)
+
+**References looked at this round** (opened as images, side by side with the renders): `limb_071` (the swimmer: the trapezius
+slope runs onto the deltoid dome with one fillet: the pad is a slope onto the dome, never higher than the dome), `limb_022` (the
+steer's extra forelimb: a skin-covered lump with no edge: what the collar has to do in the 3/4 view), `limb_031` (the Shiva bronze
+from behind: one rounded mound per side), `limb_064` / `limb_065` (gluteus maximus: the hip's dome), `limb_023` (the goat's
+extra legs hang from the rump: the leg girdle on the buttock), `limb_067` (Duval fig. 74: the latissimus thinning to the iliac
+crest: the smaller, tapered lat), TAKEAWAYS section 6 item 1 (the girdle bone a plate and a strut outside the ribs: the
+clavicle analogue along the ribs).
+
+![the references beside the render of the same view: limb_071 (back 3/4), limb_022 (front 3/4), limb_064 (the extra
+legs)](images/limb_r4_refs.png)
+
+![extra legs (round 4: on the buttock, low confidence) and the fan pair (not fixed): HEAD and round 4](images/limb_r4_legs_fan.png)
+
+![the layers of the lower arms on the heavy muscular body: inside the skin; the coronal cut: the clavicle analogue along the
+ribs](images/limb_r4_layers.png)
+
+**Cost** (machine load about 1): `apply_junctions` of a pair 35-75 ms warm, 90-170 ms cold (HEAD 33-78 / 69-163); building a pair
+0.14-0.54 s cold (HEAD 0.11-0.36: the clearance search now looks at every vertex near the original limb); the collar of a pair at
+level 1, which the round-4 default adds to the final render and the export of a figure with extra limbs: 0.3-0.6 s (lower arms,
+legs), 0.9-1.4 s (the fan pair); and meshing the body at level 1 instead of 0 (the core's numbers: lab final 0.6 -> 1.5 s cold).
+
+**How a saved document renders now** (no `.mmchar` change; the records store preset, scale, controls; disclosed, not versioned):
+a girdle preset's record without `collar` now has the collar (1), and a figure with one is meshed at level 1 by default (the CLI's
+`--subdivide`, the lab's final render and export: `collar.default_levels`, which reads the RECORD's parameter, so a legacy
+`shoulder_socket` / `hip_socket` record and an extra-leg pair, which build no collar, are meshed at level 1 by default too); the
+lower pair's trunk masses are smaller and lower (the flank 8 % instead of 36 % wider above the arm), the anatomy coupling of an arm pair is
+about a third of what it was and adds sub-additively to other appendages' asks; a saved extra-leg pair is built on the buttock
+(not at the iliac crest) with a rounder dome sheared into the pelvis, and keeps the pose it stored; the heavy muscular lower pair's
+raise limit is -1 instead of -4 (a stored 10 builds at -1 with the clamp note); the layers view puts every piece inside the
+skin. `harvest:collar=0` gives the round-2b root (without the round-2b masses). **Not limb records only**: the sub-additive stacking
+changes every figure in which two appendages ask for the same slider (a wing pair with a tail: latissimus 0.45 -> 0.40; a tail with
+extra legs: the pelvis sliders); a single record is unchanged.
+
+**Not done, honestly:**
+
+* **meas.py's < 15 degrees is not met**: the skin meets the limb UNDER the collar at 70-78 degrees on lean bodies, 81-85 on the
+  heavy muscular one (both levels), worse than HEAD's 59-63 / 78 on that measure. At level 1 what is seen is the collar (10.0-10.9
+  degrees at the skin, 7.3-11.8 at the dome); at level 0 (no collar) the line is clean but steep. The cage cannot give a tangent
+  join on its own (see the decision); a test on meas.py's number was not written because the number it would pin is the
+  trade-off, not the defect.
+* **The collar is the core track's** (`S7_core.patch`): on the first-version collar (this tree alone) the same profile shows the
+  sticker the round-3 integration review described (a tone patch, a ragged edge, 1-9 self-crossings): the collar test skips there.
+  The merged tree is what was judged. The core's `tests/test_collar_seam.py::test_a_collar_is_wanted_by_the_records_that_will_have_one`
+  asserts round 3's default (a harvest record wants no collar); with the collar on by default that line has to say the opposite.
+  The core track owns that file, so the two-line change is a separate patch (`S7_limb_core_tests.patch` in the work folder's
+  parent), not part of this one.
+* A **light band** runs along the top of the root where the collar turns into the dome in the back view (it is shading, not an
+  edge: the sheet's convex turn catches the light; no rim at close range).
+* **The fan pair** still reads as a cup on the back of the shoulder from behind, and its collar is dropped on the heavy muscular
+  body (the sheet crossed itself). Moving its pivot into the shoulder made the collar fail everywhere and the arm a sleeve end cut
+  by the skin (tried: `fan` (-0.55, 0.5, -0.75) and (-0.35, 0.45, -0.65)).
+* **The extra legs** read as legs from the rump from behind, and as a second buttock at their root; the front view shows them
+  behind the thighs. They stay a low-confidence preset.
+* The muscle layer's shapes are still primitives (a cap, spindles, strips) and the clamp flattens a piece where it meets the skin.
+* The level-0 crossing of the lower pair is clean but it is a line (70-85 degrees): the first version's look, not a grown root.
+* The collar at the ends of a record's parameters and poses (scale 0.6, offset +-0.4, `collar=2`, the corners of the raise and the
+  swing, neutral and heavy muscular) does not cross itself and creases at most 36 degrees (p99); at `offset=-0.6` on the heavy
+  muscular body at the low corner of raise and swing it creases (p99 71 degrees) and covers 56 % of the ring; where the arm is
+  pressed to the flank it covers 39 %. The fan pair's collar is gone on the heavy muscular body at its low raise.
+* The dark crease shadow under the fan pair's arm where its collar is cut, and the light band along the lower pair's top, are
+  shading of the collar, which is the core track's.
+
 ## Round 2b (what changed after the round-1 review and the S6 core)
 
 ![lower arms before (HEAD c808d60) and after round 2b, real pipeline, level 2: front, 3/4, side, back 3/4](images/limb_r2b_before_after.png)

@@ -207,7 +207,7 @@ def test_new_spec_places_by_preset_and_picks_ids():
     # on the ribs under the shoulder blade, its sink in units of the body's size, stamped so that it reads as
     # that version on every later build
     assert a.placement["roll"] == A.WING_ROLL and a.placement["offset"] == A.WING_OFFSET_V2
-    assert a.placement["version"] == K.WING_PLACEMENT_VERSION == 2
+    assert a.placement["version"] == K.WING_PLACEMENT_VERSION == 3
     assert a.placement["up_hint"] == list(A.WING_UP_HINT_V2)
     b = K.new_spec("wing", [a], side="left", params={"style": "feathered", "span": 15})
     assert b.id == "wing-2" and b.side == "left" and b.params == {"style": "feathered", "span": 15.0}
@@ -778,7 +778,7 @@ def test_tail_and_horn_presets_equal_the_legacy_placement_plus_the_sink(world):
     # What stays: the legacy engine still builds a horn on the old preset's point, the preset (and
     # the quad) are still known, and a record that names them is read as the shape's own site on the
     # frontal bone.
-    horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0, "ring_verts": 8,
+    horns = K.instantiate_all([K.new_spec("horn", params={"tip_radius": 0.0, "ring_verts": 24,
                                                           "flare": 0.0})], base, v0)
     olds = A.Appendage("horn", anchor_point=K.PRESET_POINTS["temples"], mirror=True,
                        offset=K.HORN_SINK).build(base, v0)
