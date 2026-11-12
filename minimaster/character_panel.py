@@ -335,7 +335,8 @@ class CharacterPanel(ttk.Frame):
             self.view.refresh_overlay()
             return
         self.L = L
-        # the final preview and the export mesh the body at level 1 when a root collar needs it (Lab.final_levels);
+        # the final preview and the export mesh the body at level 1 when a root is welded (Lab.final_levels ->
+        # weld.default_levels, the command line's decision too);
         # the draft is the proxy either way
         self.lab = L.Lab(self._resources, size=(640, 560), levels=None)
         self.lab.on_change = self._on_change

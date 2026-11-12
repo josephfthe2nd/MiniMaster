@@ -327,11 +327,12 @@ def _cli(tmp_path, *args):
 def test_the_cli_meshes_a_character_with_a_collar_at_level_one_by_default(tmp_path):
     """Round 3: ``--subdivide`` defaulted to 0, where there is no collar: the default picture and STL of every
     appendage showed the pipe in a flange. Now the default is 1 when a root collar is asked for; ``--subdivide 0``
-    is honoured and says what it costs; a character without appendages stays at 0."""
-    done = _cli(tmp_path, "--add", "tail", "-o", str(tmp_path / "a.stl"))
+    is honoured and says what it costs; a character without appendages stays at 0.  (Round 6: the collar is asked
+    for with ``--collar-shell``; the default seam is the weld, tests/test_weld.py.)"""
+    done = _cli(tmp_path, "--add", "tail", "--collar-shell", "-o", str(tmp_path / "a.stl"))
     assert done.returncode == 0, done.stderr
     assert "subdivided once" in done.stdout and "tail-1           2 shells" in done.stdout
-    zero = _cli(tmp_path, "--add", "tail", "--subdivide", "0", "-o", str(tmp_path / "b.stl"))
+    zero = _cli(tmp_path, "--add", "tail", "--collar-shell", "--subdivide", "0", "-o", str(tmp_path / "b.stl"))
     assert zero.returncode == 0 and "needs a subdivided body" in zero.stdout and "tail-1           1 shell" in zero.stdout
     assert (tmp_path / "a.stl").stat().st_size > 2 * (tmp_path / "b.stl").stat().st_size
     off = _cli(tmp_path, "--add", "tail", "--no-collar", "-o", str(tmp_path / "c.stl"))
@@ -351,13 +352,14 @@ def test_the_lab_draws_and_exports_a_character_with_a_collar_at_level_one(tmp_pa
     try:
         assert lb.final_levels() == 0
         lb.doc.add_appendage("tail")
+        lb.doc.set_anatomy(collar="shell")                   # round 6: the collar is the document's choice
         assert lb.final_levels() == 1
         scene = lb.engine.final_scene(lb.doc.character, levels=lb.final_levels())
         assert any(isinstance(s.mesh, CO.CollarMesh) for s in scene.shells)
         assert not any("needs a subdivided body" in n for n in scene.notes)
         lb.doc.set_anatomy(collar=False)
         assert lb.final_levels() == 0
-        lb.doc.set_anatomy(collar=True)
+        lb.doc.set_anatomy(collar="shell")
         r = lb.export_stl(None, size="medium", force=True)
         assert r.printability.groups["tail-1"].shells == 2            # the collar is in the exported group
         fixed = L.Lab(res, size=(200, 200), threaded=False, levels=0)

@@ -52,14 +52,15 @@ def cut_mesh(mesh: Mesh, point, normal) -> Mesh:
 
 
 def layer_shells(base, verts, placed, layers=LAYERS, *, cut: bool = False, plane=None,
-                 levels: int = 0, body: bool = True, eye_color: str = "#5b7c8d") -> list:
+                 levels: int = 0, body: bool = True, eye_color: str = "#5b7c8d", weld: bool = False) -> list:
     """Render shells (Z up) for the body (``verts``: the body that is meshed, i.e. with the skin
     moulded around the appendages) and the ``layers`` of every appendage in ``placed``.
 
     ``plane`` is ``(point, normal)`` in the MakeHuman frame for ``cut`` (default: through the
     first appendage's anchor, normal +X). With ``"skin"`` among the layers the shell that is
     printed is drawn with the appendage's own material, the inner layers with bone / muscle
-    colours. ``body=False`` leaves the figure out."""
+    colours. ``body=False`` leaves the figure out. ``weld``: the body's skin welded onto the roots
+    (``weld.py``) as the figure is drawn and printed."""
     layers = parse_layers(layers)
     placed = list(placed)
     if plane is None and placed:
@@ -69,6 +70,11 @@ def layer_shells(base, verts, placed, layers=LAYERS, *, cut: bool = False, plane
     if body:
         shells = list(po.character_shells(base, verts, eye_color=eye_color, levels=levels,
                                           with_eyes=not cut))
+        if weld and placed:
+            from . import weld as W
+            b0 = shells[0]
+            shells[0] = po.Shell(W.welded_shell_mesh(b0.mesh, placed), b0.material, b0.ao, b0.ao_strength,
+                                 b0.base_colors)
         if cut and plane is not None:
             pz = xf[:3, :3] @ np.asarray(plane[0]) + xf[:3, 3]
             nz = xf[:3, :3] @ np.asarray(plane[1])

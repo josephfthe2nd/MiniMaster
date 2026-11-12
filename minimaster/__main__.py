@@ -139,8 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="print size category")
     p_char.add_argument("--height", type=float, help="print height in mm")
     p_char.add_argument("--subdivide", type=int, default=None,
-                        help="Catmull-Clark levels of the body (default: 1 when an appendage has a root "
-                             "collar, which needs a subdivided body, else 0)")
+                        help="Catmull-Clark levels of the body (default: 1 when an appendage's root is "
+                             "welded into the skin, which moves the subdivided skin, else 0)")
     p_char.add_argument("--no-base", action="store_true")
     p_char.add_argument("--azimuth", type=float, default=18.0)
     p_char.add_argument("--elevation", type=float, default=5.0)
@@ -193,12 +193,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="switch the skin junction back on in a loaded character that "
                              "has it off; saved with --save-character")
     p_char.add_argument("--no-collar", action="store_true",
-                        help="no root collar (the transition shell where the skin meets a "
-                             "tail, tangent to both); --no-junction switches it off too; "
-                             "saved with --save-character")
+                        help="no root seam: the skin is not welded onto the appendages' roots (the "
+                             "bare junction); --no-junction switches it off too; saved with "
+                             "--save-character")
     p_char.add_argument("--collar", action="store_true",
-                        help="switch the root collar back on in a loaded character that has "
-                             "it off; saved with --save-character")
+                        help="the default root seam again (the skin welded onto the roots, weld.py) "
+                             "in a loaded character that has it off or asks for the old collar; "
+                             "saved with --save-character")
+    p_char.add_argument("--collar-shell", action="store_true",
+                        help="the round-4 root collar (a thin shell over the skin, collar.py) "
+                             "instead of the weld; saved with --save-character")
     p_char.add_argument("--layers", metavar="bone,muscle,skin",
                         help="PNG only: draw the anatomical layers of the appendages that have "
                              "them (a tail: its caudal vertebrae, muscle sleeve and skin) instead "
@@ -428,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "character":
         from .character import collar as collar_mod
         from .character import mhbase, portrait, printprep
+        from .character import weld as weld_mod
 
         if args.list_kinds:
             from .character import kinds
@@ -492,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         if args.remove or args.add or args.pose or args.no_anatomy \
                 or args.anatomy_cap is not None or args.no_junction or args.junction \
-                or args.no_collar or args.collar:
+                or args.no_collar or args.collar or args.collar_shell:
             from .character import kinds
             try:
                 for spec_id in args.remove:
@@ -518,6 +523,8 @@ def main(argv: list[str] | None = None) -> int:
                 doc.anatomy.pop("junction", None)
             if args.no_collar:
                 doc.anatomy["collar"] = False
+            elif args.collar_shell:
+                doc.anatomy["collar"] = "shell"
             elif args.collar:
                 doc.anatomy.pop("collar", None)
         if args.save_character:
@@ -564,37 +571,47 @@ def main(argv: list[str] | None = None) -> int:
         # placed on the undeformed ``verts``; everything that MESHES the body (the picture, the
         # STL, the printability report) uses ``body_verts``
         body_verts = doc.shaped_body(base, verts, placed)
+        seam = weld_mod.seam(doc)
         if args.subdivide is None:
-            # a character with a root collar is meshed at level 1 unless asked otherwise: the collar needs a
-            # subdivided body, and at the cage level every root was the bare pipe in a flange
-            args.subdivide = collar_mod.default_levels(placed, doc.collar_enabled)
+            # a character whose roots are welded is meshed at level 1 unless asked otherwise (one decision, from
+            # the records, shared with the lab: weld.default_levels); level 0 is the 0.28-unit cage
+            args.subdivide = weld_mod.default_levels(doc)
             if args.subdivide:
-                print(f"note: the body is subdivided once (--subdivide {args.subdivide}) for the root collars; "
-                      "--subdivide 0 draws the bare cage without them")
-        elif (placed and args.subdivide < collar_mod.MIN_LEVEL and collar_mod.wants_collar(placed, doc.collar_enabled)):
+                print(f"note: the body is subdivided once (--subdivide {args.subdivide}) for the roots' "
+                      f"{'weld' if seam == 'weld' else 'collars'}; --subdivide 0 draws the cage")
+        elif (placed and seam == "collar" and args.subdivide < collar_mod.MIN_LEVEL
+              and collar_mod.wants_collar(placed, True)):
             print("note: the root collar needs a subdivided body (--subdivide 1 or 2); it is not drawn at level 0")
+        elif placed and seam == "weld" and args.subdivide < weld_mod.MIN_LEVEL and weld_mod.wants_weld(placed):
+            print("note: at --subdivide 0 the skin is welded onto the roots on the coarse cage itself "
+                  "(--subdivide 1 or 2 for a smooth weld)")
         if out.suffix.lower() == ".png":
             if args.layers:
                 from .character import ecorche
                 try:
                     shells = ecorche.layer_shells(
                         base, body_verts, placed, args.layers, cut=args.cut,
-                        levels=args.subdivide, eye_color=args.eye_color)
+                        levels=args.subdivide, eye_color=args.eye_color, weld=seam == "weld")
                 except ValueError as exc:
                     print(f"error: --layers: {exc}", file=sys.stderr)
                     return 2
             else:
                 shells = portrait.character_shells(
                     base, body_verts, eye_color=args.eye_color, levels=args.subdivide)
+                # the skin welded onto the roots (weld.py): the body's own mesh, moved
+                if placed and seam == "weld":
+                    b0 = shells[0]
+                    shells[0] = portrait.Shell(weld_mod.welded_shell_mesh(b0.mesh, placed), b0.material, b0.ao,
+                                               b0.ao_strength, b0.base_colors)
                 # appendages come out in the MakeHuman frame (Y up); the renderer is Z up
                 shells += [portrait.Shell(p.mesh().transform(portrait.MH_TO_Z_UP), p.material)
                            for p in placed]
-                # the root collars (collar.py): fitted to the body as it is meshed here
+                # the round-4 root collars (collar.py), only when the document asks for them instead
                 shells += [portrait.Shell(m.transform(portrait.MH_TO_Z_UP), mat)
                            for _, _, m, mat in collar_mod.collar_shells(
                                base, body_verts, placed, levels=args.subdivide,
                                skin=collar_mod.skin_from_shell(shells[0].mesh),
-                               enabled=doc.collar_enabled)]
+                               enabled=seam == "collar")]
             fit = None
             if args.face:
                 import numpy as _np
@@ -616,6 +633,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             shells = printprep.character_print_shells(
                 base, body_verts, levels=args.subdivide)
+            if placed and seam == "weld":
+                shells[0] = (shells[0][0], weld_mod.welded_shell_mesh(shells[0][1], placed))
             figure = list(shells)
             app_shells = []
             if placed:
@@ -628,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
                 for owner, cname, cmesh, _ in collar_mod.collar_shells(
                         base, body_verts, placed, levels=args.subdivide,
                         skin=collar_mod.skin_from_shell(shells[0][1]),
-                        enabled=doc.collar_enabled):
+                        enabled=seam == "collar"):
                     collars.setdefault(owner.name, []).append((cname, cmesh))
                 for p in placed:
                     if p.rig is not None:
@@ -657,7 +676,7 @@ def main(argv: list[str] | None = None) -> int:
                 reference=printprep.FIGURE_SHELLS)
             prep = print_report.appendage_report(
                 app_shells, base, body_verts, mm_per_unit, levels=args.subdivide,
-                figure_shells=figure, assembly=rep)
+                figure_shells=figure, assembly=rep, body=figure[0][1])
             report_text = prep.as_text()
             blocked = bool(prep.blocking)
         if blocked and not args.force:

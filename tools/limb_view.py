@@ -101,12 +101,15 @@ def main(argv) -> int:
         placed = c.instantiate_appendages(base, verts, lib)
         shaped = c.shaped_body(base, verts, placed, info)
     body_v = shaped if junction else verts
-    shells = layer_shells(base, body_v, placed, layers, cut=cut, levels=levels, body=with_body)
+    # round 6: the body's skin is welded onto the girdle limbs' domes (weld.py), as the pipelines draw it
+    from minimaster.character import weld as weld_mod
+    shells = layer_shells(base, body_v, placed, layers, cut=cut, levels=levels, body=with_body,
+                          weld=junction and weld_mod.seam(c) == "weld")
     if junction and with_body and "skin" in layers and cut in (None, "none") and levels >= 1:
-        # round 4: the girdle limbs' root collar is on by default (collar.py; it needs a subdivided body)
+        # the round-4 collar, when the document asks for it instead (anatomy["collar"] = "shell")
         from minimaster.character import collar as collar_mod
         shells += [po.Shell(m.transform(po.MH_TO_Z_UP), mat) for _, _, m, mat in collar_mod.collar_shells(
-            base, body_v, placed, levels=levels, enabled=c.collar_enabled)]
+            base, body_v, placed, levels=levels, enabled=weld_mod.seam(c) == "collar")]
     sel = [p for p in placed if p.name.startswith(focus)] or placed
     ctr = np.vstack([np.asarray(p.limb.joints(p.controls)["shoulder"])[None, :] for p in sel]).mean(axis=0)
     ctr_z = (po.MH_TO_Z_UP[:3, :3] @ ctr) + po.MH_TO_Z_UP[:3, 3]

@@ -42,6 +42,7 @@ import math
 import queue
 import threading
 import time
+import warnings
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -667,11 +668,12 @@ class LabDocument:
 
     def set_anatomy(self, enabled: bool | None = None, cap: float | None = None,
                     clamp: bool = False, junction: bool | None = None,
-                    collar: bool | None = None) -> None:
+                    collar: bool | str | None = None) -> None:
         """The body-adaptation switch and its cap (the layer itself is derived, never saved),
         and ``junction``: does the skin mould around the appendages' roots (``junction.py``;
-        saved only when switched off) and ``collar``: does a tail get its root collar (``collar.py``;
-        likewise)."""
+        saved only when switched off) and ``collar``: the root seam (``weld.seam``): True the default (the
+        skin welded onto the roots, ``weld.py``; nothing saved), False none (the bare root; saved),
+        ``"shell"`` the round-4 overlay collar instead (``collar.py``; saved)."""
         if cap is not None:
             cap = _number("anatomy cap", cap, 0.0, 2.0, clamp)
 
@@ -686,7 +688,9 @@ class LabDocument:
                 else:
                     self.character.anatomy["junction"] = False
             if collar is not None:
-                if collar:
+                if isinstance(collar, str) and collar.strip().lower() == "shell":
+                    self.character.anatomy["collar"] = "shell"
+                elif collar:
                     self.character.anatomy.pop("collar", None)
                 else:
                     self.character.anatomy["collar"] = False
@@ -1131,6 +1135,7 @@ class Engine:
         self._shells = Cache(4)                 # body key -> full-detail body shells
         self._shaped = Cache(6)                 # (body key, junction digest) -> BodyState (skin moulded)
         self._collars = Cache(16)               # (shaped body key, spec key, controls, levels) -> [(name, Mesh, material)]
+        self._welded = Cache(6)                 # (shaped body key, levels, every root's spec + pose) -> welded body Mesh
         self._last_draft: dict = {}             # spec key -> (BodyState, Built): for the re-place
         self._lock = threading.Lock()
 
@@ -1201,6 +1206,47 @@ class Engine:
 
         return self._shaped.get_or_build(key, shape)
 
+    def welded_body(self, character: Character, shaped: BodyState, builts, levels: int, body_mesh,
+                    notes: list | None = None):
+        """The body mesh (Z up, as the picture or the STL carries it) with its skin welded onto the roots of the
+        built appendages (``weld.py``), when the character's seam is the weld; ``body_mesh`` itself otherwise.
+        Cached by the shaped body, the level and every root's spec and pose (a pose drag re-welds; an orbit or an
+        unchanged character costs nothing).  A root whose weld would fold the skin is left as the junction made it
+        and named in ``notes``."""
+        from . import weld as W
+        if W.seam(character) != "weld" or not builts:
+            return body_mesh
+        parts = []
+        for spec, built in builts:
+            for placed in built.placed:
+                parts.append((spec_key(spec), placed.name, controls_key(self.side_controls(spec, placed))))
+        key = (shaped.key, int(levels), tuple(parts), _digest([len(body_mesh.vertices), len(body_mesh.faces)]))
+
+        def build():
+            self.stats["weld"] += 1
+            targets = []
+            for spec, built in builts:
+                for placed in built.placed:
+                    try:
+                        t = placed.kind.weld_target(placed, self.side_controls(spec, placed))
+                    except (ValueError, KeyError, IndexError, TypeError, np.linalg.LinAlgError):
+                        t = None
+                    if t is not None:
+                        targets.append(t)
+            diags: list = []
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mesh = W.weld_mesh(body_mesh, targets, diags=diags)
+            skipped = [d["name"] for d in diags if not d.get("applied") and (d.get("crossings") or d.get("error"))]
+            return mesh, skipped
+
+        mesh, skipped = self._welded.get_or_build(key, build)
+        if notes is not None:
+            for name in skipped:
+                notes.append(f"{name}: the skin could not be welded onto the root here (it would fold); the "
+                             "root meets the skin as the junction left it")
+        return mesh
+
     def collars(self, character: Character, shaped: BodyState, builts, levels: int, skin_mesh,
                 notes: list | None = None) -> list:
         """The root collars (``collar.py``) of the built appendages that have one: ``[(spec,
@@ -1210,7 +1256,8 @@ class Engine:
         cached by the shaped body, the spec, the pose and the level, so an unchanged character
         costs nothing and a pose drag re-fits one tail."""
         from . import collar as CO
-        if not character.collar_enabled:
+        from . import weld as W
+        if W.seam(character) != "collar":
             return []
         skin = None
         out = []
@@ -1397,7 +1444,12 @@ class Engine:
         # skin of the rest pose; everything else (orbit, add, remove) is cached or built once.
         shaped = body if mode in ("body", "shape") else self.shaped_state(character, body, items)
         shells[0] = Shell(proxy.mesh(shaped.verts), sh.SKIN)
-        if character.collar_enabled and any(
+        from . import weld as W
+        how = W.seam(character)
+        if how == "weld" and any(p.kind.weld_profile(p) is not None for _, b, _, _ in items for p in b.placed):
+            notes.append("the skin is welded onto the roots in the final render only (the draft is the "
+                         "4k-triangle proxy)")
+        elif how == "collar" and any(
                 p.kind.collar_profile(p) is not None for _, b, _, _ in items for p in b.placed):
             notes.append("the root collar (the transition where the skin meets the tail) is drawn in "
                          "the final render only")
@@ -1485,6 +1537,11 @@ class Engine:
         shaped = self.shaped_state(
             character, body, [(s_, b_, False, False) for s_, b_ in builts])
         shells = list(self.body_shells(shaped, eye, levels))
+        if builts:
+            b0 = shells[0]
+            welded = self.welded_body(character, shaped, builts, levels, b0.mesh, notes)
+            if welded is not b0.mesh:
+                shells[0] = Shell(welded, b0.material, b0.ao, b0.ao_strength, b0.base_colors)
         owners = [(None, "")] * len(shells)
         for spec, built in builts:
             notes += built.notes
@@ -1498,7 +1555,8 @@ class Engine:
             if check:
                 check()
             from . import collar as CO
-            if levels < CO.MIN_LEVEL and character.collar_enabled and any(
+            from . import weld as W
+            if levels < CO.MIN_LEVEL and W.seam(character) == "collar" and any(
                     p.kind.collar_profile(p) is not None for _, b in builts for p in b.placed):
                 notes.append("the root collar needs a subdivided body (levels 1 or 2); it is not drawn at level 0")
             for spec, placed, _, cmesh, cmat in self.collars(character, shaped, builts, levels,
@@ -1602,6 +1660,8 @@ class Engine:
         shaped = self.shaped_state(
             character, body, [(s_, b_, False, False) for s_, b_ in builts])
         shells = printprep.character_print_shells(res.base, shaped.verts, levels=levels)
+        if builts:
+            shells[0] = (shells[0][0], self.welded_body(character, shaped, builts, levels, shells[0][1]))
         figure = list(shells)
         app_shells = []
         collars: dict = {}
@@ -1638,7 +1698,7 @@ class Engine:
                                                  reference=printprep.FIGURE_SHELLS)
             prep = print_report.appendage_report(
                 app_shells, res.base, verts, mm_per_unit, levels=levels, figure_shells=figure,
-                assembly=rep, cache=self.report_cache, body_verts=shaped.verts)
+                assembly=rep, cache=self.report_cache, body_verts=shaped.verts, body=figure[0][1])
             report_text = prep.as_text()
             blocked = bool(prep.blocking)
         result = ExportResult(Path(path) if path else None, False, blocked, report_text,
@@ -2000,14 +2060,14 @@ class Lab:
 
     def final_levels(self, character: Character | None = None) -> int:
         """The subdivision the final render and the export mesh the body at: ``levels`` when it was given,
-        else 1 for a character with an appendage that has a root collar (the collar needs a subdivided body;
-        at level 0 every root is the bare pipe in a flange) and 0 for one without (the cage, as before).
-        The draft (orbit, drags) always draws the 4k-triangle proxy and says the collar is the final's."""
+        else :func:`weld.default_levels` (the one decision the command line takes too: 1 for a character with
+        a welded root, 0 for one without).  The draft (orbit, drags) always draws the 4k-triangle proxy and
+        says the weld is the final's."""
         if self.levels is not None:
             return int(self.levels)
-        from . import collar as CO
+        from . import weld as W
         ch = self.doc.character if character is None else character
-        return CO.default_levels(ch.appendages, ch.collar_enabled)
+        return W.default_levels(ch)
 
     def _doc_changed(self, change: Change) -> None:
         if self.placing is not None and (

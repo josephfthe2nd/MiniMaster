@@ -742,10 +742,12 @@ def _cli(tmp_path, *args):
 
 
 @assets
-def test_the_cli_prints_the_collar_as_a_second_shell_and_no_collar_removes_it(tmp_path):
+def test_the_cli_prints_the_collar_as_a_second_shell_only_when_asked_for(tmp_path):
+    """Round 6: the root seam is the WELD by default (weld.py: the body's own skin moved, no second shell);
+    ``--collar-shell`` asks for this module's overlay collar instead (a second shell of the tail's group)."""
     out = tmp_path / "a.stl"
     done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "1",
-                           "-o", str(out)], capture_output=True, text=True)
+                           "--collar-shell", "-o", str(out)], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert "tail-1           2 shells" in done.stdout and "printability  OK" in done.stdout
     out2 = tmp_path / "b.stl"
@@ -754,17 +756,22 @@ def test_the_cli_prints_the_collar_as_a_second_shell_and_no_collar_removes_it(tm
     assert done.returncode == 0 and "tail-1           1 shell" in done.stdout
     out3 = tmp_path / "c.stl"
     done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "1",
-                           "--no-junction", "-o", str(out3)], capture_output=True, text=True)
+                           "--no-junction", "--collar-shell", "-o", str(out3)], capture_output=True, text=True)
     assert done.returncode == 0 and "tail-1           1 shell" in done.stdout          # no junction: no collar either
+    out4 = tmp_path / "d.stl"
+    done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "1",
+                           "-o", str(out4)], capture_output=True, text=True)
+    assert done.returncode == 0 and "tail-1           1 shell" in done.stdout          # the default: the weld
     assert out.stat().st_size > out2.stat().st_size
 
 
 @assets
 def test_the_cli_at_level_zero_draws_no_collar_and_says_so(tmp_path):
     """Round 4: the DEFAULT level of a character with a collar is 1 (tests/test_collar_seam.py); an explicit
-    ``--subdivide 0`` is honoured and says what it costs."""
+    ``--subdivide 0`` is honoured and says what it costs (round 6: for the collar when it is asked for)."""
     done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "0",
-                           "--res", "120", "160", "-o", str(tmp_path / "x.png")], capture_output=True, text=True)
+                           "--collar-shell", "--res", "120", "160", "-o", str(tmp_path / "x.png")],
+                          capture_output=True, text=True)
     assert done.returncode == 0 and "needs a subdivided body" in done.stdout
     done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--no-collar",
                            "--subdivide", "0", "--res", "120", "160", "-o", str(tmp_path / "y.png")],
@@ -778,7 +785,7 @@ def test_the_cli_at_level_zero_draws_no_collar_and_says_so(tmp_path):
 @assets
 def test_the_cli_picture_has_the_collar_and_no_collar_changes_it(tmp_path):
     imgs = {}
-    for tag, extra in (("on", []), ("off", ["--no-collar"])):
+    for tag, extra in (("on", ["--collar-shell"]), ("off", ["--no-collar"])):
         out = tmp_path / f"{tag}.png"
         done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", "tail", "--subdivide", "1",
                                "--azimuth", "150", "--elevation", "20", "--res", "300", "420", *extra, "-o", str(out)],
@@ -814,9 +821,11 @@ def lab_res():
 
 @assets
 def test_the_lab_draws_the_collar_in_the_final_render_only_and_caches_it(lab_res):
+    """Round 6: the collar is the document's choice (``anatomy["collar"] = "shell"``); the default is the weld."""
     from minimaster.character import lab as L
     d = L.LabDocument(lab_res)
     d.add_appendage("tail")
+    d.set_anatomy(collar="shell")
     eng = d.engine
     draft = eng.draft_scene(d.character)
     assert any("root collar" in n for n in draft.notes)                    # the draft says it skips it
@@ -834,6 +843,8 @@ def test_the_lab_draws_the_collar_in_the_final_render_only_and_caches_it(lab_res
     assert "collar" in d.character.anatomy and d.character.anatomy["collar"] is False
     d.set_anatomy(collar=True)
     assert "collar" not in d.character.anatomy
+    assert len([o for o in eng.final_scene(d.character, levels=1).owners if o[0] == "tail-1"]) == 1   # the weld
+    d.set_anatomy(collar="shell")
     d.set_anatomy(junction=False)
     assert len([o for o in eng.final_scene(d.character, levels=1).owners if o[0] == "tail-1"]) == 1
 
@@ -843,6 +854,7 @@ def test_the_lab_refits_the_collar_when_the_pose_or_the_level_changes(lab_res):
     from minimaster.character import lab as L
     d = L.LabDocument(lab_res)
     spec = d.add_appendage("tail")
+    d.set_anatomy(collar="shell")
     eng = d.engine
     eng.final_scene(d.character, levels=1)
     eng.final_scene(d.character, levels=2)
@@ -857,6 +869,7 @@ def test_the_lab_export_carries_the_collar_in_the_group_and_reports_it(lab_res, 
     from minimaster.character import lab as L
     d = L.LabDocument(lab_res)
     d.add_appendage("tail")
+    d.set_anatomy(collar="shell")
     res = d.engine.export(d.character, tmp_path / "x.stl", levels=1)
     assert res.written and not res.blocked
     assert res.printability.groups["tail-1"].shells == 2

@@ -211,6 +211,17 @@ HARVEST_NECK = 0.5       # the cut end keeps this much of the limb's width (limb
 TAIL_RING_VERTS = 24
 TAIL_COLLAR = dict(width=1.8, height=0.7, falloff=3.0)    # the tail's root collar (collar.CollarProfile): see TailKind.collar_profile
 TAIL_COLLAR_MAX_R = 1.2                     # ... none on a tail thicker than this (neutral-body units: wider than the sacrum)
+# round 6: the weld of a tail's root (weld.WeldProfile): the full reach on the back, a crease underneath (the natal
+# cleft stays open: at the full reach underneath the two cheeks were pulled up onto the tail and crossed)
+TAIL_WELD = dict(open=1.0, ventral=0.35)
+TAIL_WELD_MAX_R = 1.0                       # ... none on a tail thicker than this (a 1.2 tail's weld folded on the cheeks and
+                                            # took 10 s; its root is most of the rump: docs/weld.md, not done)
+# ... of a horn: a tight cuff (the reach is at least HORN_WELD_MIN units: a 0.14-radius horn's 0.13 is one level-1 edge)
+HORN_WELD = dict(reach=1.0, region=1.6)
+# ... of a wing's arm: wide where the arm comes from, a crease on the side it leans over
+WING_WELD = dict(open=1.0, ventral=0.7)
+# ... of a girdle limb, per girdle: the lower pair's opens upward, the fan pair's and the hip's all round
+GIRDLE_WELD = {"lower": dict(up=(0.0, 1.0, 0.0), open=1.0, ventral=0.5), "fan": dict(), "leg": dict()}
 HORN_RING_VERTS = 24
 TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.35, 0.5
 HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
@@ -550,6 +561,57 @@ class Kind:
         """The surface the collar meets (``collar.py``): by default the whole appendage's mesh; a kind
         whose root is one piece of a bigger shell (a wing's arm) hands that piece only."""
         return placed.mesh(controls)
+
+    # -- the weld: the body's skin moulded onto the root (weld.py, round 6) --------------------------
+
+    def weld_profile(self, placed, controls: dict | None = None):
+        """The :class:`~.weld.WeldProfile` of this appendage's root (how the body's own subdivided skin is
+        moulded onto it, ``weld.py``), or ``None`` (the default: no weld).  A kind that welds returns one;
+        its ``collar`` parameter (0..2, the record's own) scales it and 0 switches it off."""
+        return None
+
+    def welds(self, params: dict, record=None) -> bool:
+        """Does a RECORD of this kind with ``params`` (``record``: the AppendageSpec, when there is one) weld
+        its root?  Read without building anything (the default level of a figure is decided from the records,
+        ``weld.default_levels``): a kind with a :meth:`weld_profile` and a ``collar`` above 0 (its default when
+        absent)."""
+        if type(self).weld_profile is Kind.weld_profile:
+            return False
+        spec = self.param("collar", params) or self.param("collar")
+        default = spec.default if spec is not None else 1.0
+        try:
+            return float(params.get("collar", default)) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def weld_root(self, placed, controls: dict | None = None):
+        """``(centreline points, root radius)`` of the root the skin is welded onto (MakeHuman frame, the
+        points from inside the body outward), or ``None``: by default the junction's tube (its radius where it
+        leaves the skin: the largest of its first three)."""
+        ax = self.collar_axis(placed, controls)
+        if ax is None:
+            ax = Kind.collar_axis(self, placed, controls)
+        if ax is None:
+            return None
+        pts, radii = ax
+        return np.asarray(pts, dtype=np.float64), float(np.max(np.asarray(radii, dtype=np.float64)[:3]))
+
+    def weld_target(self, placed, controls: dict | None = None):
+        """The :class:`~.weld.WeldTarget` of this appendage's root in pose ``controls`` (default: its own),
+        or ``None`` when it is not welded."""
+        prof = self.weld_profile(placed, controls)
+        if prof is None or not prof.active:
+            return None
+        root = self.weld_root(placed, controls)
+        if root is None:
+            return None
+        from . import collar as CO
+        from . import weld as W
+        wall = CO.outward(self.collar_wall(placed, controls))
+        if wall is None or not len(wall.faces):
+            return None
+        pts, radius = root
+        return W.WeldTarget(placed.name, wall, np.asarray(placed.anchor, dtype=np.float64), radius, prof, pts)
 
     def layers(self, placed, controls: dict | None = None) -> dict:
         """``{layer name: Mesh}`` of one placed appendage (see :meth:`Placed.layers`); the base
@@ -1006,6 +1068,26 @@ class TailKind(_LoftKind):
         k *= min(1.0, T.R_MAX / max(R, 1e-9))
         return CO.CollarProfile(strength=k, up=(0.0, 1.0, 0.0), **TAIL_COLLAR)
 
+    def weld_profile(self, placed, controls=None):
+        """The weld (``weld.py``): the back's skin climbs the tail's dorsal side and flanks in a long tangent
+        ramp; on the underside it meets the tail in a crease (the references: the dorsal line of a kangaroo and a
+        cat runs into the tail tangent-continuously, the ventral side meets the thighs in a crease; the natal
+        cleft under the root stays open: ``TAIL_WELD``).  ``collar`` scales it; 0 switches it off.  A tail
+        thicker than ``TAIL_WELD_MAX_R`` has none (its root is most of the rump; docs/weld.md)."""
+        k = float(placed.params.get("collar", 1.0))
+        if k <= 0.0 or placed.model is None:
+            return None
+        if float(placed.params.get("base_radius", 0.45)) > TAIL_WELD_MAX_R:
+            return None
+        from . import weld as W
+        return W.WeldProfile(strength=k, up=(0.0, 1.0, 0.0), **TAIL_WELD)
+
+    def welds(self, params, record=None):
+        try:
+            return Kind.welds(self, params) and float(params.get("base_radius", 0.45)) <= TAIL_WELD_MAX_R
+        except (TypeError, ValueError):
+            return False
+
     def layers(self, placed, controls=None):
         return placed.model.layers(controls)
 
@@ -1425,6 +1507,23 @@ class HornKind(_LoftKind):
         return CO.CollarProfile(width=width, ventral=width, height=height, sink=HR.COLLAR_SINK, up=None,
                                 strength=k)
 
+    def weld_profile(self, placed, controls=None):
+        """The weld (``weld.py``): a tight cuff of skin all round a keratin sheath (``HORN_WELD``); none on a
+        skin-covered horn (the ossicone: its own foot is the skin's fillet already, A29).  ``collar`` scales it;
+        0 switches it off."""
+        if placed is None:
+            return None
+        row = HR.SHAPES.get(placed.params.get("shape", "curved"), HR.SHAPES["curved"])
+        k = float(placed.params.get("collar", 1.0))
+        if row.get("collar") is None or k <= 0.0 or getattr(placed.repose, "horn", None) is None:
+            return None
+        from . import weld as W
+        return W.WeldProfile(strength=k, **HORN_WELD)
+
+    def welds(self, params, record=None):
+        row = HR.SHAPES.get(params.get("shape", "curved"), HR.SHAPES["curved"])
+        return row.get("collar") is not None and Kind.welds(self, params)
+
     def collar_axis(self, placed, controls=None):
         """The junction tube's centreline carried on along the whole sheath (``hornrig.collar_axis``): the collar
         finds the wall by rays from this axis, and triangles far up a long horn whose nearest axis point was the
@@ -1642,6 +1741,26 @@ class WingKind(Kind):
         if placed.model is None or not placed.model.tube:
             return Kind.collar_wall(self, placed, controls)
         return placed.model.arm_mesh(placed.mesh(controls))
+
+    def weld_profile(self, placed, controls=None):
+        """The weld (``weld.py``) of the wing's arm: wide on the side the arm comes from (the back toward the
+        spine, the mantle that rolls into the root, wing/H22), a crease on the side it leans over (``WING_WELD``).
+        It ramps in as the arm rises off the back (:meth:`wingroot.WingRoot.collar_strength`): an arm lying along
+        the back (the folded preset) meets it in a crease, not a weld.  ``collar`` scales it; 0 switches it off;
+        a wing without its arm piece has none."""
+        k = float(placed.params.get("collar", 1.0))
+        if k <= 0.0 or placed.model is None or not placed.model.tube:
+            return None
+        ctl = placed.controls if controls is None else controls
+        k *= placed.model.collar_strength(ctl)
+        if k <= 0.0:
+            return None
+        from . import weld as W
+        up = placed.model.collar_up(ctl)
+        return W.WeldProfile(strength=k, up=None if up is None else tuple(float(x) for x in up), **WING_WELD)
+
+    def weld_root(self, placed, controls=None):
+        return Kind.weld_root(self, placed, controls) if placed.model is not None else None
 
     def layers(self, placed, controls=None):
         """bone (scapula plate, strut, humerus), muscle (the girdle's muscles laid under the skin the wing's own
@@ -2014,6 +2133,32 @@ class HarvestKind(_NumericControls, Kind):
         if placed.model is None:
             return None
         return placed.model.collar_axis(placed.controls if controls is None else controls)
+
+    def weld_profile(self, placed, controls=None):
+        """The weld (``weld.py``) of a girdle limb: the trunk's skin onto its shoulder (hip) dome, per girdle
+        (``GIRDLE_WELD``: the lower pair's opens upward with the axilla a crease below it, the fan pair's and the
+        hip's all round).  ``collar`` scales it; 0 switches it off; a first-version limb (no girdle) has none."""
+        if placed is None or placed.model is None:
+            return None
+        k = float(placed.params.get("collar", 1.0))
+        if k <= 0.0:
+            return None
+        from . import weld as W
+        g = placed.model.girdle
+        return W.WeldProfile(strength=k, **GIRDLE_WELD["fan" if g.fan else ("leg" if g.limb == "leg" else "lower")])
+
+    def welds(self, params, record=None):
+        """A girdle preset (lower arms, upper arms, extra legs) welds; a first-version preset (the copy at the
+        original's own socket) has no girdle and no weld."""
+        if not Kind.welds(self, params):
+            return False
+        name = None
+        if record is not None and isinstance(getattr(record, "placement", None), dict):
+            name = record.placement.get("preset")
+        if not isinstance(name, str) or name not in self.presets:
+            values, _ = self.clean(dict(params))
+            name = self.default_preset(values)
+        return name in LEGACY_HARVEST
 
     def layers(self, placed, controls=None):
         """bone, muscle and skin of a girdle limb (:meth:`limbgirdle.LimbModel.layers`); the

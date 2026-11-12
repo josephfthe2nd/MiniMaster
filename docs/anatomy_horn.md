@@ -1,5 +1,7 @@
 # The horn as an anatomy
 
+> Round 6: the seam at a keratin horn's root is the weld ([weld.md](weld.md), `kinds.HORN_WELD`); the ossicone has none (its foot is the skin's fillet). The collar described below is opt-in (`anatomy["collar"] = "shell"`); the default level is `weld.default_levels(character)`, read from the records by the CLI and the lab alike.
+
 Track S4 of the appendage junctions ([junctions.md](junctions.md) is the generic core this builds on, the
 design is [appendages_system_design.md](appendages_system_design.md)). The complaint was that an appendage
 "seems placed onto the model": for the horn that was literally true. The first horn was a 0.42-radius cone

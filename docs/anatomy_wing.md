@@ -1,5 +1,7 @@
 # The wing's root: a shoulder girdle, a muscular upper arm and the skin over both
 
+> Round 6: the seam at the arm's root is the weld ([weld.md](weld.md), `kinds.WING_WELD`), ramping in as the arm rises off the back; the folded preset has none (a crease). The collar described below is opt-in (`anatomy["collar"] = "shell"`).
+
 Tracks S3 (round 1), S6b (round 2b) and S7 (round 4) of the anatomical junctions ([junctions.md](junctions.md) has the skin
 mechanism it builds on, [collar.md](collar.md) the root collar, [appendages_system_design.md](appendages_system_design.md) the
 appendage system). The complaint was that the appendages "seem placed onto the model", "slapped over skin". For the wing that

@@ -1,5 +1,7 @@
 # The tail as an anatomy
 
+> Round 6: the seam at the root is the weld ([weld.md](weld.md)): the back's skin climbs the tail's dorsal side and flanks, a crease underneath (`kinds.TAIL_WELD`); the tail's `collar` parameter scales it. The root collar described below is opt-in (`anatomy["collar"] = "shell"`).
+
 The first tails were a tapered tube pushed through the skin of the side of the left buttock: the anchor was
 one cage quad (`3921`) whose centre is 0.36 R off the midline and whose normal is yawed ~10 degrees off the
 sagittal plane, the pipe was sunk 0.6 along that tilted normal, it bent sideways (the `droop` control rotated

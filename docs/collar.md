@@ -1,5 +1,14 @@
 # The root collar: where the skin meets an appendage
 
+> **Round 6: the collar is no longer the default seam.** The body's own skin is now welded onto every root
+> ([weld.md](weld.md), `minimaster/character/weld.py`): one surface, no second shell, and drawn at every level. This
+> module stays (its `SkinPatch` and closest-point code serve the weld) and the collar is still built when a document
+> asks for it: `anatomy["collar"] = "shell"` (the command line's `--collar-shell`, the lab's
+> `set_anatomy(collar="shell")`). `anatomy["collar"] = false` (`--no-collar`) still means no seam at all; a record's
+> `collar` parameter (0..2) now scales the weld. The default level is decided by `weld.default_levels(character)` for
+> the command line, the lab's final render and its export alike. Read the rest of this page as the history of the
+> overlay collar.
+
 Design context: [junctions.md](junctions.md) (the skin junction: the cage displacement that gives the skin MASS
 around a root), [anatomy_tail.md](anatomy_tail.md), [anatomy_wing.md](anatomy_wing.md), [anatomy_horn.md](anatomy_horn.md)
 (the kinds that use the collar), [appendages_system_design.md](appendages_system_design.md).

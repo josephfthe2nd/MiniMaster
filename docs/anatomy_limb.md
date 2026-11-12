@@ -1,5 +1,7 @@
 # Extra limbs on a second girdle (`limbgirdle.py`)
 
+> Round 6: the seam at a girdle limb's dome is the weld ([weld.md](weld.md), `kinds.GIRDLE_WELD`, extra legs included); the collar described below is opt-in (`anatomy["collar"] = "shell"`).
+
 Design context: [appendages_system_design.md](appendages_system_design.md), the skin mechanism in
 [junctions.md](junctions.md), the kind in `kinds.py` (`HarvestKind`), the rig in `limbrig.py`. The code is
 `minimaster/character/limbgirdle.py`, the tests `tests/test_limb_girdle.py`, the picture tool
