@@ -56,6 +56,16 @@ RADIUS_PRIOR = {
 # segments is the unit)
 SCALE_PARTS = {"head": ("head",), "trunk": ("trunk",), "arm": ("arm_l", "arm_r"),
                "leg": ("leg_l", "leg_r")}
+# the SIZE of a part (the unit of a relative size, the cap of a fillet) is not read off the fitted
+# segment radii (they settle on whichever vertices a round of the fit assigns to a segment, and the
+# trunk's radius of one body varied 1.14..1.73 with the appendage whose anatomy coupling reshaped it):
+# it is the MEDIAN, over the part's skin, of the distance to the nearest bone in the radii the
+# bones are expected to have (``RADIUS_PRIOR``), times the body's height times this calibration,
+# which makes the neutral male body's sizes what the relative sizes were tuned on (head 0.864, trunk
+# 1.56, arm 0.494, leg 0.731 units). A median does not care what a few hundred vertices of one
+# patch of the back do.
+SIZE_FRACTION = {"head": 0.06697, "trunk": 0.08351, "arm": 0.01985, "leg": 0.04941}
+SIZE_FAMILY = {"head": "head", "trunk": "trunk", "arm_l": "arm", "arm_r": "arm", "leg_l": "leg", "leg_r": "leg"}
 
 
 def _joint(base, verts, name):
@@ -103,17 +113,37 @@ class BodyFrame:
             rad = np.clip(new, 0.6 * prior, 1.5 * prior)
             rad = 0.5 * (rad + rad[mirror])      # a body is as thick on one side as on the other
         self.seg_radius = rad
+        self._set_sizes(cage_v[::3], height)
+
+    def _set_sizes(self, cage_v, height: float):
+        """``self.sizes``: the size (radius) of each part, from the median of its skin's distance to
+        the bones in their expected radii; a left part and its right twin share one."""
+        d = self._seg_distances(cage_v)
+        prior = np.array([height * f for p in self.parts for f in RADIUS_PRIOR[p]])
+        near = (d / prior[None, :]).argmin(axis=1)
+        ratio = d[np.arange(len(d)), near] / prior[near]
+        owner = self.seg_part[near]
+        self.sizes = {}
+        for fam, frac in SIZE_FRACTION.items():
+            ids = [i for i, p in enumerate(self.parts) if SIZE_FAMILY[p] == fam]
+            sel = np.isin(owner, ids)
+            k = float(np.median(ratio[sel])) if sel.sum() >= 8 else 1.0
+            for i in ids:
+                self.sizes[self.parts[i]] = frac * height * k
 
     # -- distances -------------------------------------------------------------------------
 
     def _seg_distances(self, pts) -> np.ndarray:
         """Distance of each point to each bone segment: ``(m, n_segments)``."""
-        pts = np.asarray(pts, dtype=np.float64)
-        out = np.empty((len(pts), len(self.seg_a)))
-        for s, (a, b) in enumerate(zip(self.seg_a, self.seg_b)):
-            ab = b - a
-            t = np.clip(((pts - a) @ ab) / max(float(ab @ ab), _EPS), 0.0, 1.0)
-            out[:, s] = np.linalg.norm(pts - (a + t[:, None] * ab), axis=1)
+        pts = np.asarray(pts, dtype=np.float64).reshape(-1, 3)
+        a, ab = self.seg_a, self.seg_b - self.seg_a
+        den = np.maximum((ab * ab).sum(axis=1), _EPS)
+        out = np.empty((len(pts), len(a)))
+        for s in range(0, len(pts), 4096):                      # a (chunk, segments, 3) block at a time
+            rel = pts[s:s + 4096, None, :] - a[None, :, :]
+            t = np.clip((rel * ab[None]).sum(axis=2) / den[None], 0.0, 1.0)
+            off = rel - t[:, :, None] * ab[None]
+            out[s:s + 4096] = np.sqrt((off * off).sum(axis=2))
         return out
 
     def part_scores(self, pts) -> np.ndarray:
@@ -160,6 +190,22 @@ class BodyFrame:
         u = np.clip((others - mine) / margin * 0.5 + 0.5, 0.0, 1.0)
         return u * u * (3.0 - 2.0 * u)
 
+    def bone_closest(self, pts, part):
+        """``(closest points, distances)`` of ``pts`` to the nearest bone segment of ``part``
+        (a name or an index): the axis a skin point of that part stands out from."""
+        pi = part if isinstance(part, int) else self.parts.index(part)
+        pts = np.asarray(pts, dtype=np.float64).reshape(-1, 3)
+        sel = self.seg_part == pi
+        a = self.seg_a[sel]
+        ab = self.seg_b[sel] - a
+        rel = pts[:, None, :] - a[None, :, :]
+        t = np.clip((rel * ab[None]).sum(axis=2) / np.maximum((ab * ab).sum(axis=1), _EPS)[None], 0.0, 1.0)
+        off = rel - t[:, :, None] * ab[None]
+        d = np.sqrt((off * off).sum(axis=2))
+        k = d.argmin(axis=1)
+        rows = np.arange(len(pts))
+        return a[k] + t[rows, k][:, None] * ab[k], d[rows, k]
+
     # -- sizes -----------------------------------------------------------------------------
 
     def size(self, scale: str, near=None) -> float:
@@ -174,10 +220,11 @@ class BodyFrame:
         return float(np.mean([self.part_size(p) for p in SCALE_PARTS[scale]]))
 
     def part_size(self, part) -> float:
-        """The radius of a part: the upper quartile of its bone segments' radii (the thick
-        ones: a forearm, a neck or a jaw do not size an arm, a trunk or a head)."""
-        pi = part if isinstance(part, int) else self.parts.index(part)
-        return float(np.percentile(self.seg_radius[self.seg_part == pi], 75))
+        """The radius of a part: the unit of a relative size and the cap of a fillet. Read off the
+        median distance of its skin to its bones (``SIZE_FRACTION``), not off the fitted segment
+        radii (which move 30-60 % with the anatomy coupling of whichever appendage is on the body)."""
+        name = part if isinstance(part, str) else self.parts[int(part)]
+        return float(self.sizes[name])
 
 
 _FRAMES: dict = {}

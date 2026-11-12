@@ -60,7 +60,7 @@ import hashlib
 import json
 import math
 import numbers
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -86,6 +86,15 @@ LIMIT_BACKOFF = 0.9
 MAX_AREA_GROWTH = 2.0         # S1b: a cage quad may not grow past this multiple of its own area ...
 MAX_EDGE_GROWTH = 2.0         # ... nor an edge past this multiple of its length ...
 MAX_LIPSCHITZ = 1.25          # ... and two neighbours' displacements differ by at most this many edge lengths
+
+# S6: how far a spec may push the skin of the part it belongs to OUT of that part, as a fraction of
+# the skin point's own distance from the part's bone (at least half the part's radius): a root on a
+# head is a thin cuff on bone, not a reshaping of the skull (S1b's default horn widened the head 41 %
+# 15 % below the crown, a ram's horn 22-29 % at the temple). Parts that are not listed are not bound.
+PART_SILHOUETTE = {"head": 0.08}
+JOIN_WORSE = 2.0              # S6: a spec whose tube join gets worse by more than this many degrees is not applied (the mean over a patch is good to about a degree)
+JOIN_BAND = 0.25              # ... measured on the skin within this many fillet widths of the wall
+JOIN_REACH = 0.4              # ... on a patch of the cage reaching this far (units) beyond that band, and two rings
 
 _EPS = 1e-12
 MOUND_SCALES = ("local", "head", "trunk", "arm", "leg")
@@ -226,6 +235,53 @@ def _uniform_scale(M) -> float:
     return s if s > _EPS else 1.0
 
 
+class ShellRef:
+    """The mesh an appendage's tube stands for, as the junction asks about it: a lazy handle (a
+    function that builds the mesh, so a spec that is never applied never poses a wing) with the
+    similarity that carries the mesh to the frame of the spec (a transformed spec has the
+    transformed mesh). It is not part of a spec's value: not compared, not serialised, not in
+    its digest. The mirror image of a handle is its TWIN: the tube of the right-hand spec is cut
+    down by mirroring what the left-hand one was cut down to, so a mirrored pair stays exactly
+    mirror-symmetric (a point just inside a mesh on one side must not be just outside on the other)."""
+
+    def __init__(self, mesh_fn, matrix=None, twin=None):
+        self._fn = mesh_fn
+        self.matrix = np.eye(4) if matrix is None else np.asarray(matrix, dtype=np.float64)
+        self._twin = twin
+        self._shells = None
+        self._fits: dict = {}
+
+    def mirrored(self) -> "ShellRef":
+        if self._twin is not None:
+            return self._twin
+        return ShellRef(self._fn, np.diag([-1.0, 1.0, 1.0, 1.0]) @ self.matrix, twin=self)
+
+    def transformed(self, matrix) -> "ShellRef":
+        return ShellRef(self._fn, np.asarray(matrix, dtype=np.float64) @ self.matrix)
+
+    def shells(self):
+        if self._shells is None:
+            mesh = self._fn()
+            if np.allclose(self.matrix, np.eye(4)):
+                self._shells = JC.shells_of(mesh)
+            else:
+                M = self.matrix
+                self._shells = JC.Shells(mesh.vertices @ M[:3, :3].T + M[:3, 3], mesh.faces)
+        return self._shells
+
+    def fit(self, spec: "JunctionSpec"):
+        """``(points, radii)`` of ``spec``'s tube cut down to what lies inside the mesh."""
+        key = spec.digest()
+        if key not in self._fits:
+            if self._twin is not None:
+                pts, rad = self._twin.fit(spec.mirrored())
+                pts = np.asarray(pts) * np.array([-1.0, 1.0, 1.0])
+            else:
+                pts, rad = JC.fit_tube_to_mesh(spec.points, spec.radii, shells=self.shells())
+            self._fits[key] = (pts, rad)
+        return self._fits[key]
+
+
 @dataclass(frozen=True)
 class JunctionSpec:
     """The root of one appendage, as the body's skin sees it.
@@ -251,6 +307,22 @@ class JunctionSpec:
     out of the skin in, which is right unless the appendage is rooted where another part's skin
     is (an extra limb that starts at the original shoulder).
 
+    ``ownership=False`` switches the skeleton off for this spec alone (what ``frame=False`` does for
+    a whole call): the spec moulds the skin of every part, its fillet is not capped by the size of a
+    part and a root thicker than the part is not left out; use it only for a root that straddles
+    parts on purpose. ``silhouette`` bounds how far the spec may push the skin of the part it
+    belongs to OUT of that part (a fraction of the vertex's own distance from the part's axis, at
+    least half the part's radius): ``None`` is the part's default (``PART_SILHOUETTE``: 0.08 for a
+    head, no bound for the others), ``0`` switches the bound off, any other number is the bound.
+
+    ``shell`` (a :class:`ShellRef`, or ``None``): the mesh of the appendage this tube is the first
+    part of. :func:`apply_junctions` cuts a tube that does not lie inside it down to what does
+    (:func:`conform_spec`); the spec itself keeps the tube the kind built. Not part of the value of
+    the spec (not compared, serialised or hashed). ``conform=False`` leaves the tube as the kind
+    built it (a kind that has made sure it lies in its mesh, or whose tube deliberately stands for more
+    than the shell). ``join_guard=False`` exempts the spec from :func:`apply_junctions`' ``drop_worse``
+    (a spec whose mounds are mass on purpose, a skirt or a fold, which the join angle may not judge).
+
     ``tight_gap`` / ``smooth`` override :func:`apply_junctions`' own for this spec alone
     (``None``: the call's; ``tight_gap=0``: this spec does not leave skin that nearly touches
     skin where it is, because the spec holds the cleft itself with a ``keep``; ``smooth=0``: the
@@ -274,6 +346,11 @@ class JunctionSpec:
     owner: str | None = None
     tight_gap: float | None = None
     smooth: int | None = None
+    ownership: bool = True
+    silhouette: float | None = None
+    conform: bool = True
+    join_guard: bool = True
+    shell: object = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         pts = tuple(_vec(p) for p in self.points)
@@ -305,6 +382,14 @@ class JunctionSpec:
                 isinstance(self.smooth, numbers.Integral) and not isinstance(self.smooth, bool)
                 and self.smooth >= 0):
             raise ValueError(f"smooth must be None or an integer >= 0, got {self.smooth!r}")
+        for flag in ("ownership", "conform", "join_guard"):
+            if not isinstance(getattr(self, flag), (bool, np.bool_)):
+                raise ValueError(f"{flag} must be a bool, got {getattr(self, flag)!r}")
+            object.__setattr__(self, flag, bool(getattr(self, flag)))
+        if self.silhouette is not None and not (
+                isinstance(self.silhouette, numbers.Real) and not isinstance(self.silhouette, bool)
+                and math.isfinite(self.silhouette) and self.silhouette >= 0):
+            raise ValueError(f"silhouette must be None or a finite number >= 0, got {self.silhouette!r}")
         if self.sharpness < 1.0:
             raise ValueError("sharpness must be >= 1")
         if self.pull > 1.0:
@@ -347,7 +432,8 @@ class JunctionSpec:
         """The x-mirror image of this spec (the right-hand twin of a left-hand spec)."""
         return replace(self, points=tuple(_mirror_point(p) for p in self.points),
                        mounds=tuple(m.mirrored() for m in self.mounds),
-                       keep=tuple(k.mirrored() for k in self.keep))
+                       keep=tuple(k.mirrored() for k in self.keep),
+                       shell=None if self.shell is None else self.shell.mirrored())
 
     def transformed(self, matrix) -> "JunctionSpec":
         """This spec carried by a 4x4 similarity (rotation x uniform scale + translation)."""
@@ -359,7 +445,8 @@ class JunctionSpec:
             base_radius=None if self.base_radius is None else self.base_radius * s,
             mounds=tuple(m.transformed(M) for m in self.mounds),
             keep=tuple(k.transformed(M) for k in self.keep),
-            max_move=None if self.max_move is None else self.max_move * s)
+            max_move=None if self.max_move is None else self.max_move * s,
+            shell=None if self.shell is None else self.shell.transformed(M))
 
     # -- serialisation ------------------------------------------------------------------
 
@@ -379,6 +466,18 @@ class JunctionSpec:
             d["lead"] = self.lead
         if self.owner is not None:
             d["owner"] = self.owner
+        if self.tight_gap is not None:
+            d["tight_gap"] = self.tight_gap
+        if self.smooth is not None:
+            d["smooth"] = self.smooth
+        if not self.ownership:
+            d["ownership"] = False
+        if not self.conform:
+            d["conform"] = False
+        if not self.join_guard:
+            d["join_guard"] = False
+        if self.silhouette is not None:
+            d["silhouette"] = self.silhouette
         return d
 
     @classmethod
@@ -389,7 +488,9 @@ class JunctionSpec:
                    d.get("pull", 1.0), d.get("strength", 1.0),
                    tuple(Mound.from_dict(m) for m in d.get("mounds", ())),
                    tuple(Keep.from_dict(k) for k in d.get("keep", ())), d.get("max_move"),
-                   d.get("lead", DEFAULT_LEAD), d.get("owner"))
+                   d.get("lead", DEFAULT_LEAD), d.get("owner"), d.get("tight_gap"), d.get("smooth"),
+                   d.get("ownership", True), d.get("silhouette"), d.get("conform", True),
+                   d.get("join_guard", True))
 
     def digest(self) -> str:
         """A content hash (a cache key): equal specs have equal digests."""
@@ -465,7 +566,7 @@ def tube_distance(points, centre, radii, radius: bool = False):
         t = np.clip(((pts - a) @ ab) / max(den, _EPS), 0.0, 1.0)
         c = a + t[:, None] * ab
         r = ra + t * (rb - ra)
-        d = np.linalg.norm(pts - c, axis=1) - r
+        d = _norm(pts - c) - r
         better = d < best
         best = np.where(better, d, best)
         closest = np.where(better[:, None], c, closest)
@@ -489,8 +590,14 @@ def fillet_height(rho, W: float, H: float, k: float):
     return H * (1.0 - np.sqrt(np.maximum(1.0 - x ** k, 0.0)))
 
 
+def _norm(v) -> np.ndarray:
+    """Row lengths of an ``(n, 3)`` array, without ``np.linalg.norm``'s per-call overhead (which is
+    most of its cost on the small arrays of a junction)."""
+    return np.sqrt((v * v).sum(axis=1))
+
+
 def _unit(v):
-    return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), _EPS)
+    return v / np.maximum(_norm(v), _EPS)[:, None]
 
 
 def _smoothstep(u):
@@ -552,7 +659,7 @@ def tube_closest(points, centre, radii):
         t = np.clip(((pts - a) @ ab) / max(den, _EPS), 0.0, 1.0)
         c = a + t[:, None] * ab
         r = ra + t * (rb - ra)
-        dd = np.linalg.norm(pts - c, axis=1) - r
+        dd = _norm(pts - c) - r
         better = dd < best
         best = np.where(better, dd, best)
         closest = np.where(better[:, None], c, closest)
@@ -662,6 +769,67 @@ def _tube_displacement(spec, P, N, inside_margin, W=None, weight=None):
     return out
 
 
+def limit_silhouette(frame, P, d, owner: int, cap: float, protect=None):
+    """``d`` with the outward growth of the part ``owner`` bounded: a skin point may move away from
+    the bone of its part by at most ``cap`` of its distance from the bone (at least ``cap`` half
+    the part's radius: a point on the axis has no distance), the whole displacement of a point
+    that would move more is scaled down (its direction is kept) by a soft clip: growth ``g`` becomes
+    ``g a / (g^4 + a^4)^(1/4)`` with ``a`` the bound, so it never exceeds it and is hardly changed below it. ``protect`` (0..1 per point): how much a point is left alone
+    (the ones hidden in the appendage's own tube: 1 inside it, falling to 0 at its wall, so the bound does
+    not step where the skin comes out of the tube)."""
+    c, dist = frame.bone_closest(P, owner)
+    u = (P - c) / np.maximum(dist, _EPS)[:, None]
+    growth = np.maximum((d * u).sum(axis=1), 0.0)
+    allowed = cap * np.maximum(dist, 0.5 * frame.part_size(owner))
+    # a SOFT clip (growth g becomes g a / (g^4 + a^4)^(1/4): the same as g well below the bound, 0.84 a
+    # at it, a from above): a hard cut would leave a crease in the displacement where it starts to bind,
+    # and the validity pass would back the neighbours off
+    scale = allowed / np.maximum((growth ** 4 + allowed ** 4) ** 0.25, _EPS)
+    if protect is not None:                          # 1: left alone (hidden in the tube), 0: bound; in between: both
+        w = np.asarray(protect, dtype=np.float64)
+        scale = w + (1.0 - w) * scale
+    return d * np.where(growth > 0.0, scale, 1.0)[:, None]
+
+
+def join_angle(cage_v, quads, spec: JunctionSpec, moved_v, patch=None):
+    """``(before, after, patch)``: how steeply the skin meets the wall of the tube of ``spec``,
+    before (``cage_v``) and after (``moved_v``) a displacement, in degrees: over the skin vertices
+    within ``JOIN_BAND`` fillet widths outside the wall of the cage subdivided ONCE (what is rendered
+    and printed; the cage is a quad of 0.28 units where a root is 0.4), the mean angle between the
+    skin normal and the wall's outward normal there: 90 for skin that simply runs into the tube, 0
+    for skin tangent to it (:func:`measure_junction` has the same number for a whole body). The
+    subdivision is that of the patch of the cage around the wall (``patch``: its quad indices, found
+    when ``None`` and handed back), 2 rings out: a tenth of the cost of the whole body, the same
+    numbers. ``None`` for a side where no skin vertex lies in the band."""
+    centre, radii = np.asarray(spec.points), np.asarray(spec.radii)
+    W = spec.fillet_width
+    if patch is None:
+        cols = np.ascontiguousarray(cage_v.T)
+        cand = _candidates(spec, cols)
+        D, _ = tube_distance(cage_v[cand], centre, radii)
+        reg = np.zeros(len(cage_v), dtype=bool)
+        reg[cand[D < JOIN_BAND * W + JOIN_REACH]] = True
+        reg = JC.vertex_ring(quads, JC.vertex_ring(quads, reg))
+        patch = np.nonzero(reg[quads].all(axis=1))[0]
+    pq = quads[patch]
+    used = np.unique(pq)
+    remap = np.full(len(cage_v), -1, dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    (sv0, sv1), sq, exact = JC.subdivide_patch([cage_v[used], moved_v[used]], remap[pq])
+    out = []
+    for sv in (sv0, sv1):
+        d, c = tube_distance(sv, centre, radii)
+        band = (d > 0) & (d < JOIN_BAND * W) & exact
+        if band.sum() < 3:
+            out.append(None)
+            continue
+        nrm = vertex_normals(sv, sq)
+        nu = sv[band] - c[band]
+        nu /= np.maximum(np.linalg.norm(nu, axis=1, keepdims=True), _EPS)
+        out.append(float(np.degrees(np.arccos(np.clip((nu * nrm[band]).sum(axis=1), -1.0, 1.0))).mean()))
+    return out[0], out[1], patch
+
+
 def _mound_displacement(m: Mound, P, N):
     c = np.asarray(m.center)
     if m.end is not None:
@@ -723,6 +891,8 @@ def junction_displacement(spec: JunctionSpec, cage_v, normals, candidates=None, 
     cand = _candidates(spec, np.ascontiguousarray(cage_v.T)) if candidates is None else candidates
     if not len(cand) or not spec.active:
         return cand[:0], np.zeros((0, 3))
+    if not spec.ownership:                    # this spec straddles parts on purpose: no skeleton for it
+        frame = None
     P, N = cage_v[cand], normals[cand]
     d = np.zeros_like(P)
     owner_w = None
@@ -763,6 +933,14 @@ def junction_displacement(spec: JunctionSpec, cage_v, normals, candidates=None, 
         dm = _mound_displacement(m, P, N)
         d += dm if w is None else dm * w[:, None]
     d *= (spec.strength * _keep_weight(spec, P))[:, None]
+    if frame is not None and owner is not None:
+        cap = spec.silhouette if spec.silhouette is not None else PART_SILHOUETTE.get(frame.parts[owner], 0.0)
+        if cap > 0 and (d != 0).any():
+            hidden = None
+            if spec.tube:                       # inside the tube: hidden, left alone; the bound comes in at its wall
+                depth = -tube_distance(P, np.asarray(spec.points), np.asarray(spec.radii))[0]
+                hidden = _smoothstep(depth / max(0.5 * spec.reference_radius, _EPS))
+            d = limit_silhouette(frame, P, d, owner, cap, hidden)
     limit = spec.move_limit()
     mag = np.linalg.norm(d, axis=1)
     over = mag > limit
@@ -928,19 +1106,24 @@ def diffuse_displacement(cage_v, quads, disp, pinned=None, iterations=DIFFUSE_IT
     as the cage has between the wall and the rim instead of being chopped to what the densest
     edge allows. Returns the smoothed displacement (a copy)."""
     d = np.array(disp, dtype=np.float64, copy=True)
-    moved = np.linalg.norm(d, axis=1) > 0
+    moved = (d != 0).any(axis=1)
     if not moved.any() or iterations <= 0:
         return d
     e = JC.cage_edges(quads[_touching(quads, moved)])
-    a = np.concatenate([e[:, 0], e[:, 1]])
-    b = np.concatenate([e[:, 1], e[:, 0]])
-    w = 1.0 / np.maximum(np.linalg.norm(cage_v[a] - cage_v[b], axis=1), 1e-6)
-    n = len(d)
-    free = moved if pinned is None else moved & ~np.asarray(pinned)
+    used = np.unique(e)                                   # work on the patch, not the whole body
+    loc = np.searchsorted(used, e)
+    a = np.concatenate([loc[:, 0], loc[:, 1]])
+    b = np.concatenate([loc[:, 1], loc[:, 0]])
+    pos = cage_v[used]
+    w = 1.0 / np.maximum(_norm(pos[a] - pos[b]), 1e-6)
+    n = len(used)
+    free = moved[used] if pinned is None else (moved & ~np.asarray(pinned))[used]
     wsum = np.maximum(np.bincount(a, weights=w, minlength=n), _EPS)
+    dl = d[used]
     for _ in range(iterations):
-        num = np.stack([np.bincount(a, weights=w * d[b, c], minlength=n) for c in range(3)], axis=1)
-        d[free] = num[free] / wsum[free, None]
+        num = np.stack([np.bincount(a, weights=w * dl[b, c], minlength=n) for c in range(3)], axis=1)
+        dl[free] = num[free] / wsum[free, None]
+    d[used] = dl
     return d
 
 
@@ -952,7 +1135,7 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
                     min_area_ratio=MIN_AREA_RATIO, min_normal_dot=MIN_NORMAL_DOT,
                     max_area_growth=MAX_AREA_GROWTH, max_edge_growth=MAX_EDGE_GROWTH,
                     max_lipschitz=MAX_LIPSCHITZ, intersections=True, smooth=DIFFUSE_ITERATIONS,
-                    tight_gap=TIGHT_GAP, frame=None):
+                    tight_gap=TIGHT_GAP, frame=None, drop_worse=JOIN_WORSE):
     """The body vertices ``verts`` (19,158 x 3, the MORPHED control vertices) with the skin
     moulded around every :class:`JunctionSpec` of ``specs``.
 
@@ -963,7 +1146,11 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
     gives a mirror-symmetric result on a symmetric body), then capped and checked for
     flipped or collapsed quads. Never feed the result back in as ``verts`` (it would
     be a second junction on the first); ``info`` (a dict, optional) receives ``moved``,
-    ``max_move``, ``limited`` (vertices backed off), ``rounds`` and ``specs``.
+    ``max_move``, ``limited`` (vertices backed off), ``rounds``, ``specs``, ``dropped`` (the names
+    of the specs that were left out because they made the join worse, see ``drop_worse``),
+    ``tube_only`` / ``mounds_only`` (the specs that were applied in that form only for that reason),
+    ``conformed`` (the specs whose tube was cut down to its mesh) and ``join`` (``{name: (degrees
+    before, after)}`` of the specs with a tube, as computed first).
 
     S1b keywords (all backward compatible: a call that passes none of them gets the guarded
     behaviour; pass ``None`` / 0 to switch one off): ``max_area_growth`` / ``max_edge_growth``
@@ -975,10 +1162,22 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
     closer than this many units, 0.04, is not moved), ``frame`` (the body's
     :class:`~.bodyframe.BodyFrame`; ``None``: built from ``base``, cached; ``False``: none, so
     no owner protection and no relative sizes). ``min_area_ratio`` / ``min_normal_dot`` as
-    before."""
+    before.
+
+    S6: ``drop_worse`` (degrees, 2; ``None`` switches it off): a junction that makes the join with its
+    root WORSE than no junction at all (:func:`join_angle`, on the cage, over the skin next to
+    the wall, with the displacement as it comes out of the validity pass) is not applied: the guards
+    can leave a displacement that only crumples the skin (smoothing and the cleft hold next to a
+    closed cleft did: the heavy figure's tail joined at 94 degrees before and 102 after). The
+    spec is tried with its tube only (``info["tube_only"]``: its mounds, which are mass and move the
+    skin by the wall too, are left out), then with its mounds only (``info["mounds_only"]``), and a
+    spec that is worse in both forms is left out whole (``info["dropped"]``); a spec with no mounds is
+    left out whole at once. A spec's own check is made on its own displacement as it comes out of the
+    validity pass; the sum of the other specs is not re-checked."""
     specs = [s for s in (specs or ()) if s is not None and s.active]
     if info is not None:
-        info.update(moved=0, max_move=0.0, limited=0, rounds=0, specs=len(specs))
+        info.update(moved=0, max_move=0.0, limited=0, rounds=0, specs=len(specs), dropped=[],
+                    mounds_only=[], tube_only=[], conformed=[], join={})
     if not specs:
         return verts
     if frame is False:
@@ -986,11 +1185,16 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
     elif frame is None:
         frame = frame_or_none(base, verts)
     specs = [resolve_spec(s, frame) for s in specs]
+    conformed = [conform_spec(s) for s in specs]
+    if info is not None:
+        info["conformed"] = [s.name for s, c in zip(specs, conformed) if c is not s]
+    specs = [c for c in conformed if c is not None and c.active]
+    if not specs:
+        return verts
     cage_v, cage_q = base.body_cage(verts)
     normals = smooth_normals(cage_v, cage_q, vertex_normals(cage_v, cage_q), NORMAL_SMOOTHING)
-    total = np.zeros_like(cage_v)
-    limit = 0.0
     cols = np.ascontiguousarray(cage_v.T)
+    cands = [_candidates(spec, cols) for spec in specs]
     gaps = [tight_gap if s.tight_gap is None else s.tight_gap for s in specs]
     tight_ws = {}
     for gap in sorted({g for g in gaps if g and g > 0}):
@@ -998,9 +1202,9 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
         # crosses itself at the slightest move of the cage around it, though the cage does not:
         # the skin within two rings of such a place is left where it is (and fades back in)
         region = np.zeros(len(cage_v), dtype=bool)
-        for spec, g in zip(specs, gaps):
+        for cand, g in zip(cands, gaps):
             if g == gap:
-                region[_candidates(spec, cols)] = True
+                region[cand] = True
         rows = np.nonzero(region)[0]
         tv, tu, _td = facing_pairs(cage_v, cage_q, normals, rows, gap)
         if len(tv):
@@ -1008,39 +1212,118 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
             tight[tv] = True
             tight[tu] = True
             tight_ws[gap] = _smoothstep((JC.ring_distance(cage_q, tight, 4) - 2.0) / 2.0)
-    for spec, gap in zip(specs, gaps):
-        idx, d = junction_displacement(spec, cage_v, normals, _candidates(spec, cols), frame,
-                                       quads=cage_q,
+
+    def weighted(k, spec, idx, d):
+        gap = gaps[k]
+        tight_w = tight_ws.get(gap) if gap else None
+        return d if tight_w is None else d * tight_w[idx][:, None]
+
+    parts = []                               # (spec, indices, displacement, the spec whose join is checked)
+    for k, (spec, cand) in enumerate(zip(specs, cands)):
+        idx, d = junction_displacement(spec, cage_v, normals, cand, frame, quads=cage_q,
                                        smooth=smooth if spec.smooth is None else spec.smooth)
         if len(idx):
-            tight_w = tight_ws.get(gap) if gap else None
-            total[idx] += d if tight_w is None else d * tight_w[idx][:, None]
+            parts.append((spec, idx, weighted(k, spec, idx, d), spec, k))
+
+    def assemble(chosen):
+        total = np.zeros_like(cage_v)
+        limit = 0.0
+        for spec, idx, d, _join, _k in chosen:
+            total[idx] += d
             limit = max(limit, spec.move_limit())
-    mag = np.linalg.norm(total, axis=1)
-    if limit > 0:
-        over = mag > limit
-        if over.any():                                   # two overlapping specs: one cap on the sum
-            total[over] *= (limit / mag[over])[:, None]
+        mag = np.linalg.norm(total, axis=1)
+        if limit > 0:
+            over = mag > limit
+            if over.any():                               # two overlapping specs: one cap on the sum
+                total[over] *= (limit / mag[over])[:, None]
+        return total
+
+    def validity(total, chosen):
+        tubes = [(np.asarray(p[0].points), np.asarray(p[0].radii)) for p in chosen if p[0].tube]
+
+        def hidden(points):                  # inside an appendage's own tube: the slicer's union hides it
+            d = np.full(len(points), np.inf)
+            for c, r in tubes:
+                d = np.minimum(d, tube_distance(points, c, r)[0])
+            return d < 0.0
+
+        return limit_displacement(
+            cage_v, cage_q, total, min_area_ratio, min_normal_dot,
+            max_area_growth=max_area_growth, max_edge_growth=max_edge_growth,
+            max_lipschitz=max_lipschitz, intersections=intersections, benign=hidden)
+
+    def worse(chosen, factor):
+        """The positions in ``chosen`` of the specs with a tube whose join got worse, and every
+        such spec's ``(before, after)``."""
+        bad, seen = [], {}
+        for n, (_spec, idx, d, join_spec, _k) in enumerate(chosen):
+            if not (join_spec.tube and join_spec.fillet_width > 0 and join_spec.join_guard):
+                continue
+            eff = np.zeros_like(cage_v)
+            eff[idx] = d * factor[idx][:, None]
+            before, after, _ = join_angle(cage_v, cage_q, join_spec, cage_v + eff)
+            if before is None or after is None:
+                continue
+            seen[n] = (before, after)
+            if after > before + drop_worse:
+                bad.append(n)
+        return bad, seen
+
+    total = assemble(parts)
     if not (np.linalg.norm(total, axis=1) > 0).any():
         return verts
-    tubes = [(np.asarray(s.points), np.asarray(s.radii)) for s in specs if s.tube]
-
-    def hidden(points):                      # inside an appendage's own tube: the slicer's union hides it
-        d = np.full(len(points), np.inf)
-        for c, r in tubes:
-            d = np.minimum(d, tube_distance(points, c, r)[0])
-        return d < 0.0
-
-    total, factor, rounds = limit_displacement(
-        cage_v, cage_q, total, min_area_ratio, min_normal_dot,
-        max_area_growth=max_area_growth, max_edge_growth=max_edge_growth,
-        max_lipschitz=max_lipschitz, intersections=intersections, benign=hidden)
+    total, factor, rounds = validity(total, parts)
+    joins, dropped, mounds_only, tube_only = {}, [], [], []
+    if drop_worse is not None:
+        bad, seen = worse(parts, factor)
+        joins = {parts[n][3].name: v for n, v in seen.items()}
+        if bad:
+            # The join is the seam of the TUBE with the skin, but a spec's mounds (a sacral rise, a pec
+            # fold) are mass that moves the skin by the wall too: look at which of the two is at fault.
+            # First the spec with its tube only (the seam is what the guard is about), then with its
+            # mounds only; one that is worse in both forms is left out whole.
+            final = [p for n, p in enumerate(parts) if n not in bad]
+            pending = [parts[n] for n in bad]
+            for form in ("tube", "mounds"):
+                trial = []
+                for spec, _i, _d, join_spec, k in pending:
+                    if not spec.mounds:
+                        continue                                  # no other form of it to try
+                    sub = spec.with_(mounds=()) if form == "tube" else spec.with_(points=(), radii=(), base_radius=None)
+                    if not sub.active:
+                        continue
+                    i2, d2 = junction_displacement(sub, cage_v, normals, cands[k], frame, quads=cage_q,
+                                                   smooth=smooth if spec.smooth is None else spec.smooth)
+                    if len(i2):
+                        trial.append((sub, i2, weighted(k, spec, i2, d2), join_spec, k))
+                if not trial:
+                    continue
+                every = final + trial
+                t_total = assemble(every)
+                if not (np.linalg.norm(t_total, axis=1) > 0).any():
+                    continue
+                t_total, t_factor, _r = validity(t_total, every)
+                bad_t, _ = worse(every, t_factor)
+                ok = [p for n, p in enumerate(trial) if len(final) + n not in bad_t]
+                final += ok
+                took = {p[4] for p in ok}
+                (tube_only if form == "tube" else mounds_only).extend(p[3].name for p in ok)
+                pending = [p for p in pending if p[4] not in took]
+            dropped = [p[3].name for p in pending]
+            parts = final
+            total = assemble(parts)
+            if not (np.linalg.norm(total, axis=1) > 0).any():
+                if info is not None:
+                    info.update(dropped=dropped, mounds_only=mounds_only, tube_only=tube_only, join=joins)
+                return verts
+            total, factor, rounds = validity(total, parts)
     out = np.array(verts, dtype=np.float64, copy=True)
     out[base.body_verts_idx] = cage_v + total
     if info is not None:
         mag = np.linalg.norm(total, axis=1)
         info.update(moved=int((mag > 0).sum()), max_move=float(mag.max()),
-                    limited=int((factor < 1.0).sum()), rounds=int(rounds))
+                    limited=int((factor < 1.0).sum()), rounds=int(rounds), dropped=dropped,
+                    mounds_only=mounds_only, tube_only=tube_only, join=joins)
     return out
 
 
@@ -1074,9 +1357,13 @@ def fit_radii_to_mesh(points, radii, vertices, hug: float = HUG, percentile: flo
 
     At each point the mesh vertices within half a segment along the axis are looked at; their
     distance to the axis, at the ``percentile`` (an elliptical or lumpy section: its inscribed
-    radius, not its mean), times ``hug`` is the radius there. Where the mesh has no vertices
-    (the sunk end of a cut limb) the radius of the nearest point that has them is used, scaled
-    like the spec's own radii. Never larger than the given radius. Returns a tuple."""
+    radius, not its mean), times ``hug`` is the radius there. Where the mesh has no vertices at all
+    (the sunk end of a cut limb, a centreline that runs on past the shell) there is no tube: the
+    radius there is a wire (``FIT_FLOOR`` of the given one), not a radius extrapolated from the
+    nearest point that has a mesh, which stood for skin that nothing covers (S1b: all 68 skin vertices
+    the extra upper arms' phantom tube "hid" were outside the arm). Never larger than the given
+    radius. Returns a tuple. (:func:`~.junction_checks.fit_tube_to_mesh`, which the junction
+    applies through ``JunctionSpec.shell``, uses the shell itself.)"""
     pts = np.asarray(points, dtype=np.float64)
     rad = np.asarray(radii, dtype=np.float64)
     V = np.asarray(vertices, dtype=np.float64)
@@ -1096,14 +1383,31 @@ def fit_radii_to_mesh(points, radii, vertices, hug: float = HUG, percentile: flo
         sel = (np.abs(along) <= half) & (perp < reach * max(rad[i], _EPS) + 0.5)
         if sel.sum() >= 6:
             got[i] = float(np.percentile(perp[sel], percentile)) * hug
-    ok = np.isfinite(got)
-    if not ok.any():
-        return tuple(float(r) for r in rad)
-    idx = np.arange(n)
-    for i in np.nonzero(~ok)[0]:                      # no mesh here: the nearest measured one, in proportion
-        j = int(idx[ok][np.abs(idx[ok] - i).argmin()])
-        got[i] = got[j] * rad[i] / max(rad[j], _EPS)
+    got = np.where(np.isfinite(got), got, JC.FIT_FLOOR * rad)      # no mesh here: no tube, a wire
     return tuple(float(r) for r in np.minimum(rad, got))
+
+
+def conform_spec(spec: JunctionSpec) -> JunctionSpec | None:
+    """``spec`` with its tube cut down to what lies inside the mesh it stands for (``spec.shell``,
+    :func:`~.junction_checks.fit_tube_to_mesh`); the spec itself when it has no shell or its tube
+    already fits. The skin that counts as HIDDEN in the tube must really be hidden by the
+    appendage: a centreline point outside the mesh (the sunk end of a cut limb, a limb posed away
+    from the model the spec was measured on) or a radius fatter than the shell tents skin that
+    nothing covers (S1b: 68 of 68 skin vertices of the extra upper arms that the spec called hidden
+    were outside the arm). A tube that is cut keeps its fillet width (``base_radius`` is pinned).
+    ``None`` for a spec with nothing left of its tube and no mounds."""
+    if not spec.tube or spec.shell is None or not spec.conform:
+        return spec
+    try:
+        pts, rad = spec.shell.fit(spec)
+    except (ValueError, IndexError, TypeError):          # the mesh cannot be built: leave the tube
+        return spec
+    if len(pts) == len(spec.points) and np.array_equal(rad, np.asarray(spec.radii)):
+        return spec
+    base = spec.reference_radius
+    if len(pts) < 2:
+        return spec.with_(points=(), radii=(), base_radius=None) if spec.mounds else None
+    return spec.with_(points=tuple(map(tuple, pts)), radii=tuple(float(r) for r in rad), base_radius=base)
 
 
 def rings_for_length(centres, length: float, minimum: int = 3) -> int:
@@ -1140,6 +1444,17 @@ def junction_specs(placed) -> list:
         if spec is not None:
             out.append(spec)
     return out
+
+
+def moulded_cage(base, verts, specs, **kw):
+    """``(vertices, quads)`` of the body cage with the skin moulded around ``specs`` exactly as
+    :func:`apply_junctions` gives it (the same displacement, the same guards and the same validity
+    pass; ``kw`` are its keywords). For a part that is built against the skin the body will really
+    have (a horn's collar and foot), not against a law that the pipeline does not apply."""
+    cage_v, cage_q = base.body_cage(verts)
+    specs = [specs] if isinstance(specs, JunctionSpec) else list(specs or ())
+    out = apply_junctions(base, verts, specs, **kw)
+    return (cage_v if out is verts else base.body_cage(out)[0]), cage_q
 
 
 def shaped_body(base, verts, placed, enabled: bool = True, info: dict | None = None):
@@ -1196,6 +1511,7 @@ def measure_junction(base, verts, shaped, spec: JunctionSpec, levels: int = 1) -
       own curvature varies too, so read the "before" next to the "after".
     """
     from ..core.subdiv import subdivide_quads
+    spec = conform_spec(spec) or spec           # the tube the junction really used
     cage_v0, cage_q = base.body_cage(verts)
     cage_v1, _ = base.body_cage(shaped)
     W = spec.fillet_width
@@ -1265,6 +1581,7 @@ def junction_quality(base, verts, shaped, specs=None, levels=(), frame=None,
 
     :func:`quality_violations` turns it into a list of broken bounds."""
     from ..core.subdiv import subdivide_quads
+    specs = [c for c in (conform_spec(sp) for sp in (specs or ()) if sp is not None) if c is not None]
     cage_v0, cage_q = base.body_cage(verts)
     cage_v1, _ = base.body_cage(shaped)
     out = JC.stretch_report(cage_v0, cage_v1, cage_q)
@@ -1277,8 +1594,7 @@ def junction_quality(base, verts, shaped, specs=None, levels=(), frame=None,
                               < MIN_NORMAL_DOT).sum())
     else:
         out["flipped"] = 0
-    tubes = [(np.asarray(sp.points), np.asarray(sp.radii)) for sp in (specs or ()) if sp is not None
-             and sp.tube]
+    tubes = [(np.asarray(sp.points), np.asarray(sp.radii)) for sp in specs if sp.tube]
 
     def hidden(points):
         d = np.full(len(points), np.inf)

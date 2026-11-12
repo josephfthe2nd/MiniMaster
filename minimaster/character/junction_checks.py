@@ -336,3 +336,443 @@ def stretch_report(old, new, quads, edges=None) -> dict:
     lip = np.linalg.norm(d[e[:, 0]] - d[e[:, 1]], axis=1) / np.maximum(l0, _EPS)
     out["lipschitz_max"], out["lipschitz_p99"] = float(lip.max()), float(np.percentile(lip, 99))
     return out
+
+
+# --------------------------------------------------------------------------
+# a tube against the closed shell(s) it stands for
+
+
+def _rotation(a: float, b: float, c: float) -> np.ndarray:
+    ca, sa, cb, sb, cc, sc = np.cos(a), np.sin(a), np.cos(b), np.sin(b), np.cos(c), np.sin(c)
+    rz = np.array([[ca, -sa, 0], [sa, ca, 0], [0, 0, 1.0]])
+    ry = np.array([[cb, 0, sb], [0, 1.0, 0], [-sb, 0, cb]])
+    rx = np.array([[1.0, 0, 0], [0, cc, -sc], [0, sc, cc]])
+    return rz @ ry @ rx
+
+
+# three rays in directions no mesh is aligned with (a loft's rings are planar and axis-aligned
+# meshes are common: a ray along an axis grazes edges); the majority vote is the answer
+_RAY_ROTATIONS = (_rotation(0.6180339, 1.3247179, 2.2360679), _rotation(2.7182818, 0.5772156, 1.4142135),
+                  _rotation(1.6180339, 2.5029078, 0.3010299))
+
+
+def face_components(faces, n_vertices: int | None = None) -> np.ndarray:
+    """The connected shell (by shared vertices) each triangle belongs to: ``(m,)`` labels. An
+    appendage is several closed shells that overlap each other (a wing: the arm, the membrane, the
+    bones), so \"inside the mesh\" is inside any one of them, never the parity of all."""
+    F = np.asarray(faces)
+    if not len(F):
+        return np.zeros(0, dtype=np.int64)
+    n = int(F.max()) + 1 if n_vertices is None else int(n_vertices)
+    lab = np.arange(n)
+    a = np.concatenate([F[:, 0], F[:, 1], F[:, 2]])
+    b = np.concatenate([F[:, 1], F[:, 2], F[:, 0]])
+    while True:
+        m = np.minimum(lab[a], lab[b])
+        new = lab.copy()
+        np.minimum.at(new, a, m)
+        np.minimum.at(new, b, m)
+        new = new[new]                                    # pointer jumping: log(diameter) rounds
+        if np.array_equal(new, lab):
+            break
+        lab = new
+    return lab[F[:, 0]]
+
+
+def _inside_one_shell(P0, V0, F):
+    votes = np.zeros(len(P0), dtype=np.int64)
+    for R in _RAY_ROTATIONS:
+        P = P0 @ R.T
+        T = (V0 @ R.T)[F]                                       # (m, 3, 3)
+        lo, hi = T.min(axis=1), T.max(axis=1)
+        a, b, c = T[:, 0], T[:, 1], T[:, 2]
+        e1, e2 = b - a, c - a
+        det = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]         # twice the signed xy area
+        ok = np.abs(det) > 1e-14
+        parity = np.zeros(len(P), dtype=np.int64)
+        for s in range(0, len(P), 48):
+            Ps = P[s:s + 48]
+            cand = ((Ps[:, None, 0] >= lo[None, :, 0]) & (Ps[:, None, 0] <= hi[None, :, 0])
+                    & (Ps[:, None, 1] >= lo[None, :, 1]) & (Ps[:, None, 1] <= hi[None, :, 1])
+                    & (Ps[:, None, 2] < hi[None, :, 2]) & ok[None, :])
+            i, j = np.nonzero(cand)
+            if not len(i):
+                continue
+            rel = Ps[i, :2] - a[j, :2]
+            u = (rel[:, 0] * e2[j, 1] - rel[:, 1] * e2[j, 0]) / det[j]
+            v = (e1[j, 0] * rel[:, 1] - e1[j, 1] * rel[:, 0]) / det[j]
+            z = a[j, 2] + u * e1[j, 2] + v * e2[j, 2]
+            hit = (u >= 0) & (v >= 0) & (u + v < 1.0) & (z > Ps[i, 2])
+            parity += np.bincount(s + i[hit], minlength=len(P))
+        votes += (parity % 2).astype(np.int64)
+    return votes >= 2
+
+
+class Shells:
+    """The closed shells of a triangle mesh (an appendage is several that overlap: a wing has the
+    arm, the membrane, the finger bones, ...), with their boxes: \"inside the mesh\" is inside ANY
+    shell, never the parity of all of them. Built once per mesh (:func:`face_components` and a
+    box per shell), then asked :meth:`inside` / :meth:`clearance` for as many points as needed; a
+    shell whose box does not hold a point is not looked at for it, so the cost follows the points'
+    neighbourhood and not the mesh."""
+
+    def __init__(self, vertices, faces, components=None):
+        self.V = np.asarray(vertices, dtype=np.float64)
+        F = np.asarray(faces)
+        lab = face_components(F, len(self.V)) if components is None else np.asarray(components)
+        order = np.argsort(lab, kind="stable")
+        ls = lab[order]
+        self.starts = np.nonzero(np.concatenate([[True], ls[1:] != ls[:-1]]))[0] if len(ls) else np.zeros(0, int)
+        self.stops = np.concatenate([self.starts[1:], [len(ls)]]) if len(ls) else np.zeros(0, int)
+        self.F = F[order]
+        if len(self.F):
+            T = self.V[self.F]
+            self.lo = np.minimum.reduceat(T.min(axis=1), self.starts)
+            self.hi = np.maximum.reduceat(T.max(axis=1), self.starts)
+        else:
+            self.lo = self.hi = np.zeros((0, 3))
+
+    def __len__(self):
+        return len(self.starts)
+
+    def faces(self, k):
+        return self.F[self.starts[k]:self.stops[k]]
+
+    def near(self, P, pad: float = 0.0):
+        """The shells whose box (grown by ``pad``) holds at least one of the points ``P``."""
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        if not len(P) or not len(self):
+            return []
+        hit = ((P[:, None, :] >= self.lo[None] - pad) & (P[:, None, :] <= self.hi[None] + pad)).all(axis=2)
+        return [int(k) for k in np.nonzero(hit.any(axis=0))[0]]
+
+    def inside(self, P) -> np.ndarray:
+        """Which of the points lie inside ANY shell (ray parity along three oblique directions, the
+        majority wins; a point exactly on a surface is either)."""
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        out = np.zeros(len(P), dtype=bool)
+        for k in self.near(P):
+            sel = np.nonzero(~out & np.all((P >= self.lo[k]) & (P <= self.hi[k]), axis=1))[0]
+            if len(sel):
+                out[sel] = _inside_one_shell(P[sel], self.V, self.faces(k))
+        return out
+
+    def clearance(self, P, reach: float = 1.0) -> np.ndarray:
+        """For each point, the radius of the largest ball around it that lies inside one shell
+        (``0`` for a point inside none), up to ``reach``: the distance to that shell's surface."""
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        out = np.zeros(len(P))
+        for k in self.near(P, reach):
+            sel = np.nonzero(np.all((P >= self.lo[k]) & (P <= self.hi[k]), axis=1))[0]
+            if not len(sel):
+                continue
+            ins = _inside_one_shell(P[sel], self.V, self.faces(k))
+            if ins.any():
+                d = distance_to_mesh(P[sel[ins]], self.V, self.faces(k), reach)
+                out[sel[ins]] = np.maximum(out[sel[ins]], d)
+        return out
+
+    def section_radius(self, P, T, reach: float = 1.0) -> np.ndarray:
+        """For each point ``P[k]`` and unit direction ``T[k]``, the radius of the largest circle
+        around the point in the plane perpendicular to ``T[k]`` that lies inside one shell (``0`` for
+        a point inside none), up to ``reach``: the distance from the point to the curve in which the
+        plane cuts that shell. Unlike :meth:`clearance` it does not mind a cap of the shell that
+        lies within a radius along the direction: a tube's section needs room across it, and its
+        end ball may stand a little out of the shell, where nothing but the shell's own end is."""
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        T = np.asarray(T, dtype=np.float64).reshape(-1, 3)
+        out = np.zeros(len(P))
+        for k in self.near(P, reach):
+            F = self.faces(k)
+            sel = np.nonzero(np.all((P >= self.lo[k]) & (P <= self.hi[k]), axis=1))[0]
+            if not len(sel):
+                continue
+            ins = _inside_one_shell(P[sel], self.V, F)
+            tri = self.V[F]
+            for m in sel[ins]:
+                p, t = P[m], T[m]
+                near = np.all((tri.max(axis=1) >= p - reach) & (tri.min(axis=1) <= p + reach), axis=1)
+                tt = tri[near]
+                sd = (tt - p) @ t                                   # signed distance of each corner
+                pos = sd > 0.0                                      # (a corner on the plane counts as below)
+                cross = pos.any(axis=1) & ~pos.all(axis=1)
+                tt, sd, pos = tt[cross], sd[cross], pos[cross]
+                if not len(tt):
+                    continue
+                # the plane cuts two of the triangle's three edges: the segment between those points
+                pts = []
+                for i, j in ((0, 1), (1, 2), (2, 0)):
+                    hit = pos[:, i] != pos[:, j]
+                    u = sd[:, i] / np.where(hit, sd[:, i] - sd[:, j], 1.0)
+                    pts.append((hit, tt[:, i] + u[:, None] * (tt[:, j] - tt[:, i])))
+                (h0, p0), (h1, p1), (h2, p2) = pts
+                A = np.where(h0[:, None], p0, p1)
+                B = np.where((h0 & h1)[:, None], p1, p2)
+                ab = B - A
+                w = np.clip(((p - A) * ab).sum(axis=1) / np.maximum((ab * ab).sum(axis=1), _EPS), 0.0, 1.0)
+                d = np.linalg.norm(p - (A + w[:, None] * ab), axis=1)
+                out[m] = max(out[m], min(float(d.min()), reach))
+        return out
+
+
+_SHELLS_CACHE: list = []
+
+
+def shells_of(mesh) -> "Shells":
+    """The :class:`Shells` of a :class:`~minimaster.core.mesh.Mesh`, kept for the last few meshes
+    (an appendage's static mesh is asked about again and again; the key is the identity of its
+    arrays, which are held so that an id cannot be reused while the entry lives)."""
+    v, f = mesh.vertices, mesh.faces
+    with _LOCK:
+        for entry in _SHELLS_CACHE:
+            if entry[0] is v and entry[1] is f:
+                return entry[2]
+    sh = Shells(v, f)
+    with _LOCK:
+        _SHELLS_CACHE.append((v, f, sh))
+        del _SHELLS_CACHE[:-4]
+    return sh
+
+
+
+def points_in_mesh(points, vertices, faces, components=None) -> np.ndarray:
+    """Which of ``points`` lie inside the closed triangle mesh (inside any of its shells:
+    :class:`Shells`)."""
+    return Shells(vertices, faces, components).inside(points)
+
+
+def _closest_on_triangles(p, a, b, c) -> np.ndarray:
+    """Distance from each point ``p[k]`` to its own triangle ``(a[k], b[k], c[k])`` (Ericson,
+    Real-Time Collision Detection 5.1.5), vectorised over rows."""
+    ab, ac, ap = b - a, c - a, p - a
+    d1, d2 = (ab * ap).sum(1), (ac * ap).sum(1)
+    bp = p - b
+    d3, d4 = (ab * bp).sum(1), (ac * bp).sum(1)
+    cp = p - c
+    d5, d6 = (ab * cp).sum(1), (ac * cp).sum(1)
+    out = np.empty_like(p)
+    done = np.zeros(len(p), dtype=bool)
+
+    def put(mask, q):
+        m = mask & ~done
+        out[m] = q[m]
+        done[m] = True
+
+    put((d1 <= 0) & (d2 <= 0), a)
+    put((d3 >= 0) & (d4 <= d3), b)
+    vc = d1 * d4 - d3 * d2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        v = d1 / (d1 - d3)
+        put((vc <= 0) & (d1 >= 0) & (d3 <= 0), a + v[:, None] * ab)
+        put((d6 >= 0) & (d5 <= d6), c)
+        vb = d5 * d2 - d1 * d6
+        w = d2 / (d2 - d6)
+        put((vb <= 0) & (d2 >= 0) & (d6 <= 0), a + w[:, None] * ac)
+        va = d3 * d6 - d5 * d4
+        w2 = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        put((va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0), b + w2[:, None] * (c - b))
+        den = va + vb + vc
+        vv, ww = vb / den, vc / den
+        put(np.ones(len(p), dtype=bool), a + ab * vv[:, None] + ac * ww[:, None])
+    return np.linalg.norm(p - out, axis=1)
+
+
+def distance_to_mesh(points, vertices, faces, reach: float = 1.0) -> np.ndarray:
+    """The distance of each of ``points`` to the surface of the triangle mesh, up to ``reach``
+    (``reach`` where nothing is nearer): only triangles whose box, grown by ``reach``, holds the
+    point are measured, so the cost follows the points' neighbourhoods and not the mesh."""
+    P = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    V = np.asarray(vertices, dtype=np.float64)
+    T = V[np.asarray(faces)]
+    lo, hi = T.min(axis=1) - reach, T.max(axis=1) + reach
+    out = np.full(len(P), float(reach))
+    for s in range(0, len(P), 64):
+        Ps = P[s:s + 64]
+        cand = np.all((Ps[:, None, :] >= lo[None]) & (Ps[:, None, :] <= hi[None]), axis=2)
+        i, j = np.nonzero(cand)
+        if not len(i):
+            continue
+        d = _closest_on_triangles(Ps[i], T[j, 0], T[j, 1], T[j, 2])
+        best = np.full(len(Ps), float(reach))
+        np.minimum.at(best, i, d)
+        out[s:s + 64] = best
+    return out
+
+
+def tube_stations(points, radii, per_segment: int = 2):
+    """The stations along a tube's centreline where it is looked at: every point of the
+    polyline and ``per_segment - 1`` between each pair: ``(centres, radii, tangents, owners)``,
+    ``owners`` a ``(stations, points)`` boolean matrix saying which polyline points a station
+    depends on (a point's own station: that point; a station between two: both)."""
+    pts = np.asarray(points, dtype=np.float64)
+    rad = np.asarray(radii, dtype=np.float64)
+    n = len(pts)
+    tang = np.empty_like(pts)
+    tang[1:-1] = pts[2:] - pts[:-2]
+    tang[0], tang[-1] = pts[1] - pts[0], pts[-1] - pts[-2]
+    tang /= np.maximum(np.linalg.norm(tang, axis=1, keepdims=True), _EPS)
+    k = np.concatenate([(np.arange(n - 1)[:, None] + (np.arange(per_segment) / per_segment)[None, :]).ravel(),
+                        [n - 1.0]])
+    i0 = np.minimum(np.floor(k + 1e-9).astype(int), n - 2)
+    f = (k - i0)[:, None]
+    centres = pts[i0] + f * (pts[i0 + 1] - pts[i0])
+    radius = rad[i0] + f[:, 0] * (rad[i0 + 1] - rad[i0])
+    tangent = tang[i0] + f * (tang[i0 + 1] - tang[i0])
+    tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), _EPS)
+    owners = np.zeros((len(k), n), dtype=bool)
+    rows = np.arange(len(k))
+    owners[rows, i0] = f[:, 0] < 1.0 - 1e-9
+    owners[rows, i0 + 1] = f[:, 0] > 1e-9
+    owners[-1, :] = False
+    owners[-1, n - 1] = True
+    return centres, radius, tangent, owners
+
+
+def _ring_basis(tangent):
+    ref = np.where(np.abs(tangent[:, :1]) < 0.9, np.array([[1.0, 0.0, 0.0]]), np.array([[0.0, 1.0, 0.0]]))
+    u = np.cross(tangent, ref)
+    u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), _EPS)
+    return u, np.cross(tangent, u)
+
+
+def tube_ring_samples(centres, radius, tangent, sides: int = 12) -> np.ndarray:
+    """``(stations, sides, 3)``: points on the tube's surface, a ring perpendicular to the
+    centreline at every station."""
+    u, w = _ring_basis(tangent)
+    ang = (np.arange(sides) + 0.5) * (2.0 * np.pi / sides)
+    return (centres[:, None, :] + radius[:, None, None]
+            * (np.cos(ang)[None, :, None] * u[:, None, :] + np.sin(ang)[None, :, None] * w[:, None, :]))
+
+
+def tube_in_mesh(points, radii, vertices=None, faces=None, sides: int = 12, per_segment: int = 2,
+                 shells=None) -> dict:
+    """How much of a tube (a polyline with a radius at each point, :class:`~.junction.JunctionSpec`)
+    lies inside the closed mesh it stands for: the skin that "is hidden in the tube" must really be
+    hidden by the appendage, and the slicer's union only hides what is inside it.
+
+    A ring of ``sides`` points on the tube's surface is tested at every station
+    (:func:`tube_stations`). Returns ``inside`` (the fraction of the ring samples at each station that
+    are inside the mesh, ``(stations,)``), ``centre`` (is the station's centre itself inside),
+    ``owners`` (see :func:`tube_stations`), ``fraction`` (the mean of ``inside``), ``worst`` (the
+    smallest) and ``max_outside`` (how far the ring sample that is farthest out of the mesh is from
+    its surface: 0 for a tube inside it)."""
+    sh = Shells(vertices, faces) if shells is None else shells
+    centres, radius, tangent, owners = tube_stations(points, radii, per_segment)
+    ring = tube_ring_samples(centres, radius, tangent, sides)
+    flat = np.concatenate([ring.reshape(-1, 3), centres])
+    ins = sh.inside(flat)
+    k = len(centres)
+    frac = ins[:k * sides].reshape(k, sides).mean(axis=1)
+    out_pts = flat[:k * sides][~ins[:k * sides]]
+    depth = float(distance_to_mesh(out_pts, sh.V, sh.F, reach=float(np.max(radii))).max()) if len(out_pts) else 0.0
+    return {"inside": frac, "centre": ins[k * sides:], "owners": owners,
+            "fraction": float(frac.mean()), "worst": float(frac.min()), "max_outside": depth}
+
+
+FIT_HUG = 0.98             # the fitted radius is this fraction of the room the mesh leaves
+FIT_SLACK = 1.06           # a tube is left alone where it is no fatter than this times the room
+FIT_MIN = 0.2              # an end point with less than this fraction of its radius to spare is no tube
+FIT_FLOOR = 0.02           # ... and a point in the middle keeps at least this fraction (a wire, not a hole)
+
+
+def fit_tube_to_mesh(points, radii, vertices=None, faces=None, shells=None):
+    """``(points, radii)`` of the tube cut down to what really lies inside the closed mesh it
+    stands for. The radius at a station is at most the room across the mesh there
+    (:meth:`Shells.section_radius`: the circle in the plane perpendicular to the centreline that
+    lies inside the shell, times ``FIT_HUG``); a point whose centre is not inside the mesh, or that
+    has less than ``FIT_MIN`` of its radius to spare, is DROPPED when it is at an end of the
+    polyline (the sunk end of a cut limb that has no mesh: a tube cannot be hidden by a shell that
+    is not there) and given ``FIT_FLOOR`` of its radius when it is in the middle. A tube that already
+    fits (within ``FIT_SLACK``) comes back exactly as it was."""
+    pts = np.asarray(points, dtype=np.float64)
+    rad = np.asarray(radii, dtype=np.float64)
+    n = len(pts)
+    sh = Shells(vertices, faces) if shells is None else shells
+    reach = 1.5 * float(rad.max())
+    tang = np.empty_like(pts)
+    tang[1:-1] = pts[2:] - pts[:-2]
+    tang[0], tang[-1] = pts[1] - pts[0], pts[-1] - pts[-2]
+    tang /= np.maximum(np.linalg.norm(tang, axis=1, keepdims=True), _EPS)
+    mid = 0.5 * (pts[1:] + pts[:-1])
+    mt = pts[1:] - pts[:-1]
+    mt /= np.maximum(np.linalg.norm(mt, axis=1, keepdims=True), _EPS)
+    room = sh.section_radius(np.concatenate([pts, mid]), np.concatenate([tang, mt]), reach)
+    at, between = room[:n], room[n:]
+    allow = np.minimum(rad, FIT_HUG * at)
+    # the ends first: a point whose centre is outside the shell or that has no room is not part of the
+    # tube, and the segment to it (half of it is outside) must not squeeze the points that are
+    keep = np.ones(n, dtype=bool)
+    lo, hi = 0, n - 1
+    while lo < hi and (at[lo] <= 0 or allow[lo] < FIT_MIN * rad[lo]):
+        keep[lo] = False
+        lo += 1
+    while hi > lo and (at[hi] <= 0 or allow[hi] < FIT_MIN * rad[hi]):
+        keep[hi] = False
+        hi -= 1
+    # then the ball half-way between two points (the mean of their radii) must fit too
+    scale = np.ones(n)
+    if hi > lo:
+        r_mid = 0.5 * (allow[lo + 1:hi + 1] + allow[lo:hi])
+        squeeze = np.minimum(1.0, FIT_HUG * between[lo:hi] / np.maximum(r_mid, 1e-12))
+        np.minimum(scale[lo + 1:hi + 1], squeeze, out=scale[lo + 1:hi + 1])
+        np.minimum(scale[lo:hi], squeeze, out=scale[lo:hi])
+    allow = allow * scale
+    if keep.all() and (rad <= FIT_SLACK * np.maximum(allow, 0.0)).all() and (at > 0).all():
+        return pts, rad
+    out = np.maximum(allow, FIT_FLOOR * rad)
+    return pts[keep], np.minimum(rad, out)[keep]
+
+
+# --------------------------------------------------------------------------
+# a patch of the cage, subdivided on its own
+
+
+def subdivide_patch(verts, quads) -> tuple:
+    """One Catmull-Clark level of an OPEN patch of a cage (``core.subdiv`` wants a closed one):
+    ``(vertices, quads, exact)``, laid out like ``core.subdiv`` (the moved originals, the face points,
+    the edge points). A vertex or edge of the patch's rim does not have its whole neighbourhood, so
+    the vertex stays where it is and the edge point is the midpoint: ``exact`` is a bool mask of the
+    new vertices that are what the subdivision of the whole body gives (the rest is the rim; look
+    only at what lies a ring or more inside). ``verts`` may be a LIST of vertex arrays (the same
+    patch moved in different ways): the topology is worked out once and ``vertices`` is then a
+    list too."""
+    many = isinstance(verts, (list, tuple))
+    vs = [np.asarray(v, dtype=np.float64) for v in (verts if many else [verts])]
+    F = np.asarray(quads)
+    V, nf = len(vs[0]), len(F)
+    a, b = F, np.roll(F, -1, axis=1)
+    und = np.sort(np.stack([a.ravel(), b.ravel()], axis=1), axis=1)
+    key = und[:, 0].astype(np.int64) * V + und[:, 1]
+    ukey, first, inv = np.unique(key, return_index=True, return_inverse=True)
+    uniq = und[first]
+    inv = inv.ravel()
+    E = len(uniq)
+    ecnt = np.bincount(inv, minlength=E)
+    interior_e = ecnt == 2
+    flat = F.ravel()
+    Qc = np.maximum(np.bincount(flat, minlength=V).astype(float), 1.0)
+    Rc = (np.bincount(uniq[:, 0], minlength=V) + np.bincount(uniq[:, 1], minlength=V)).astype(float)
+    rim_v = np.zeros(V, dtype=bool)
+    rim_v[uniq[~interior_e].ravel()] = True
+    n = np.maximum(Rc, 1.0)
+    face_of = np.repeat(np.arange(nf), 4)
+    outs = []
+    for verts in vs:
+        fp = verts[F].mean(axis=1)
+        efp = np.stack([np.bincount(inv, weights=fp[face_of, c], minlength=E) for c in range(3)], axis=1)
+        mid = (verts[uniq[:, 0]] + verts[uniq[:, 1]]) / 2.0
+        epts = np.where(interior_e[:, None], (verts[uniq[:, 0]] + verts[uniq[:, 1]] + efp) / 4.0, mid)
+        Qs = np.stack([np.bincount(flat, weights=np.repeat(fp[:, c], 4), minlength=V) for c in range(3)], axis=1)
+        Rs = np.stack([np.bincount(uniq[:, 0], weights=mid[:, c], minlength=V)
+                       + np.bincount(uniq[:, 1], weights=mid[:, c], minlength=V) for c in range(3)], axis=1)
+        vpts = (Qs / Qc[:, None] + 2.0 * (Rs / n[:, None]) + (n - 3.0)[:, None] * verts) / n[:, None]
+        outs.append(np.vstack([np.where(rim_v[:, None], verts, vpts), fp, epts]))
+    eoff, foff = V + nf, V
+    edge_id = inv.reshape(nf, 4)
+    fcenter = foff + np.arange(nf)
+    out = np.concatenate([np.stack([F[:, i], eoff + edge_id[:, i], fcenter, eoff + edge_id[:, (i - 1) % 4]], axis=1)
+                          for i in range(4)]).astype(np.int64)
+    exact = np.ones(len(outs[0]), dtype=bool)
+    exact[:V] = ~rim_v
+    exact[eoff:] = interior_e
+    return (outs if many else outs[0]), out, exact

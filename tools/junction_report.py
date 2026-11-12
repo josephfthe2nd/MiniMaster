@@ -6,7 +6,8 @@
 For every kind x body it builds the appendage, shapes the skin around it
 (``junction.shaped_body``) and prints, on the cage and on the Catmull-Clark subdivided body:
 
-* cost (ms) and how many vertices moved / how far / how many were backed off;
+* cost (ms: ``cold`` the first call, which cuts the tubes to their meshes and builds the skeleton, ``warm``
+  the best of five) and how many vertices moved / how far / how many were backed off;
 * the smallest quad area ratio and the number of flipped quads on the cage;
 * ``join``: the mean angle between the skin and the tube wall where they meet, before -> after
   (90 = the skin runs into the tube, 0 = it is tangent to it);
@@ -17,6 +18,10 @@ For every kind x body it builds the appendage, shapes the skin around it
   growth of a cage quad's area, the largest difference of two neighbours' displacements per edge
   length, and the new crossings of the skin with itself outside the appendage's own tube (cage /
   body subdivided once / twice);
+* S6: ``cut`` (the specs whose tube was cut down to its mesh), ``out`` (how far the tube the junction
+  used still sticks out of the mesh it stands for, units: 0 for a tube inside it), ``guard`` (the specs
+  the join guard left out whole ``X``, applied with their tube only ``T`` or their mounds only ``M``)
+  and ``head`` (the largest widening of the head's visible skin at six heights, for a head-owned spec);
 * ``weld``: the share of the appendage's volume inside the body, before -> after (the printability
   report's root-weld number), and the print report's blocking findings.
 
@@ -29,10 +34,14 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+from minimaster.character import bodyframe as BF  # noqa: E402
 from minimaster.character import junction as J  # noqa: E402
+from minimaster.character import junction_checks as JC  # noqa: E402
 from minimaster.character import kinds, print_report, printprep  # noqa: E402
 from minimaster.character import mhbase as mh  # noqa: E402
 from minimaster.character.sliders import Character  # noqa: E402
@@ -43,7 +52,10 @@ BODIES = {
     "short": {"gender": 1.0, "muscle": 0.55, "height": 0.0},
     "child": {"age": 0.1875},
     "heavy": {"weight": 1.0, "gender": 1.0, "muscle": 1.0},
+    "slim_f": {"gender": 0.0, "weight": 0.0},
+    "old_m": {"gender": 1.0, "age": 1.0, "muscle": 0.3},
 }
+DEFAULT_BODIES = ("neutral", "tall", "short", "child", "heavy")
 KINDS = {
     "tail": "tail",
     "horn": "horn",
@@ -51,6 +63,8 @@ KINDS = {
     "angel": "wing:style=feathered",
     "upper_arms": "harvest:preset=upper_arms",
     "lower_arms": "harvest:preset=lower_arms",
+    "extra_legs": "harvest:preset=extra_legs",
+    "ram": "horn:shape=ram",
 }
 
 
@@ -74,7 +88,7 @@ def weld(base, lib, verts, shaped, placed, size="medium"):
 
 
 def main(argv) -> int:
-    bodies, levels, kind_names = list(BODIES), [1, 2], list(KINDS)
+    bodies, levels, kind_names = list(DEFAULT_BODIES), [1, 2], list(KINDS)
     i = 0
     while i < len(argv):
         if argv[i] == "--bodies":
@@ -90,11 +104,11 @@ def main(argv) -> int:
             print(__doc__)
             return 2
     base, lib = mh.load()
-    print(f"{'kind':11s}{'body':8s}{'ms':>6s}{'moved':>6s}{'maxmv':>6s}{'lim':>4s}{'minA':>6s}"
+    print(f"{'kind':11s}{'body':8s}{'cold':>6s}{'warm':>6s}{'moved':>6s}{'maxmv':>6s}{'lim':>4s}{'minA':>6s}"
           f"{'flip':>5s}{'join b->a':>12s}", end="")
     for lv in levels:
         print(f"{'  L%d dih95 b->a  inc99' % lv:>28s}", end="")
-    print(f"{'  curv b->a':>14s}{'  grow':>6s}{'  lip':>5s}{'  xnew c/1/2':>12s}{'  weld b->a':>14s}  blocking")
+    print(f"{'  curv b->a':>14s}{'  grow':>6s}{'  lip':>5s}{'  xnew c/1/2':>12s}{'  cut':>5s}{'  out':>6s}{'  guard':>8s}{'  head':>6s}{'  weld b->a':>14s}  blocking")
     for kn in kind_names:
         for bn in bodies:
             c = Character()
@@ -106,12 +120,12 @@ def main(argv) -> int:
             specs = J.junction_specs(placed)
             info: dict = {}
             t = []
-            for _ in range(5):
+            for _ in range(6):
                 t0 = time.perf_counter()
                 shaped = J.apply_junctions(base, verts, specs, info)
                 t.append((time.perf_counter() - t0) * 1000)
             m = J.measure_junction(base, verts, shaped, specs[0], levels=1)
-            line = (f"{kn:11s}{bn:8s}{min(t):6.1f}{info['moved']:6d}{info['max_move']:6.2f}"
+            line = (f"{kn:11s}{bn:8s}{t[0]:6.0f}{min(t[1:]):6.1f}{info['moved']:6d}{info['max_move']:6.2f}"
                     f"{info['limited']:4d}{m['min_area_ratio']:6.2f}{m['flipped']:5d}"
                     f"{m.get('join_angle_deg_before', 0):7.0f}->{m.get('join_angle_deg_after', 0):<3.0f}")
             for lv in levels:
@@ -123,6 +137,26 @@ def main(argv) -> int:
             qy = J.junction_quality(base, verts, shaped, specs, levels=(1, 2))
             line += (f"  {qy['area_growth_max']:5.2f}  {qy['lipschitz_max']:4.2f}"
                      f"  {qy['selfx_new_visible']:2d}/{qy['L1_selfx_new_visible']:2d}/{qy['L2_selfx_new_visible']:2d}")
+            outside = 0.0
+            for p, sp in zip(placed, [x for x in (J.conform_spec(q.junction()) for q in placed) if x is not None]):
+                m_ = p.mesh()
+                if sp.tube:
+                    outside = max(outside, JC.tube_in_mesh(sp.points, sp.radii, m_.vertices, m_.faces)["max_outside"])
+            guard = "".join(["X" * len(info["dropped"]), "T" * len(info["tube_only"]), "M" * len(info["mounds_only"])]) or "-"
+            line += f"  {len(info['conformed']):3d}  {outside:6.3f}  {guard:>6s}"
+            frame = BF.frame_or_none(base, verts)
+            head = ""
+            if frame is not None and any(sp.owner == "head" for sp in specs):
+                keep = frame.part_scores(base.body_cage(verts)[0]).argmin(axis=1) == frame.parts.index("head")
+                for p in placed:
+                    keep &= ~JC.points_in_mesh(base.body_cage(shaped)[0], p.mesh().vertices, p.mesh().faces)
+                h0, h1 = base.body_cage(verts)[0][keep], base.body_cage(shaped)[0][keep]
+                top, ht, worst = h0[:, 1].max(), float(np.ptp(h0[:, 1])), 0.0
+                for frac in (0.05, 0.10, 0.15, 0.20, 0.30, 0.50):
+                    sl = abs(h0[:, 1] - (top - frac * ht)) < 0.03 * ht
+                    worst = max(worst, float(abs(h1[sl][:, 0]).max() / abs(h0[sl][:, 0]).max() - 1.0))
+                head = f"{100 * worst:4.1f}%"
+            line += f"  {head:>5s}"
             try:
                 rb, ra = weld(base, lib, verts, shaped, placed)
                 gb = max(g.root_embed for g in rb.groups.values())

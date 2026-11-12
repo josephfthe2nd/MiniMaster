@@ -347,7 +347,15 @@ class Placed:
         if key not in self._junctions:
             if len(self._junctions) >= 24:               # a pose drag asks for a new one per frame
                 self._junctions.pop(next(iter(self._junctions)))
-            self._junctions[key] = self.kind.junction(self, ctl)
+            spec = self.kind.junction(self, ctl)
+            if spec is not None and spec.owner is None and self.kind.junction_owner:
+                spec = spec.with_(owner=self.kind.junction_owner)      # the kind knows what part it grows from
+            if spec is not None and spec.tube:
+                # the mesh the spec stands for, kept (lazily) so the junction can cut a tube that
+                # does not lie inside it down to what does (junction.conform_spec): the spec stays
+                # what the kind built
+                spec = spec.with_(shell=J.ShellRef(lambda self=self, ctl=ctl: self.mesh(ctl)))
+            self._junctions[key] = spec
         return self._junctions[key]
 
     @property

@@ -2,10 +2,15 @@
 
 Design context: [appendages_system_design.md](appendages_system_design.md) (the S1 status in section 6e);
 the appendage kinds it plugs into: `kinds.py`; the body it moves: `mhbase.py` (the 19,158-vertex MakeHuman
-base, the 13,378-quad body cage). **S1b** (this revision) made the core robust: a validity pass that bounds
+base, the 13,378-quad body cage). **S1b** made the core robust: a validity pass that bounds
 stretch and forbids new self-intersections, skin ownership (a root only moulds the skin of its own part of the
 body), body-relative sizes, tubes that follow the real mesh, and a public quality helper
-([S1b: what changed and what it cost](#s1b-hardening-the-core)).
+([S1b: what changed and what it cost](#s1b-hardening-the-core)). **S6** (round 2, the core again) fixed what the
+independent review of S1b found at the root: a tube that lies inside its mesh by construction, a junction that
+cannot make the join worse than none, a head that is not reshaped, sizes that do not move with the appendage's
+anatomy coupling, per-spec switches, and a cost that is no higher than before for all of that (about 15 % lower warm on the
+largest figure)
+([S6: round 2 of the core](#s6-round-2-of-the-core)).
 
 An appendage is its own closed shell that overlaps the body, and the slicer unions overlapping shells. That
 is what the first versions did and it is what read as "slapped over the skin": where a tail, a horn, a wing
@@ -142,7 +147,7 @@ The profile (2) is what makes the fillet; the remap (1) is what makes the cage r
 | --- | --- | --- | --- | --- |
 | tail | superseded by the tail's own anatomy spec (`tailrig.junction_spec`, [anatomy_tail.md](anatomy_tail.md)): the flared skin tube from the stem to 2 R beyond the skin point, a sacral rise, two cheek mounds, a keep along the cleft | 1.5 | 1.0 | ridge up the back + cheeks, cleft kept |
 | horn | the sheath's first part (hornrig: the radius law with the ellipse's minor axis, to the foot's top) | 1.0 | 0.6 | the tent: radius 2.2 R, height max(0.35 R, 0.10), along the horn's axis; Keep on the ear and the eye ([anatomy_horn.md](anatomy_horn.md)) |
-| wing | shoulder -> elbow of the posed arm, radius = the arm bone's | 3.0 | 0.4 | scapular mass at the anchor: **radius 0.5, height 0.055 of the body's trunk radius** (`Mound(scale="trunk")`: 0.78 x 0.086 units on the neutral body, 0.47 x 0.05 on the child; S1: 1.74 x 0.22 units on everyone) |
+| wing | shoulder -> elbow of the posed arm, radius = the arm bone's | 3.0 | 0.4 | scapular mass at the anchor: **radius 0.5, height 0.055 of the body's trunk radius** (`Mound(scale="trunk")`: S6 measured on the figure that HAS the wing, whose anatomy coupling reshapes the body: 0.79 x 0.087 units on the neutral body (trunk 1.58), 0.58 x 0.064 on the child (1.16); S1b documented 0.78 x 0.086 and 0.47 x 0.05, which was the bare body: on the wing figure its trunk size came out 1.14 and the mound 0.57 x 0.063 and 0.37 x 0.041; S1: 1.74 x 0.22 units on everyone). The wing track's own spec (`wingroot.py`) replaces it |
 | extra limb (legacy presets; the girdle presets have their own anatomy: [anatomy_limb.md](anatomy_limb.md)) | pivot -> elbow -> into the forearm, posed; radii = the neutral body's own limb profile (`kinds.LIMB_RADII`, fractions of the upper bone) narrowed like the cut end (`neck`) | 1.0 | 0.7 | none |
 
 Owners (S1b): tail, wing and extra limbs `trunk`, horn `head` (`Kind.junction_owner`, `JunctionSpec.owner`).
@@ -243,7 +248,7 @@ puffed a child's back. S1b fixes the mechanism, not the numbers: nothing is tune
 | a big or flared horn root swells the head (2,803 vertices moved, 1,424 backed off) | the fillet is capped by the size of the part it lies on (`WIDTH_CAP` = 0.6 radii of the part), and a root thicker than that part (`FIT_NONE` = 1.1 radii) moulds nothing: there is no skin for it to flow into | `junction.py` |
 | the extra limbs pull the original arm's armpit; the swung arms make cone spikes | **ownership**: `JunctionSpec.owner` (kinds set `head` / `trunk`; `None`: the part the tube exits in) and `bodyframe.BodyFrame` (the skeleton from the `joint-*` markers, parts head / trunk / arm / leg, the radius of each bone's skin measured on this body) give every skin vertex a weight 0..1 for "my part"; the armpit and a hand get 0. Then only the **exposed** tube moulds (the weight falls as the closest point of the centreline sinks under the skin, with a tolerance of one root radius capped by the fillet width), and the skin never climbs higher than the tube stands above it (`stand`): a root that grazes the skin from inside is a hair high, not a spike of the fillet's height | `junction.py`, `bodyframe.py` |
 | the cause of the swung-arm spikes | the harvest spec's tube came from a model of the neutral limb (`LIMB_RADII`) and was up to 2x FATTER than the placed copy's own mesh (a limb tapered to fit the torso, a pose): the skin "hidden inside the tube" stuck out of it. `fit_radii_to_mesh` caps the radii by the real mesh (the 20th percentile of the vertices' distance to the axis, per segment of the centreline) | `junction.py`, `kinds.py` |
-| the wing's body-independent mound puffs a child's back and makes lobes beside a folded wing | `Mound.scale`: `radius` / `height` are fractions of a body dimension the core resolves from the skeleton (`"head"`, `"trunk"`, `"arm"`, `"leg"`, `"local"`): the generic wing is now 0.5 x 0.055 of the trunk's radius (0.78 x 0.086 units on the neutral body, 0.47 x 0.05 on the child) instead of 1.74 x 0.22 on everyone | `junction.py`, `kinds.py` |
+| the wing's body-independent mound puffs a child's back and makes lobes beside a folded wing | `Mound.scale`: `radius` / `height` are fractions of a body dimension the core resolves from the skeleton (`"head"`, `"trunk"`, `"arm"`, `"leg"`, `"local"`): the generic wing is now 0.5 x 0.055 of the trunk's radius instead of 1.74 x 0.22 on everyone (units: see the defaults table: S1b's 0.78 x 0.086 and 0.47 x 0.05 were not what a figure with a wing got, S6 corrected both the sizes and the numbers) | `junction.py`, `kinds.py` |
 | no way to measure any of this | `junction_quality(base, verts, shaped, specs, levels=(1, 2))` and `quality_violations(q)` | `junction.py` |
 
 ### Additions to the API (all backward compatible)
@@ -441,10 +446,8 @@ The S1 test that the skin meets every root at least 15 degrees closer to tangent
 * **A root thicker than 1.1 radii of the part it grows from moulds nothing.** `horn:flare=2` and `horn:length=8,base_radius=1.0`
   (both reachable in the property grid) switch the junction off for that horn (0 vertices moved; S1 moved 1,000-2,800 and swelled
   the head). Better than a swollen head, but a behaviour change: `FIT_NONE`, `FIT_FULL`.
-* **No per-spec opt-out** of the cleft hold (`tight_gap`) or of ownership: `shaped_body` passes no keywords and a
-  `JunctionSpec` has no field to say "this spec may move skin next to a closed cleft" or "this root may mould the arm's
-  skin". A track that needs it today has only `apply_junctions(..., tight_gap=None, frame=False)` for everything. A
-  per-spec switch is the next API addition; the integrator should know.
+* **No per-spec opt-out** of the cleft hold (`tight_gap`) or of ownership: *fixed in S6*: `JunctionSpec.tight_gap`,
+  `.smooth` (f148619), `.ownership`, `.silhouette` and `.conform` (S6), all serialised.
 * **`kinds.py` hunks that other tracks will also rewrite**: `WingKind.junction` (the mound line and `owner`) and
   `HarvestKind.junction` (the `fit_radii_to_mesh` call and `owner`); `Kind.junction_owner` and the two constants
   `WING_MOUND_RADIUS` / `WING_MOUND_HEIGHT` (now fractions of the trunk's radius, not arm lengths).
@@ -460,6 +463,139 @@ The S1 test that the skin meets every root at least 15 degrees closer to tangent
 * The skin is moulded in the rest pose of the body (the junction is computed on the morphed, unposed body).
 * `Mound.scale` needs the skeleton markers (the real base mesh has them); without them (a synthetic body) it stays
   absolute. The skeleton is cached by the hash of the morphed vertices: a body that has not changed costs nothing.
+
+## S6: round 2 of the core
+
+The independent review of S1b scored the core 7/10 as a robustness layer and 1-4/10 as an anatomy deliverable, and named
+what was broken in the core itself. Each item below is measured on the code, with the numbers of the review beside it.
+
+### What changed, finding by finding
+
+| finding (S1b review) | mechanism now | where |
+| --- | --- | --- |
+| **phantom tube**: the extra upper arms' spec centreline had 7 points, 3 inside the placed arm; `fit_radii_to_mesh` extrapolated a radius where the mesh had no vertices and the exposure gate treated the sub-cutaneous phantom as exposed: all 68 skin vertices the spec "hid" were outside the arm and tented up to 0.32 | **the tube is cut down to its mesh**: `JunctionSpec.shell` (a lazy `ShellRef` that `Placed.junction()` attaches: the mesh the tube stands for, in the spec's frame, mirrored with the spec) and `conform_spec`, applied by `apply_junctions` (the spec itself keeps what the kind built, so no kind's own tests move). `junction_checks.fit_tube_to_mesh`: the radius at a station is at most the room across the shell there (`Shells.section_radius`: the circle in the plane across the centreline that lies inside the shell, x `FIT_HUG` 0.98); an end point whose centre is outside the shell, or that has less than 20 % of its radius to spare, is dropped (the sunk end of a cut limb has no shell to hide the tube); one in the middle keeps 2 % (a wire, not a hole); a tube that fits within 6 % comes back as it was. A mirrored pair is cut once and mirrored (a point just inside a mesh on one side must not be outside on the other). `fit_radii_to_mesh` (vertices only, the first-version limb) no longer extrapolates: no mesh near a point is a wire | `junction.py`, `junction_checks.py`, `kinds.py` (`Placed.junction`) |
+| no test that the tube lies in the mesh it stands for | `junction_checks.tube_in_mesh` (a ring of 12 samples on the tube's surface at every station and half-way, tested by ray parity per shell: independent of how the tube was cut) and `tests/test_junction.py::test_the_tube_the_junction_uses_lies_inside_the_appendage_it_stands_for`: 11 kinds/presets/poses x 3 bodies, the ring within 0.02 of the mesh and every cage vertex the tube calls hidden really inside the appendage | `junction_checks.py`, tests |
+| a mesh is several overlapping shells (a wing: the arm, the membrane, the bones; the feathered one has 275): ray parity over all triangles calls a point inside two of them outside (the left wing's arm was "inside", its mirror image "outside") | `Shells` / `face_components`: inside is inside ANY shell; shells whose box holds no point are not looked at | `junction_checks.py` |
+| a guard that makes the join worse than no junction (heavy tail 94 -> 102 degrees) | `apply_junctions(drop_worse=2.0)`: after the validity pass the join angle of every spec with a tube is measured with and without its displacement (`join_angle`: the cage subdivided once, on the patch of the cage around the wall, 2 rings out: the same number as `measure_junction` on the whole body, in a tenth of the time). A spec that is worse by more than 2 degrees (a patch mean is good to about 1) is tried with its tube only, then with its mounds only (a mound is mass, it moves the skin by the wall too; the join is the tube's seam), and left out whole when both are worse. `info`: `dropped`, `tube_only`, `mounds_only`, `join`, `conformed`. The sum of what is left is not re-checked | `junction.py` |
+| the default horn reshapes the skull (+10 % half-width at mid-head, +41 % 15 % below the crown, measured on all the head's skin) | `PART_SILHOUETTE = {"head": 0.08}`: a spec may push the skin of the part it belongs to out of that part by at most 8 % of the skin point's own distance from the part's bone (at least half the part's radius), by a soft clip (`limit_silhouette`: growth g becomes g a / (g^4 + a^4)^(1/4): it never exceeds the bound and is hardly changed below it, so there is no crease for the validity pass to back off from), not applied to skin hidden in the tube (blended in over half a root radius). `JunctionSpec.silhouette`: `None` the part's default, `0` off, else the bound | `junction.py` |
+| `BodyFrame` sizes noisy (trunk 1.56 bare, 1.73 with a tail, 1.14 with a wing: a p75 of nine fitted radii, each decided by which vertices a round of the fit assigned to it) | `BodyFrame.part_size` is the MEDIAN, over the part's skin, of the distance to the nearest bone in the radii the bones are expected to have (`RADIUS_PRIOR`), times the body's height times `SIZE_FRACTION`, calibrated so that the neutral male body keeps the radii the relative sizes were tuned on. The fitted radii stay for the ownership map | `bodyframe.py` |
+| mutants survive: `MAX_MOVE_FACTOR`, the cleft-hold fade, mound ownership | tests of the properties: a spec whose law asks for 2.7 units with a limit of 1.92 moves exactly 1.92; the hold is 0 on rings 0-2, 1/2 on ring 3, 1 from ring 4 of the skin near a closed cleft; a mound beside the original arm moves the arm's skin 40 % as much with ownership as without | tests |
+| no per-spec opt-out of ownership / the silhouette bound / the cut | `JunctionSpec.ownership=False`, `.silhouette`, `.conform=False`, `.join_guard=False`; all serialised (and `tight_gap`, `smooth`, which f148619 added to the spec but not to `to_dict` / `from_dict`: the lab's cache is keyed by `specs_digest`, so a `smooth=0` spec collided with the default) | `junction.py` |
+| cost 54-410 ms for a figure with several appendages | `diffuse_displacement` works on the patch (local indices), `BodyFrame` distances and `bone_closest` are one broadcast instead of a loop over bones, `np.linalg.norm` on the small arrays of `tube_distance` replaced by `_norm`, the shells and the cut of a tube are cached per mesh / per spec (a mirrored pair is one cut). A wing pair + tail + horn pair + two arm pairs (nine specs, 778 vertices moved): see Numbers | `junction.py`, `bodyframe.py`, `junction_checks.py` |
+
+### Additions to the API (all backward compatible)
+
+* `apply_junctions(..., drop_worse=2.0)` (`None` switches the join guard off); `info` gets `dropped`, `tube_only`, `mounds_only`,
+  `conformed`, `join`.
+* `JunctionSpec(ownership=True, silhouette=None, conform=True, join_guard=True, shell=None)` and the serialised `tight_gap` / `smooth`; each is
+  written to `to_dict` only when it is not the default, so every existing digest is the one it always had. `shell` is not part of
+  the value (not compared, hashed or serialised).
+* `conform_spec(spec)`, `ShellRef`, `join_angle`, `limit_silhouette`, `PART_SILHOUETTE`, `moulded_cage(base, verts, specs, **kw)`:
+  the body cage as `apply_junctions` moulds it around some specs.
+* `junction_checks`: `Shells`, `face_components`, `points_in_mesh`, `distance_to_mesh`, `tube_stations`, `tube_ring_samples`,
+  `tube_in_mesh`, `fit_tube_to_mesh`, `subdivide_patch` (Catmull-Clark of an open patch, with the mask of the vertices that are
+  exact), `shells_of`.
+* `BodyFrame.bone_closest(pts, part)`, `BodyFrame.sizes`; `Kind.junction_owner` is now read by `Placed.junction` when a kind's spec
+  leaves `owner` unset (the tail's does).
+
+### What this does to the skin (and to existing documents)
+
+Documents store the appendage parameters, not specs, so a saved `.mmchar` loads as it did (the v1 fixtures are untouched) and every
+change below is in how it RENDERS. Measured on the neutral male (and the bodies named):
+
+* **tubes cut to their mesh** (tail 10 -> 9 points: the stem that began outside the mesh; horn: the buried radii 0.16 -> 0.07..0.15, the ram's
+  0.21 -> 0.05..0.20; wing 5 -> 4 points, radii 0.44 -> 0.39 and 0.39 -> 0.2; feathered wing 0.34 -> 0.14; lower arms exit radius 0.50 -> 0.44;
+  upper arms two interior stations are a wire (0.01): the girdle spec's centreline is not on its mesh's axis there, which is the limb track's
+  to fix; extra legs exit radius 0.67 -> 0.49). The skin moulded around those roots is moulded around the real root.
+* **head bound**: the default and curved horns never reach 8 % (they widen the visible head skin by at most 2 %); the ram's horn at the temple
+  crest widened it 9 % (neutral), 14 % (child, slim female), 10 % (heavy) and is held to 7-8 %.
+* **sizes**: the bare bodies' trunk size is now neutral 1.564 (as before), child 1.130 (0.93 before), heavy 1.81 (1.72), slim female 1.23 (1.13),
+  tall 1.98 (2.02), short 1.40 (1.46); head 0.865 / 0.727 / 0.877 / 0.793 / 1.145 / 0.753; so a relative mound on a child is now 21 % bigger than in S1b
+  and the width cap of a trunk root 0.6 x size moves with it. With a wing, tail or horn on the body the size is within 1.5 % of the bare body's
+  (leg 3 %); with the arm girdles it is up to +5 % (their coupling really widens the shoulders by 11 %: that is not noise).
+* **the join guard** changes 3 of the 56 (8 kinds x 7 bodies) combinations: the tail on the heavy body is applied with its mounds only (the spec made the join
+  67 -> 75 degrees, its tube alone 67 -> 74; its mounds alone are 67 -> 69, inside the margin), and the upper arms on the child and on the old man are applied with the tube only
+  (the girdle's mounds made the join 76 -> 87 and 65 -> 70; both sides). Nothing is left out whole. The near misses: the short body's tail
+  (+0.7 degrees: applied whole) and the slim woman's upper arms (0.0).
+* the first-version limb (`harvest` without a girdle preset) hid fewer skin vertices (no extrapolated radius).
+
+### Numbers
+
+Timings are `apply_junctions` on the figure with a wing pair, a tail, a horn pair and two pairs of arms (9 specs, 778 vertices moved), the best of eight runs after the first,
+measured with the machine at a load average of 0.5 and again at 2.9 (4 cores, other work running): **warm 103-127 ms (median 109-135) against 128-132 ms for f148619 on the same figure at the same loads**;
+cold (the first call after a body or a pose changed: the tubes are cut to their meshes and the skeleton built) 237-297 ms against 197-215 ms. The review measured 250-410 ms for such a
+figure at a load of 2; the same code is 1.5-2x slower there. Where the warm time goes (cProfile, per call): the crossing test 34 ms, the nine specs' displacements 50 ms
+(`tube_emergence` 14, owner weights 8, smoothing 12), the join guard 27 ms (`join_angle`, nine patches subdivided twice), the cleft hold 8 ms. The cut of a tube to its mesh,
+once per spec and mesh: tail 9-12 ms, a pair of arms 11-20 ms each, a membrane wing 12 ms, the feathered wing 47-60 ms plus 50 ms for the shells of its 86,000 triangles (a pose
+drag of a feathered wing pays that per frame: `Placed.junction` is asked per pose; the lab's draft path keeps the rest pose). `BodyFrame` 17-18 ms per new body (6-14 ms before: the sizes are medians over a third of the skin).
+`tools/junction_report.py` prints `cold` and `warm` per kind and body.
+
+### References used
+
+* skin/wm_giraffe_head, skin/ov_giraffe_ossicones, horn/A29: the ossicone flares 4-8 degrees a side toward its base with no seam; a horn on a
+  skull is a thin cuff on bone, not a reshaping of the vault (horn/H15, H17): the head bound.
+* skin/wm_leonardo_shoulder_photo (arm diameter x1.31 over the last 0.57 diameters, the underside meets the chest at 122 degrees with a rounding of 0.11 r):
+  the fillet of an arm root is a muscle mass with a crease on the fold side; the core does not make that crease (it is under the cage's resolution, 0.05
+  units against a quad of 0.28) and that is why it is the appendage's own shell that has to carry the seam.
+* tail/wc_dwgghrqs, tail/wc_bayw69tw (two gluteal masses meeting at a cleft): the cleft hold, and the reason the join guard keeps the sacral mounds when the
+  tube is what makes the heavy figure's join worse.
+
+### Tests that can fail (S6)
+
+`tests/test_junction.py` grew from 115 to 199 tests. The new ones, and what each is proved to fail on (a **mutation run** of 34 single-line
+mutants of `junction.py`, `junction_checks.py`, `bodyframe.py` and `kinds.py`, `S6_core_mut.py` in the work folder: the runner copies the tree,
+changes one line and runs the tests that should notice; 33 are killed, the survivor - the patch of `join_angle` reaching 1 ring out instead of 2 - is equivalent: the mask of exact vertices
+keeps the measure the same, the rings are only cost):
+
+* the shells (`points_in_mesh` is inside ANY shell, the three rays' majority, the room across a shell, the distance to a mesh, the ring samples of a tube
+  all the way round, the patch subdivision against the whole body's) are unit-tested on synthetic closed meshes, including two overlapping spheres (parity over
+  all the triangles says a point inside both is outside) and one triangle with three disagreeing rays;
+* the cut tube: a phantom (the sunk end 1.2 before the shell, a middle twice as thick as the mesh, an end that runs out of it) is cut to the shell, a tube that fits
+  comes back identical, the mirror image of a cut tube is the mirror image of it and not a second cut (counted by how many times the mesh is built), and on 11
+  kinds/presets/poses x 3 bodies the tube the junction uses is inside the placed mesh by ring parity (an independent method) and every skin vertex it hides is inside the
+  appendage; a real limb's tube fattened 2.2x with a phantom end hides skin outside the arm before the cut and none after;
+* the join guard: a displacement turned backwards (the skin pushed away from the root) is not applied (`info["dropped"]`), with a margin it is, with mounds the mounds are
+  kept (`mounds_only`), when the mounds are at fault the tube is (`tube_only`), a good one is applied and reports its join;
+* the head: the visible skin of the head (the skin inside the horn's own mesh left out) widens by at most 8.5 % at six heights for the default, the curved and the ram's horn on
+  four bodies, and with the bound switched off the ram's horn exceeds it on all four (9-14 %): not vacuous; `limit_silhouette` in isolation (never past the bound, smooth,
+  direction kept, hidden skin left alone);
+* sizes: the same body with a tail, a horn or a wing is within 4 % per part (1.5 % in practice) of the bare body's; the neutral body's sizes are the calibration (labelled as
+  such: a re-tune of `SIZE_FRACTION` moves them); a child, a short body, a female body are smaller in every part; a heavy trunk is larger;
+* the properties that survived the S1b review as mutants: the displacement is capped at the spec's own limit when the law asks for more (1.92, not 2.70), the cleft hold is 0, 0, 0, 1/2, 1
+  on rings 0-4, a mound beside the original arm moves its skin 40 % as much with ownership as without; every switch of a spec round-trips and changes the digest.
+
+Existing assertions changed (each with its reason): `test_the_tube_is_fitted_to_the_mesh...` (no mesh near a point is a wire, not an extrapolated radius);
+`test_the_owner_of_each_kind...` (the table now includes the tail, expects what a spec declares - the girdle limbs leave it to the skeleton - and checks it
+against the skeleton's own answer for the root); `test_the_harvest_tube_tracks_the_mesh...` (the tail's tube is held to its OWN fillet: the part of it beyond where it
+leaves the skin is longer than 1.25 fillet widths, measured on the cage, on three bodies; the 1.5 sink + 1.5 W rule is gone);
+`test_the_default_call_smooths...` (measured on the lower arms, whose tube is exposed: the wing's and tail's displacements are mostly mounds and pinned hidden vertices,
+so their Lipschitz maximum cannot show smoothing; the p99 is checked too, and that smoothing changed the field at all); `test_the_fillet_is_no_wider...` (built by hand on the
+crown, since the horn's parameters are now clamped to what a head can carry); `test_the_junction_is_a_valid_skin_on_every_kind_and_body` gained the contract's
+literal numbers (2, 2, 1.25) next to the module's constants.
+
+### Caveats (S6)
+
+* The core cannot make a root look grown: the seam between a 0.28-unit cage and a 0.4-unit root survives in every close-up (a ring around the tail, a boss
+  around the arm); what the core guarantees is that the skin it moulds is valid, is moulded around the real root, does not make the join worse and does not
+  reshape the part. The seam itself is the appendage's shell (`collar.py`).
+* **`hornrig.moulded_cage` should call `junction.moulded_cage(base, verts, spec)`**: it builds the horn's collar and foot against `junction_displacement` with no
+  skeleton and `limit_displacement` with no guards, a different skin from the one the pipeline produces (and, now, one without the head bound). That is the
+  horn track's edit; it is the likely cause of the `test_horn_anatomy` tests that already fail on f148619.
+* The horn track's own `test_the_skin_is_moulded_locally_without_flips_or_ear_and_midline_drag[ram]` asserts that the validity pass backs off nothing; with the
+  head bound and the cut tube it backs off 2 vertices on the neutral body (the Lipschitz guard, by 10 %). `JunctionSpec.silhouette=0` and `.conform=False`
+  restore the S4 field for that spec.
+* The cut is as good as the shell it is given: a spec whose centreline runs outside its mesh (the girdle limbs' root, the wing's arm in some poses) loses the
+  tube there, and with it the junction there; that is the intended failure (nothing to tent), but it is the spec's builder that has to fix it.
+* The limb track's `test_the_junction_moulds_the_skin_around_the_root_and_never_touches_the_original_limb[upper_arms]` asserts more than 100 vertices moved on every body; on the
+  child, the old man and the thin body the guard applies the girdle with its tube only (its mounds, the skirt and the folds, make the join 76 -> 87 degrees there: mass that steepens
+  the skin at the wall), 72-80 vertices. `JunctionSpec.join_guard=False` exempts a spec whose mounds are mass on purpose; whether the girdle should is the limb track's call.
+* The guard compares the join angle on the cage subdivided once, with a margin of 2 degrees; a body-and-kind combination inside the margin
+  can flip from applied to tube-only after a re-tune. The sum of several specs' displacements is not re-checked.
+* The head bound is 8 % for every head-owned spec; a spec that really wants a bony boss sets `silhouette`. No other part is bound.
+* Not done: the asymmetric fillet (a crease on the fold side, broad on the contour side). Its fold-side radius, 0.11 r = 0.05 units, is a sixth of a cage quad:
+  on the cage it would be a cage-scale crease; it belongs on the appendage's shell.
+* The no-crossing guarantee on the subdivided body is still measured, not proved; `votes` (three rays, majority) is covered by a unit test on one triangle, not by a
+  mesh on which a ray grazes a vertex (the half-open triangle test counts those consistently in the 55 configurations tried).
 
 ## Subdivision
 
