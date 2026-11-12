@@ -240,8 +240,8 @@ def appendage_load(app) -> float:
         load = spec_kind.load(values)
         if "scale" in spec_kind.placement_keys:
             load *= float(app.scale)
-        if app.mirror and not spec_kind.paired:
-            load *= PAIR_FACTOR
+        if app.mirror and not spec_kind.paired and "both" in getattr(spec_kind, "allowed_sides", ("both",)):
+            load *= PAIR_FACTOR               # (a tail is built on the midline whatever an old record says: one tail)
         elif spec_kind.paired and not app.mirror:
             load /= PAIR_FACTOR
         return max(0.0, load)

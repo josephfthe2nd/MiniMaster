@@ -374,12 +374,13 @@ class TestPlacement:
 
     def test_a_placed_right_wing_really_lands_where_it_was_placed(self, doc, res):
         """The point of the mirroring rule: the built wing's anchor is on the clicked quad."""
-        doc.add_appendage("tail", side="right")
+        # (a horn: a tail has no side since the tail track's round 2b, it is one midline structure)
+        doc.add_appendage("horn", side="right")
         cage_v, cage_q = res.base.body_cage(None)
         q = int(A.mirror_face_map(res.base)[10647])             # the right hip
         centre = cage_v[cage_q[q]].mean(axis=0)
-        doc.place_at_pick("tail-1", L.Pick("body", quad=q, point=centre))
-        placed = doc.engine.placed(doc.character, "tail-1")
+        doc.place_at_pick("horn-1", L.Pick("body", quad=q, point=centre))
+        placed = doc.engine.placed(doc.character, "horn-1")
         assert [p.side for p in placed] == ["r"]
         assert np.linalg.norm(placed[0].anchor - centre) < 0.6   # the quad is ~0.3 across
 

@@ -50,7 +50,7 @@ never reaches within 0.075 of the midline. The first preset's quad (12116, `temp
 0.6 behind the bregma and behind the ear plane: a record that still names it (without anchor weights) is read as
 the shape's own site, so old documents build the new horn instead of one out of the back of the skull.
 
-**Head scale.** The eye distance over the neutral head's (0.582): 1.00 neutral, 1.29 tall, 0.88 short, 0.90
+**Head scale** (round 2: see "Round 2" below; this paragraph is round 1's, kept for the record). The eye distance over the neutral head's (0.582): 1.00 neutral, 1.29 tall, 0.88 short, 0.90
 child. It follows every morph (the eye joint markers move with them) and matches the head's half-width within
 3% on adults (the skull half-width over the eye distance is 0.705 on every adult body, 0.76 on a child, whose
 head is relatively wide). `length`, `base_radius` and `tip_radius` are the values on the neutral head and
@@ -63,8 +63,8 @@ is written in the head's own axes (x out, y up, z forward, from the eye, crown a
 research's rule is 15 to 45 degrees between the axis and the normal for a horn that reads as grown out of the
 bone; every shape is inside it and the test measures it on six bodies (curved 27, ram 41, spiral 40, antelope 45,
 ossicone 20). The bend plane contains the axis and the shape's bend direction (also in head axes), turned about
-the axis by the placement `roll`. The right horn is `diag(-1, 1, 1)` of the left frame, so the pair is an exact
-mirror (the mesh to 1e-12, the junction specs to 1e-9).
+the axis by the placement `roll`. (Round 2: each horn of a pair is built on its own site, the right one in a
+mirroring frame; on a symmetric head the pair is a mirror to 1e-9.)
 
 ## The sheath
 
@@ -269,3 +269,224 @@ python tools/horn_view.py OUT.png "horn:shape=ossicone" 0,10 50,15 --ref horn/A2
 `--bodies` takes neutral, tall, short, child, heavy, old, female, thin or macro values; `--ref DIR/ID` puts a
 reference image (`$MM_REFS/horn/images/A29_*`) beside each row. The tests are `tests/test_horn_anatomy.py` (the
 model needs no assets; the rest builds horns on six morphed bodies).
+
+
+## Round 2 (S6b): the skin's cuff, each horn on its own skin, the skull's size, a corkscrew that does not cross itself
+
+Round 1's critic scored the horn location 7, bone 6, muscle 5, skin 6, robustness 4.5 (named bodies 8, random faces 3)
+and listed three blockers. What changed, what it was measured to do, and what is still wrong.
+
+![before (c808d60) and after, level 2: curved, ram, spiral, ossicone; front, three-quarter, side](images/horn_round2_before_after.png)
+
+### The skin's cuff: the root collar
+
+`HornKind.collar_profile` enables `collar.py` (the closed shell on the appendage's own geometry whose rim lies on the
+subdivided skin, tangent to it, and whose top meets the wall tangentially) for every shape, all round the root (`up=None`,
+`ventral == width`: a horn has no fold side), in the skin's material. Its size per shape is `hornrig.SHAPES[shape]["collar"]`
+(width, height in root radii) and the parameter `collar` (0..2, default 1) scales it:
+
+| shape | width x height (root radii) | why |
+| --- | --- | --- |
+| curved, spiral, antelope | 0.45 x 0.3 | A06 (the skin tucked around the sheath's rim), A22 (the keratin meets the skin with no fillet): a narrow, low rim of skin, not a fillet |
+| ram | 0.9 x 0.3 | its root is on the temple crest above the temporalis (H05, H10, H14): a wider skin swell; low, because the ram curls from its root and a taller cuff met the bending wall where its polygon poked through |
+| ossicone | 0.8 x 0.7 | A29: skin and hair continuous over the bone, a concave valley fillet about 0.5 base radii |
+
+The decision against the alternative (a keratin "boss" of the sheath itself, round 1's flare + groove + bead) was made on
+renders (`scratchpad/junction/S6b_horn_out/c2.png`-`c5.png`, `d_sheet.png`): with the round-1 foot the cuff's top edge
+z-fought the 16-gon sheath and its flare (white flecks all along the join in the front view); the round-1 groove and bead
+(0.05 and 0.07 root radii) were invisible at any head-scale view anyway. So, round 2:
+
+* the groove and the bead are **gone** (the critic's "make them visible or drop the claim"; their test could not fail);
+* the keratin shapes' default `flare` is **0** (the cuff is the broad base now; a flare under the cuff showed through it);
+* the sheath is **24 around** (32 for the ram): the cuff's top edge stands `WALL_PAD` 0.002 off the wall, and a 16-gon's
+  corners stood out by more on a horn of radius 0.2+;
+* the growth rings start `RING_START` 0.25 base radii up (a ridge under the cuff's top edge made the join ragged);
+* the foot rings are denser near the skin and the foot is shorter (`FOOT_HEIGHTS`), blended to the planar first shaft ring
+  along a smoothstep (the round-1 power law left a crease across the foot just above the cuff).
+
+At level 0 (the CLI default, where `collar.py` makes nothing) the foot still stands on its own: it follows the moulded skin
+as before. Measured with `collar.join_report` (`tools`-free: `scratchpad/junction/S6b_horn_s/m12.py`, `m13.py`), neutral
+body, both horns, degrees between the renderer's normals (p50 / p95):
+
+```
+shape     L  rim p50/p95  wall p50/p95  before(p50)  seen  self  ms (one collar)
+curved    1  4.8/9.5      1.9/5.5       57           1.00  0     170-240
+curved    2  3.3/4.3      1.9/5.8       56           1.00  0     160 (630 the first: the skin's patch)
+ram       2  2.3/2.9      2.0/9.1       62           1.00  0     320-550
+spiral    2  3.3/4.1      1.7/3.6       52           1.00  0     270-530
+antelope  2  3.1/4.7      3.1/5.8       55           1.00  0     210-560
+ossicone  2  3.1/3.9      2.4/5.5       40           1.00  0     130-370
+```
+
+`before` is the angle at which the bare junction's skin met the sheath (90 = runs straight into it): 40-58 degrees on
+average, a crisp ring. Over seven bodies (default, tall, short, child, old, female, heavy) x levels 1 and 2 the worst rim p95
+is 9.6 (curved, level 1) and the worst wall p95 10.6 (ram, child); the ram's collar shell crosses itself on five of its 14
+cases (1-8 pairs of about 10,000 faces, hidden in the union) and has one vertex under the skin on the tall body at level 1;
+the other shapes are clean. A pair of collars costs 260-620 ms warm under load (above `collar.py`'s 100 ms target; final quality
+and export only, never in a drag). `HornKind.collar_axis` carries the junction tube on along the whole sheath: with the tube
+alone, every triangle beyond its end was tested by every ray of the root (an antelope's collar took 0.55 s, 0.45 of it there).
+
+### Each horn on its own skin (blocker 1)
+
+`HornKind.build` builds each horn of a pair on its OWN quad's surface point, skull normal (`horn_site` mirrors the head
+axes for a point with `x < 0`) and skin; the right one's frame mirrors (`Site.matrix`: `y = -(z x x)`), so it is the mirror
+IMAGE of a left horn (a corkscrew and a keel of the other hand) and on a symmetric head the exact mirror (1e-9). One size for
+the pair (the smaller of the two sites' limits). The critic's measure (the unmoulded skin's height over the horn's origin,
+along its axis, in root radii) on `--randomize-face` seeds:
+
+```
+seed  k_iod  k_skull  R      limited  left   right     (round 1: right -1.9 R on seed 0, +1.7 R on seed 9)
+-     1.00   1.00    0.170  -        +0.02  +0.02
+0     0.53   1.24    0.155  midline  +0.01  +0.01
+9     0.59   1.27    0.173  midline  +0.02  +0.02
+4     1.10   1.05    0.179  -        +0.02  +0.02
+11    1.28   1.12    0.190  -        +0.02  +0.02
+7     1.16   1.08    0.184  -        +0.02  +0.02
+3     0.92   0.94    0.159  -        +0.02  +0.02
+```
+
+![--randomize-face 0 and 9, before (the right horn floats over the scalp) and after](images/horn_round2_random_faces.png)
+
+### The skull's size, not the eyes' (blocker 3)
+
+`Head.k` is the skull's half-width over the neutral head's (`skull_halfwidth`: the widest `|x|` of the cage in a slab 0.6 of
+the way from the skull-base joint to the crown joint, above the ears and the eyes; `SKULL_REF` 0.6933 on the macro defaults).
+`eyes.eye_trans.in_out` -1..1 moved the old scale 0.89..1.17 on the same skull; it moves this one by nothing. Named bodies
+change little (tall 1.31, short 0.90; the child's head is relatively wide: 0.98 where the eyes said 0.90, so a child's horn is
+8% bigger than round 1's). Two more changes keep a random face printable:
+
+* the midline limit is `(|x| - 0.075) / MIDLINE_RADII` (1.6; it was the tent's 2.2 radii, which made a narrow-browed random
+  face's horns 0.54 of their size); the tent and now also the fillet (`skin_plan`) keep 0.075 off the midline themselves;
+* a horn the head limits keeps its proportions (length and tip scale with the radius) and the build report says so
+  (`ctx.report`: "the horn is built at 0.62 of its size ..."; a note, not a warning, so "every parameter at its limit" still
+  builds with warnings as errors). The legacy record with `base_radius` 0.42 is no longer silent.
+
+### The corkscrew and the extremes (blocker 2)
+
+The bend limit is now on the FINAL path, measured on the largest radius (the taper with the keel's lobes and the rings on
+it, `BEND_LIMIT` 0.7): the planar law is clamped as before, the helix is built on the smooth taper (round 1 built it on the
+rippled radius), grows out of the axis along a C2 ramp above the foot (`HELIX_START`, `HELIX_RAMP`), its radius is taken in
+where the sum bends past `HELIX_BEND` x the limit, and `turns` is capped so a coil is at least `PITCH_MIN` 5 base radii long (a
+helix of pitch P bends at most 2 pi / 2P, at a radius it passes through as it grows). The planar spiral turns at most
+`PSI_MAX` (315 degrees; a ram of length 12 coiled 19 radians into itself), a lyre `LYRE_PSI_MAX` (90 degrees out). Two
+geometric bugs found on the way: path samples a hair apart (a station next to a grid point) made the differentiated tangent of
+a corkscrew jump and its ring frames with it (a ram with 4 turns crossed itself 37 times there), and a squeezed foot's rings
+crossed on the high side of a tilted skin (`FOOT_MIN`, `FOOT_TURN`, `FOOT_GAP`: the foot is compressed so that the path turns
+at most 15 degrees over it, never flatter than 0.3 of its height unless that puts its top past the tip, and each ring is kept
+above the one below it and under the planar top ring). Measured: 0 crossings of the sheath on
+every shape x {default, turns +-4, length 12, curve 4 at length 12, curve -4, a 0.3 stub with 4 turns} in the model, and on the
+body every shape x {fillet 4, flare 1.5, base radius 0.6, length 12, turns +-4, boss 2, collar 2, all three at once}: no
+crossing within a horn or between the two, no junction quality violation, under 300 vertices moved for the pair and under 25
+backed off (the fillet is capped at `FILLET_MAX` 1.5 base radii (a ram at fillet 3 moved 403
+vertices in round 1).
+
+**The spiral is re-tuned** to a thicker, shorter, smoother corkscrew (A01, A26 and the critic's "kudu, not a noodle"): length
+2.4 (was 4.0), base radius 0.17 (0.13), 1.5 turns (2.25), the helix 1.5 local radii wide (2.0), tilt 30 (40: at 40 the acute
+side of the root left the collar no room), tip 0.055. **The antelope**: 3.4 x 0.16 (4.0 x 0.13), tip 0.055, tilt 40 (45: the
+collar's exit fit failed on the acute side on two bodies). Print, neutral pair (`print_report`), share of the area under 0.3 mm:
+
+```
+shape     small            medium           weld (root_embed)
+curved    29% warn         13% clean        0.29
+ram        9% clean         4% clean        0.31
+spiral    28% warn         11% clean        0.21
+antelope  37% warn         17% clean        0.17
+ossicone   2% clean         0% clean        0.64
+```
+
+(round 1: spiral 28% and antelope 33% at medium, fragile). Seeds 0 and 9 print clean at medium too (11-18%). The welds are
+lower than round 1's (curved 0.32, spiral 0.14) for the curved and higher for the spiral: the bowl under the stem is shallower
+(it is a cap now, `BOWL_DEPTH`; a flared ram's went through the midline into the other horn's). At "small" the
+slender shapes warn (fragile): print them at "medium" or larger.
+
+### The skin the foot is built against (the assigned failures)
+
+`hornrig.moulded_cage` is now `junction.moulded_cage` over the specs of the pair (the figure with both horns): the head's
+silhouette bound, the join guard, the validity pass; round 1 re-implemented the raw law and its field was 0.03 off the
+skin the body really had (the four failing `test_horn_anatomy` tests). The spec the foot is built against is the one
+`HornKind.junction` hands the figure (`HornPlacement.spec`), with `owner="head"`, `conform=False` (the core cannot cut the
+tube to a sheath that does not exist yet when its foot is being built; `HornModel.inscribed` and a stem that reaches the tube's
+deepest station keep the tube inside the sheath by construction, tested on every shape, both sides and random faces) and
+the core's head bound for every shape but the ram (`HEAD_SILHOUETTE` None: 8 %; on the curved horn it changes the
+displacement outside the wall by a thousandth) and the ram's own, `SHAPES["ram"]["silhouette"]` 0.12, with its tent 0.4 base
+radii (was 0.5): the core's 8 % cut the ram's tent into a step that the validity pass backed two vertices off (`limited == 0`
+failed); 0.08-0.1 backed 6-7 off. Measured by the core's own test of the visible head's half-width
+(`test_a_horn_does_not_reshape_the_head`): the default and curved horns stay within the core's 8 %; the ram widens the head
+8.5-10.3 % at the height of its root (0.2 gave 12-16 %, unbounded 12-20 %): the test's bound for the ram is 10.5 % now, and the
+bound still holds the in-range extremes (`test_an_oversized_horn_root_does_not_swell_the_head`, vertex by vertex). On the
+tall, child and female bodies a lone ram's spec backs 4 vertices off (the area-growth guard at the temple), 0 on the neutral.
+
+### The layers (and a temporalis that was tried)
+
+The soft-tissue lens and the skull plate end where the rays along the horn's axis stop finding the skull (`_outline`): on the
+ram 24-45 of their vertices stood 0.33-0.5 radii out of the head; now 0-8 of 448, by at most 0.15 radii (tested on every shape
+and three bodies). The lens is still a lens of soft tissue, not a muscle.
+
+A temporalis swell for the ram (a second mound of its spec below and behind the crest, H05, H10, H14) was built, measured and
+**taken out**: under the ram's head bound it changed the visible head by nothing (the growth table was the same with and
+without it) and an A/B render at level 2 could not tell the two apart (`scratchpad/junction/S6b_horn_out/final_check.png`).
+A muscle the skin is the envelope of, at the temple, is still to do.
+
+![the shapes beside their references: A31, A29, A22, A26, A06](images/horn_round2_refs.png)
+
+### References used in round 2
+
+* **A06** (skin tucked around the sheath's rim) and **A22** (keratin meets the skin with no collar or fillet): the keratin
+  shapes' cuff is narrow and low (0.45 x 0.3 root radii), a rim, not a fillet.
+* **A29** (giraffe ossicones, concave valley fillet 0.5 base radii, hair continuous): the ossicone's wide cuff (0.8 x 0.7).
+* **A31, A04** (bighorn: the massive base on the frontal-temporal skull) with **H05, H10, H14** (the temporalis below the crest;
+  a hypertrophied one bulges the temple): the ram's wider cuff (the temporalis mound that was tried is out, above).
+* **A01, A26** (ibex: a thick ridged horn; the critic's kudu comparison): the spiral is thicker and shorter, an open helix.
+* TAKEAWAYS section 2 (human skin: flush, mounded or hidden in hair) still holds: the scalp around a horn is mounded (the
+  tent) and meets the keratin in a skin cuff; no hair.
+
+### What is still wrong (honest)
+
+* **The ram** still reads as a thick tube leaving the temple from the front three-quarter view (its curl starts at the root,
+  so its first part faces the viewer), with a few short jaggies along the cuff's top edge on the upper side at level 2 (the
+  cuff's top hugs a wall that bends; 32 facets made it better, not clean). Beside A31 its base is too slim (R / half-width
+  0.35, limited by the midline margin at the crest).
+* **The ossicone** shows a faint light hairline at its cuff's rim and top edge. Its sheath has the body's own material, but the
+  renderer shades and occludes each shell on its own: without the cuff the ossicone's foot is a darker disk on the scalp
+  (A/B at level 2, crown and brow, cuff off / 0.8 x 0.7 / 0.6 x 0.4 / 0.8 x 0.4: `S6b_horn_out/os_sheet.png`); every cuff is
+  better than none and they differ little, so the A29 fillet (0.8 x 0.7) stays. The hairline is the renderer's per-shell
+  shading, not geometry.
+* **The pair of ossicones** is still 3 widths apart, not A29's 1.2-1.5 (no poll preset).
+* A user `flare` above 0 on a keratin shape puts the flared foot under the cuff, and its top edge shows flecks again.
+* The collar costs 130-310 ms a horn (final only).
+* The groove/bead claim is dropped; the "muscle" layer is soft tissue; no temporalis (tried, did not register); the
+  ecorche of the horn is legible only split by panel.
+* Floating/deep roots are not reported by the print report (that is `print_report.py`'s, not this track's; the weld of every
+  default shape is 0.25-0.68, tested 0.15-0.75).
+
+### Disclosure: how an existing saved document renders now
+
+No migration: `.mmchar` v1/v2 files and records load unchanged (no parameter is renamed, `collar` is not written into a
+record that never set it). But a saved horn renders differently:
+
+* every horn has a **skin cuff** at `--subdivide` 1-2 (`collar` absent = 1.0; `--no-collar`, `collar=0` or `--no-junction`
+  remove it); a second shell `horn-N.l/collar` per horn in the STL group;
+* **size**: by the skull's width, not the eyes (named bodies within 2-9%: a child +8%; random faces up to 2.3x bigger where
+  the eyes were close); a horn the midline limits is bigger (1.6 instead of 2.2 radii) and a limited horn is shorter (its
+  proportions kept);
+* **the right horn** of a pair follows its own side of an asymmetric head (on a symmetric head: the same as before to 1e-9);
+* **defaults** of a record that did not store them: keratin shapes `flare` 0 (was 0.15), `ring_verts` 24 (ram 32; was 16),
+  the spiral 2.4 x 0.17 with 1.5 turns, tilt 30, tip 0.055 (was 4.0 x 0.13, 2.25 turns, tilt 40, tip 0.04), the antelope
+  3.4 x 0.16, tilt 40, tip 0.055 (was 4.0 x 0.13, tilt 45, tip 0.04);
+* **every horn's sheath**: no groove or bead at the skin line, growth rings from 0.25 radii up, a denser and shorter foot, a
+  centred stem and a shallower bowl (inside the head); `fillet` above 1.5 acts as 1.5; `turns` / `curve`
+  past what the sheath's thickness allows are capped (a horn that crossed itself before no longer does);
+* the junction: the ram's own head bound 0.12 (its tent 0.4 base radii, was 0.5), the tube
+  inscribed in the sheath (about 5% thinner); the right horn's spec is built on its own site;
+* with `--no-junction` the horn's foot is still built against the cage its own pair's junction would mould (the build does not
+  know the switch); the stem continues into the head, so there is no gap, but the foot's flare-free ring sits up to the tent's
+  height over the unmoulded scalp on the high side (as in round 1).
+
+### Tests (round 2)
+
+`tests/test_horn_anatomy.py` and the new `tests/test_horn_collar.py`. The vacuous ones the critic named: the fold test zeroed
+`turns` and compared with `BEND_LIMIT` itself (now: the shape's own turns and +-4, a fixed 0.8, and zero crossings);
+the groove/bead test is replaced by one that fails on a step at the skin line or rings under the cuff; the axis test now checks
+the lean's direction (a lean turned inward fails it, not only the incidental layers tests); the soft-tissue test checks
+containment on every shape instead of its own formula; the lone-horn and field tests compare with the FIGURE's skin. 23
+single-line mutations of the round-2 code were run against them on the final tree (`scratchpad/junction/S6b_horn_s/mut.py`): all 23 are caught.

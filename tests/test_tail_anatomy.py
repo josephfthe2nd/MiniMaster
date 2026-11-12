@@ -66,26 +66,55 @@ def test_every_layer_is_inside_the_next_one(kw):
     """Bone inside muscle inside skin, point by point (the vertices of the inner layer lie inside the closed
     outer one): the skin is the envelope, not a second shape that happens to be nearby."""
     m = model(**kw)
-    skin, muscle, bone = m.skin(), m.muscle(), m.bone()
+    skin, muscle, bone = m.skin(), m.muscle(), m.bone_chain()          # (the sacrum wedge lies beside the sleeve, under the body's skin)
     assert inside(muscle.vertices, skin).all()
     assert inside(bone.vertices, muscle).all()
     assert muscle.volume() < skin.volume() and bone.volume() < 0.25 * muscle.volume()
 
 
-def test_the_skin_is_the_muscle_surface_plus_the_skin_thickness():
-    """At every station and every angle the skin ring is further from the axis than the muscle ring by
-    about the skin thickness (the lobing is damped on the skin, so it is a band, not an equality). Change
-    the thickness of one layer and this fails."""
+def test_the_skin_is_the_envelope_of_the_muscle_plus_the_skin_thickness():
+    """The muscle is the primary shape (lobed where the bellies are) and the skin its envelope: at every vertex of
+    every ring the skin lies at least one skin thickness off the muscle (it never cuts into a belly), exactly one thickness
+    on the crest of a belly, and further (fat and fascia) in the grooves between the bellies. Change the
+    thickness of one layer alone, or the lobing of the skin, and this fails."""
     m = model()
     s = m.s[m.s <= m.L]
     sk, mu = m.section(s, "skin"), m.section(s, "muscle")
-    c = m.centre(s)[:, None, :]
-    gap = np.linalg.norm(sk - c, axis=2) - np.linalg.norm(mu - c, axis=2)
+    gap = np.linalg.norm(sk - mu, axis=2)                          # vertex k of the skin ring to vertex k of the muscle ring
     t = m.skin_thickness(s)[:, None]
-    assert (gap > 0.4 * t).all() and (gap < 1.6 * t).all()
+    assert (gap >= t - 1e-12).all()
+    th = 2.0 * np.pi * np.arange(m.p.ring_verts) / m.p.ring_verts
+    crest = m.lobes(th) >= -1e-9                                   # the bellies and their shoulders: the skin is the muscle + t
+    assert np.allclose(gap[:, crest], np.broadcast_to(t, gap.shape)[:, crest], atol=1e-9)
+    belly = (m.belly(s) > 0.99)
+    groove = m.lobes(th) < -0.1                                    # the grooves: 0, 90, 180, 270 degrees
+    assert crest.sum() == 12 and groove.sum() == m.p.ring_verts - 12           # (24 around: 12 and 12; 16 around: 12 and 4)
+    assert (gap[np.ix_(belly, groove)] > 1.05 * np.broadcast_to(t, gap.shape)[np.ix_(belly, groove)]).all()   # fat in the grooves
+    assert np.allclose(gap[m.belly(s) == 0.0][:, groove], np.broadcast_to(t, gap.shape)[m.belly(s) == 0.0][:, groove], atol=1e-9)
     # the thickness is the research's: 0.08 R at the root rising to 0.12 of the local radius distally
     assert m.skin_thickness(0.0) == pytest.approx(0.08 * m.law(0.0), rel=1e-9)
     assert m.skin_thickness(m.L) == pytest.approx(max(0.02, 0.12 * m.law(m.L)), rel=1e-9)
+
+
+def test_the_muscle_has_four_bellies_where_the_muscle_is_and_a_round_tendon_beyond():
+    """A section of the muscle on the proximal part shows two dorsal and two ventral bellies with a groove between them
+    (the dorsal median groove, the lateral bands): the belly's crest is at least 10 % further from the axis than the
+    groove; beyond 55 % of the length (tendon, fascia, fat) the section is a plain ellipse."""
+    m = model()
+    th = 2.0 * np.pi * np.arange(16) / 16
+    for frac, lobed in ((0.05, True), (0.12, True), (0.3, True), (0.6, False), (0.9, False)):
+        s = np.array([frac * m.L])
+        ring = m.section(s, "muscle", 16)[0]
+        c, fr = m.centre(s)[0], m.frames(s)[0]
+        x, y = (ring - c) @ fr[:, 0], (ring - c) @ fr[:, 1]
+        r = np.hypot(x, y)
+        crest, groove = r[[2, 6, 10, 14]].mean(), r[[0, 4, 8, 12]].mean()      # 45, 135, 225, 315 degrees / 0, 90, 180, 270
+        if lobed and frac <= 0.12:
+            assert crest > 1.10 * groove, (frac, crest / groove)
+        elif lobed:
+            assert crest > 1.02 * groove
+        else:
+            assert crest == pytest.approx(groove, rel=0.06)                      # (the ellipse itself is 8 % off a circle at the root)
 
 
 def test_the_muscle_bellies_are_on_the_proximal_part_and_tendons_follow():
@@ -95,6 +124,133 @@ def test_the_muscle_bellies_are_on_the_proximal_part_and_tendons_follow():
     assert g[0] == pytest.approx(1.0) and g[2] == pytest.approx(1.0)          # full up to 12% of the length
     assert g[4] == pytest.approx(0.0, abs=1e-9) and g[5] == 0 and g[6] == 0   # none past 55%
     assert (np.diff(g) <= 1e-12).all()
+
+
+# -- the body-side masses and the sacrum ---------------------------------------------------------------------------
+
+
+def _ramp_patch(R, slope=0.3):
+    """A body skin that leans: z = slope * x over the grid (a tilted plane), in R."""
+    xs = np.arange(T.SkinPatch.X_RANGE[0], T.SkinPatch.X_RANGE[1] + 1e-9, T.SkinPatch.STEP)
+    ys = np.arange(T.SkinPatch.Y_RANGE[0], T.SkinPatch.Y_RANGE[1] + 1e-9, T.SkinPatch.STEP)
+    return T.SkinPatch(xs, ys, slope * xs[:, None] + 0.0 * ys[None, :], R)
+
+
+def test_a_skin_patch_samples_the_cage_height_over_the_local_grid_and_fills_holes():
+    """The patch is what the mass lenses and the sacrum lie on: the body's own skin as a height field in the tail's frame.
+    A tilted plane of quads in a frame scaled by 2 and moved comes back exactly; a hole is filled from its neighbours."""
+    n = 41
+    gx, gy = np.meshgrid(np.linspace(-12, 12, n), np.linspace(-12, 12, n), indexing="ij")
+    verts = np.stack([gx.ravel(), gy.ravel(), 0.3 * gx.ravel() + 0.1 * gy.ravel()], axis=1)
+    idx = np.arange(n * n).reshape(n, n)
+    quads = np.stack([idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()], axis=1)
+    frame = np.eye(4)
+    frame[:3, :3] *= 2.0
+    frame[:3, 3] = [1.0, -2.0, 3.0]
+    body = verts @ frame[:3, :3].T + frame[:3, 3]                       # the plane in the body's frame
+    R = 0.5
+    patch = T.SkinPatch.from_cage(body, quads, frame, R)
+    x, y = np.array([0.0, 2.0, 5.5]), np.array([0.0, -1.5, 3.0])
+    assert patch.height(x, y) == pytest.approx(0.3 * x + 0.1 * y, abs=1e-9)          # (x, y, z in base radii: the slope is the plane's)
+    # a missing band of triangles (4 R wide, x = 4..8 R: the middle of the grid) leaves a hole the neighbours fill from
+    # both sides: finite, and within the slope over half the hole (a hole AT the grid's edge is filled from one side only,
+    # flat: off by the slope times its whole width)
+    c = verts[quads].mean(axis=1)[:, 0]
+    keep = (c < 2.0) | (c > 4.0)
+    holed = T.SkinPatch.from_cage(body, quads[keep], frame, R)
+    assert np.isfinite(holed.z).all() and holed.height(x, y) == pytest.approx(patch.height(x, y), abs=0.3 * 2.0 + 0.05)
+    # an empty cage is the flat plane
+    assert (T.SkinPatch.from_cage(body, quads[:0], frame, R).z == 0.0).all()
+    assert (T.SkinPatch.flat(R).z == 0.0).all()
+
+
+def test_a_lens_is_a_closed_solid_on_the_skin_that_the_mound_raises_by_exactly_its_height():
+    """The lens of a root mass: its top is the skin the body had plus the mass's height times the mound's bump, minus the
+    skin thickness; its underside reaches ``depth`` below; both meet on the rim. On a flat skin the numbers are exact."""
+    m = T.TailModel(T.TailParams(), T.SkinPatch.flat(0.45))
+    R = m.R
+    t = float(m.skin_thickness(0.0)) / R
+    for mass in T.ROOT_MASSES:
+        lens = m.lens(mass)
+        assert lens.is_watertight and lens.volume() > 0
+        v = lens.vertices / R
+        top_c = v[0]                                               # the first vertex is the crest, the last ring the rim
+        assert top_c[0] == pytest.approx(mass.center[0]) and top_c[1] == pytest.approx(mass.center[1])
+        assert top_c[2] == pytest.approx(mass.height - t, abs=1e-9)                       # the mound's height, minus the thickness
+        bottom = v[1 + 6 * 24]                                    # the underside's centre
+        assert bottom[2] == pytest.approx(-t - mass.depth, abs=1e-9)
+        rim = v[1 + 5 * 24:1 + 6 * 24]
+        assert np.allclose(rim[:, 2], -t, atol=1e-9)              # the lens pinches to nothing on the skin plane
+    # on a leaning skin the lens leans with it (the top is the body's skin + the mound); the skin 0.3 R off the plane of
+    # the mound's centre is that much further from it, so the mound gives it a little less (the junction's own 3-D bump)
+    lean = T.TailModel(T.TailParams(), _ramp_patch(0.45, 0.3))
+    for mass in T.ROOT_MASSES:
+        top_c = lean.lens(mass).vertices[0] / R
+        z = 0.3 * mass.center[0]
+        w = float(T.bump(abs(z) / mass.half[1]))
+        assert 0.85 < w < 1.0 or z == 0.0
+        assert top_c[2] == pytest.approx(z + mass.height * w - t, abs=1e-9)
+    # in the cleft the beads hold the skin and the lens: the sacral wedge, which reaches below the root, is 0 there
+    m0 = T.TailModel(T.TailParams(), T.SkinPatch.flat(0.45))
+    bx, bz = T.KEEP_BEADS[1]
+    assert float(m0.mass_weight(T.ROOT_MASSES[0], bx, 0.0, bz)) == 0.0
+    assert float(m0.mass_weight(T.ROOT_MASSES[0], 1.0, 0.0, 0.0)) == 1.0
+
+
+def test_a_lifted_tail_takes_the_wedge_back_in_the_lens_as_in_the_mound():
+    """The sacral wedge fades as the tail lifts (it is in the tail's own way): the lens and the spec use the one weight."""
+    w = lambda lift: T.lift_weight(T.ROOT_MASSES[0].fade, lift)                  # noqa: E731
+    assert w(0.0) == 1.0 and w(20.0) == pytest.approx(1.0) and w(80.0) == pytest.approx(0.0) and w(90.0) == 0.0
+    assert 0.4 < w(50.0) < 0.6 and w(-40.0) == 1.0                                # (lowering the tail is not lifting it)
+    assert T.lift_weight(T.ROOT_MASSES[1].fade, 90.0) == 1.0                      # the gluteal masses stay
+    rest, up = T.TailModel(T.TailParams(), T.SkinPatch.flat(0.45)), T.TailModel(T.TailParams(lift=80.0), T.SkinPatch.flat(0.45))
+    assert up.lens(T.ROOT_MASSES[0]).vertices[0][2] < rest.lens(T.ROOT_MASSES[0]).vertices[0][2] - 0.5 * 0.45 * T.ROOT_MASSES[0].height
+    assert np.allclose(up.lens(T.ROOT_MASSES[1]).vertices, rest.lens(T.ROOT_MASSES[1]).vertices)
+    assert [mo.height for mo in T.junction_spec("t", up, np.eye(4), 1.5, 0.5).mounds] == pytest.approx(
+        [T.ROOT_MASSES[1].height * 0.45] * 2)                                    # the wedge's mound is gone from the spec too
+
+
+def test_the_muscle_layer_is_the_sleeve_and_the_lenses_and_its_colour_weights_follow():
+    m = model()
+    mesh, belly = m.muscle_whole()
+    n_sleeve = len(m.muscle().vertices)
+    assert len(belly) == len(mesh.vertices) == n_sleeve + sum(len(l.vertices) for l in m.lenses())
+    assert np.array_equal(belly[:n_sleeve], m.muscle_belly()) and (belly[n_sleeve:] == 1.0).all()
+    assert belly[0] == 1.0 and belly[n_sleeve - 1] == 0.0                         # root pole: belly; tip pole: tendon
+    assert mesh.volume() > m.muscle().volume() + 0.9 * sum(l.volume() for l in m.lenses()) - 1e-9
+
+
+def test_the_sacrum_is_a_wedge_under_the_skin_that_the_chain_grows_from():
+    """The bone layer was an isolated chain that started in a wedge in the cleft. It now grows from a sacrum: the fused
+    last sacral vertebrae run up the back under the body's skin (at 0.4 - 1.3 R below it) and carry the first caudal."""
+    patch = _ramp_patch(0.45, 0.3)
+    m = T.TailModel(T.TailParams(), patch)
+    R = m.R
+    sac = m.sacrum()
+    assert sac.is_watertight and sac.volume() > 0
+    v = sac.vertices / R
+    top = v[:, 2] - patch.height(v[:, 0], v[:, 1])
+    assert top.max() < -0.3                                      # all under the skin ...
+    assert top.min() > -2.3                                      # ... but not lost in the body
+    assert np.ptp(v[:, 1]) / 2 == pytest.approx(T.SACRUM["w_top"], rel=0.15)           # wide above
+    assert v[:, 0].min() < 0.0 and v[:, 0].max() == pytest.approx(T.SACRUM["length"], abs=0.2)
+    # it joins the chain: the first vertebra is next to its apex
+    apex_end = m.bone_chain().vertices[-m.bone_chain().vertices.shape[0]:]            # (the apex wedge is the last piece of the chain)
+    cd1 = m.vertebra_edges()[0]
+    low = v[v[:, 0] < 0.5]
+    assert np.linalg.norm(low.mean(axis=0)[[1]] ) < 0.2 and abs(low[:, 2].mean() - (patch.height(0.0, 0.0) - 1.25)) < 0.6 and cd1 < 0.0
+    assert m.bone().volume() == pytest.approx(m.bone_chain().volume() + sac.volume())
+
+
+def test_a_mass_is_the_mound_it_makes_in_the_spec_and_mirrors():
+    a = T.ROOT_MASSES[1]
+    assert a.mirrored().center == (a.center[0], -a.center[1]) and a.mirrored().name == "gluteal_r"
+    round_ = T.mass_mound(a, 0.5)
+    assert round_.axis is None and round_.radius == pytest.approx(a.half[1] * 0.5) and round_.height == pytest.approx(a.height * 0.5)
+    wedge = T.mass_mound(T.ROOT_MASSES[0], 0.5, weight=0.5)
+    assert wedge.stretch == pytest.approx(T.ROOT_MASSES[0].half[0] / T.ROOT_MASSES[0].half[1]) and wedge.axis == (1.0, 0.0, 0.0)
+    assert wedge.height == pytest.approx(0.5 * T.ROOT_MASSES[0].height * 0.5)
+    assert T.bump(0.0) == 1.0 and T.bump(1.0) == 0.0 and T.bump(0.5) == pytest.approx(0.5)      # the mound's own bump
 
 
 # -- the numbers ---------------------------------------------------------------------------------------------
@@ -166,9 +322,18 @@ def test_the_first_part_of_the_tail_is_stiff_then_it_droops_in_the_sagittal_plan
     assert model(lift=40.0).centre(m.L)[0] > m.centre(m.L)[0] + 1.0
     assert model(droop=1.8).centre(m.L)[0] < m.centre(m.L)[0] - 0.5
     assert model(curl=1.8).centre(m.L)[0] > m.centre(m.L)[0] + 0.3            # the distal curl is up
-    # lift rotates the tail about the sacrococcygeal joint: the part inside the body does not move
-    assert np.allclose(model(lift=60.0).centre(-m.stem), m.centre(-m.stem), atol=1e-12)
-    assert np.allclose(model(lift=60.0).centre(0.0), m.centre(0.0), atol=1e-12)
+    # lift rotates the tail about the sacrococcygeal joint, which is INSIDE the body: the bend starts 1.5 R below the
+    # skin point (so the elbow of a raised tail is partly buried, not a sack behind the root), the part below it keeps its
+    # direction, and the skin point stays where the document put it
+    up = model(lift=60.0)
+    assert np.allclose(up.tangent(-m.stem), m.tangent(-m.stem), atol=1e-12)
+    assert np.allclose(up.tangent(-1.5 * m.R), m.tangent(-1.5 * m.R), atol=1e-5)          # (the ramp starts flat)
+    assert np.allclose(up.centre(0.0), m.centre(0.0), atol=1e-12)
+    pitch = lambda mm, s: np.degrees(np.arcsin(mm.tangent(s)[0]))              # noqa: E731   (x is up)
+    assert pitch(up, 0.0) > 8.0 and pitch(up, 0.0) < 0.5 * 60.0               # already tilted a fifth of the way at the skin ...
+    assert pitch(up, 3.0 * m.R) == pytest.approx(60.0, abs=4.0)               # ... and fully lifted by 3 R beyond it
+    # a lifted tail's elbow is a bend of the chain, not a bulge: the outer wall of the bend stays within 1.35 R of the axis
+    assert up.skin().is_watertight
 
 
 @pytest.mark.parametrize("kw", [dict(droop=2.0, curl=2.0), dict(droop=-2.0, curl=-2.0), dict(lift=90.0, droop=2.0),
@@ -246,6 +411,19 @@ def world():
     return base, lib, lib.apply(base.verts, mh.macro_weights())
 
 
+class _Plain(K.Kind):
+    """A kind with no anatomy (the base class's layers): a synthetic one, because every registered kind has one now."""
+
+    id = "plain"
+
+
+def _plain_placed():
+    from minimaster.core.mesh import Mesh
+    tri = Mesh(np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]]), np.array([[0, 1, 2]]))
+    return K.Placed(name="plain-1", spec_id="plain-1", kind=_Plain(), side="", anchor=np.zeros(3), matrix=None,
+                    params={}, controls={}, static=tri)
+
+
 @assets
 def test_a_placed_tail_exposes_its_three_layers_in_the_makehuman_frame(world):
     base, _, v0 = world
@@ -259,19 +437,35 @@ def test_a_placed_tail_exposes_its_three_layers_in_the_makehuman_frame(world):
         c = mesh.vertices.mean(axis=0)
         assert abs(c[0]) < 0.02                                               # on the sagittal plane
         assert np.linalg.norm(c - p.anchor) < 4.0                             # near the root, in the body's frame
-    # the bone chain starts inside the body, below the skin, and is inside the muscle which is inside the skin
-    assert inside(layers["bone"].vertices, layers["muscle"]).all()
-    assert inside(layers["muscle"].vertices, layers["skin"]).all()
+    # the caudal chain is inside the muscle sleeve which is inside the skin; the sacrum wedge and the body-side lenses of the
+    # muscle layer lie in the body (under the skin the body had), not in the tail
+    m = p.model.model()
+    n_sleeve, n_sacrum = len(m.muscle().vertices), len(m.sacrum().vertices)
+    muscle, bone = layers["muscle"], layers["bone"]
+    sleeve = m.muscle().transform(p.model.frame)                                # (the whole muscle layer overlaps itself at the root: parity needs one closed piece)
+    assert inside(bone.vertices[:-n_sacrum], sleeve).all()
+    assert inside(muscle.vertices[:n_sleeve], layers["skin"]).all()
+    from test_tail_anchor import _parity_inside
+    from minimaster.core.subdiv import quads_to_mesh
+    body = quads_to_mesh(*base.body_cage(v0))
+    assert _parity_inside(bone.vertices[-n_sacrum:], body.vertices[body.faces]).all()      # the sacrum is in the body
+    assert len(muscle.vertices) == n_sleeve + sum(len(l.vertices) for l in m.lenses())
     # the layers follow the pose controls (the same model drives all three)
-    posed = p.layers({"droop": 0.8, "lift": 20.0})
+    ctl = {"droop": 0.8, "lift": 20.0}
+    posed = p.layers(ctl)
     assert not np.allclose(posed["skin"].vertices, layers["skin"].vertices)
-    assert np.allclose(posed["skin"].vertices, p.mesh({"droop": 0.8, "lift": 20.0}).vertices)
-    # the bone moves with the pose beyond the joint; Cd1 (the first spool, 7 rings of 8) is in the body and stays
-    assert np.allclose(posed["bone"].vertices[:56], layers["bone"].vertices[:56], atol=1e-9)
-    assert not np.allclose(posed["bone"].vertices[-100:], layers["bone"].vertices[-100:], atol=1e-3)
-    # a kind without an anatomy has the skin only
+    assert np.allclose(posed["skin"].vertices, p.mesh(ctl).vertices)
+    # ... the muscle too: it is the posed MODEL's muscle (a layer that ignored the pose, the critics' mutant, fails here)
+    pm = p.model.model(ctl)
+    assert np.allclose(posed["muscle"].vertices, pm.muscle_whole()[0].transform(p.model.frame).vertices, atol=1e-12)
+    assert not np.allclose(posed["muscle"].vertices[:n_sleeve], layers["muscle"].vertices[:n_sleeve], atol=1e-3)
+    # the bone moves with the pose beyond the joint; below the bend (1.5 R under the skin) the first spool is where it was
+    assert not np.allclose(posed["bone"].vertices[-n_sacrum - 100:-n_sacrum], layers["bone"].vertices[-n_sacrum - 100:-n_sacrum], atol=1e-3)
+    # a kind without an anatomy has the skin only (the base class's layers; the horn has bone and muscle now)
+    plain = _plain_placed()
+    assert set(plain.layers()) == {"skin"} and plain.layers()["skin"] is plain.static
     h = K.instantiate_all([K.new_spec("horn")], base, v0)[0]
-    assert set(h.layers()) == {"skin"}
+    assert set(h.layers()) == {"bone", "muscle", "skin"}
 
 
 @assets
@@ -288,13 +482,21 @@ def test_pose_controls_clamp_and_re_evaluate_the_chain(world):
 
 @assets
 def test_the_tail_is_a_pose_of_a_chain_not_a_rubber_tube(world):
-    """Lifting keeps the buried part where it is (the sacrum does not move) and rotates the free tail about
-    the sacrococcygeal joint; the first ring is identical in every pose."""
+    """Lifting rotates the free tail about the sacrococcygeal joint, which is inside the body; the sacrum does not
+    move, the skin point stays, and the buried end of the tail stays buried (it moves by less than a fifth of a base
+    radius: the bend starts 1.5 R below the skin point)."""
     base, _, v0 = world
     p = K.instantiate_all([K.new_spec("tail")], base, v0)[0]
     n = p.params["ring_verts"]
+    R = p.params["base_radius"] * p.model.scale
     a, b = p.mesh({}).vertices[:n], p.mesh({"lift": 70.0, "sway": 30.0}).vertices[:n]
-    assert np.allclose(a, b, atol=1e-12)
+    assert np.abs(a - b).max() < 0.2 * R
+    from test_tail_anchor import _parity_inside
+    from minimaster.core.subdiv import quads_to_mesh
+    body = quads_to_mesh(*base.body_cage(v0))
+    assert _parity_inside(b, body.vertices[body.faces]).all()                  # still inside the body
+    assert np.allclose(p.layers()["bone"].vertices[-len(p.model.model().sacrum().vertices):],
+                       p.layers({"lift": 70.0})["bone"].vertices[-len(p.model.model().sacrum().vertices):], atol=1e-12)   # the sacrum stays
 
 
 @assets

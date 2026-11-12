@@ -1241,12 +1241,18 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
 
 # The proximal arm of a wing as the muscular sleeve of a shoulder instead of a bone-thin rod
 # (wingroot.py: the body's shoulder anatomy decides how thick). The radius of the upper arm along
-# the humerus, as a fraction of the humerus' own length ``L_h``, at t = 0 (the joint, buried), the
-# belly (where the arm crosses the skin: the deltoid-level swell, held over a plateau so it sits at
-# the skin whichever body it is on), t = 0.75 and the elbow. Read off the wing research
-# (docs/anatomy_wing.md): 0.15 / 0.14 / 0.095 / 0.07 of L_h, i.e. 0.47 / 0.44 / 0.30 / 0.22 units on
-# the bat's 3.16-unit humerus, the size of a human deltoid-level arm (0.45-0.52).
-SLEEVE_KNOTS = ((0.0, 0.150), (0.20, 0.140), (0.45, 0.140), (0.75, 0.095), (1.0, 0.070))
+# the humerus, as a fraction of the humerus' own length ``L_h``, at t = 0 (the joint, buried), where
+# the arm crosses the skin (t 0.15-0.3 since the joint sits on the ribs under the shoulder blade, the
+# placement's second version; 0.3-0.45 in the first), and on to the elbow. Read off the wing research
+# (docs/anatomy_wing.md): 0.15 / 0.14 at the skin / 0.07 at the elbow of L_h, i.e. 0.47 / 0.44 / 0.22
+# units on the bat's 3.16-unit humerus, the size of a human deltoid-level arm (0.45-0.52). Between the
+# skin and the elbow the arm TAPERS all the way, as a real upper arm does under the deltoid and the
+# biceps (wing/A16, limb/limb_059): a plateau to 0.45 with a short taper after it (the first sleeve)
+# read as a drumstick on a thin forearm once the joint moved up and more of the arm showed.
+SLEEVE_KNOTS = ((0.0, 0.150), (0.15, 0.146), (0.30, 0.134), (0.60, 0.104), (1.0, 0.070))
+
+
+ARM_SIDES = 9                      # facets round the bone-thin rod of the first versions (no Sleeve)
 
 
 @dataclass(frozen=True)
@@ -1259,7 +1265,7 @@ class Sleeve:
     sleeve this thick must not read as a nonagon)."""
 
     gain: float = 1.0
-    sides: int = 14
+    sides: int = 32          # 14 drew the facets of the sleeve as a zigzag at the root collar's top edge (the collar follows the round wall)
 
     def fraction(self, t):
         t = np.clip(np.asarray(t, dtype=np.float64), 0.0, 1.0)
@@ -1364,7 +1370,7 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
         r_arm[:mid_i + 1] = np.maximum(r_elbow + sleeve.extra(t_h, l_h), floor)
     u_f = (ts[mid_i:] - ts[mid_i]) / (1.0 - ts[mid_i])
     r_arm[mid_i:] = r_elbow + (R(0.034) - r_elbow) * u_f
-    out.append(Piece("arm", _tube(pp, r_arm, 9 if sleeve is None else sleeve.sides),
+    out.append(Piece("arm", _tube(pp, r_arm, ARM_SIDES if sleeve is None else sleeve.sides),
                      chain=("elbow", "wrist")))
     out.append(Piece("wrist_knob", _ball(J["wrist"] + up, 1.12 * R(0.034), 8, 14), bone="wrist"))
     out.append(Piece("elbow_knob", _ball(J["elbow"] + up, 1.12 * R(0.042), 8, 14), bone="elbow"))
@@ -1992,12 +1998,16 @@ def _feather_bones(sk, height, s, sleeve: Sleeve | None = None) -> list[Piece]:
         if blunt:           # the first end rounds off instead of showing a flat-cut rod
             u = np.clip(t / blunt, 0.0, 1.0)
             r = r * (0.35 + 0.65 * u * u * (3.0 - 2.0 * u))
-        return _tube(pts, r, 9 if sleeve is None else sleeve.sides)
+        return _tube(pts, r, ARM_SIDES if sleeve is None else sleeve.sides)
 
     # the arm is the core of the leading edge: thick enough that the marginal rows
     # wrap a solid nose instead of a bare rod, and raised to the middle of the stack
     out.append(Piece("arm", tube([J["shoulder"], J["elbow"], J["wrist"]], NOSE_RADIUS[0] * s,
-                                 NOSE_RADIUS[1] * s, 6, lift=NOSE_LIFT, blunt=0.12, sleeve=sleeve),
+                                 NOSE_RADIUS[1] * s, 6, lift=NOSE_LIFT,
+                                 # the rod's buried end rounds off; a sleeve's end is the shoulder, buried in the
+                                 # body, and a blunted sleeve narrowed the arm just where it leaves the skin (the
+                                 # root collar met a cone there)
+                                 blunt=0.12 if sleeve is None else 0.0, sleeve=sleeve),
                      chain=("elbow", "wrist")))
     out.append(Piece("hand", tube([J["wrist"], J["d3_mcp"], J["d3_tip"]], 0.040 * s,
                                   0.012 * s, 5, lift=0.04), chain=("d3_mcp", "d3_tip")))

@@ -56,7 +56,10 @@ from . import junction as J
 # --------------------------------------------------------------------------
 # constants (every one is documented in docs/anatomy_horn.md)
 
-IOD_REF = 0.582          # the inter-ocular distance of the neutral head: horn sizes are at this head
+IOD_REF = 0.582          # the inter-ocular distance of the neutral head (no longer the scale: see SKULL_REF)
+SKULL_REF = 0.6933       # the skull's half-width of the neutral head (macro defaults) at SKULL_AT: horn sizes are at this head
+SKULL_AT = 0.6           # ... measured in a slab at this fraction of the way skull base -> crown (above the ears and the eyes)
+SKULL_SLAB = 0.04        # ... of this half-thickness (a share of that height)
 TIP_FLOOR = 0.012        # the sheath's tip radius is at least this (a point is not printable)
 TAPER_P = 1.05           # the exponent of the sheath's taper (1.25 made a thorn)
 FLARE_LEN = 0.35         # decay length of the root flare, in root radii
@@ -69,18 +72,33 @@ CORE_MIN_WALL = 0.12     # the keratin wall is at least this thick (base radii) 
 CORE_PEDESTAL = 1.12     # the process widens into the skull to this many base radii
 RING_PITCH = 0.8         # annulus pitch at the root, in base radii
 RING_PITCH_TIP = 0.55    # ... falling to this fraction of it at the tip
+RING_START = 0.25        # no ring below this many base radii over the skin point (the root collar's top edge lies there)
 RING_FIRST = 0.9         # the first annulus is this many base radii above the skin
 RING_PER_PERIOD = 6      # rings per annulus period (the loft must resolve the ridge)
 TIP_CAP = (32.0, 62.0, 82.0)    # the rounded end: rings on a quarter sphere (degrees)
 # the sheath's foot (see ``HornModel.skin``): rings at these heights above the LOCAL skin (in root
 # radii), the first one buried; a groove and a bead (the keratin's crisp rim) sit on them
-FOOT_HEIGHTS = (-0.25, 0.0, 0.1, 0.22, 0.36, 0.52, 0.75, 1.05, 1.4)
-FOOT_BLEND = 2.5         # the rings go from following the skin (low) to the planar first shaft ring (top)
-GROOVE_H, GROOVE_W, GROOVE_D = 0.10, 0.09, 0.05     # the groove at the skin line: height, width, depth (root radii)
-BEAD_H, BEAD_W, BEAD_E = 0.34, 0.14, 0.07           # the bead above it: height, width, swell (root radii)
+# (round 2: denser near the skin, where the root collar's top edge meets the sheath, and shorter: the foot's tilted
+# part above the collar showed as a crease)
+FOOT_HEIGHTS = (-0.25, 0.0, 0.08, 0.16, 0.24, 0.34, 0.46, 0.62, 0.8)
 BOWL_RINGS = (22.0, 45.0, 66.0, 82.0)    # the buried bowl under the collar (degrees on a quarter ellipse)
-BEND_LIMIT = 0.8         # a ring's radius times the path curvature may not exceed this
-HELIX_RHO = 2.0          # a corkscrew's circle has this many local radii
+FOOT_GAP = 0.02          # consecutive foot rings are at least this many root radii apart along the axis
+FOOT_MIN = 0.3           # a compressed foot keeps at least this share of its height
+FOOT_TURN = 15.0         # degrees: the path turns at most this much over the foot (it is compressed otherwise)
+TUBE_DEPTH = 0.9         # the junction's tube starts this many sinks under the skin point
+BOWL_DEPTH = 0.5         # the bowl under the stem is this many root radii deep
+STEM_DROP = 0.1          # the stem's level ring is this many root radii under the lowest point of the first foot ring
+BEND_LIMIT = 0.7         # a ring's (largest) radius times the path curvature may not exceed this (0.8 on the mean
+                         # radius let a ram's keel and rings cross on the inner side of a tight curl)
+HELIX_RHO = 1.5          # a corkscrew's circle has this many local radii (before the bend limit)
+HELIX_RAMP = 0.45        # the corkscrew grows out of the axis over this share of the length
+HELIX_START = 1.2        # ... starting this many base radii up the shaft
+HELIX_BEND = 0.8         # a corkscrew's path bends at most this share of the bend limit (the twisted ridged sheath of a
+                         # ram with 4 turns crossed itself at 0.95)
+HELIX_ITER = 6           # rounds of taking the helix in where the corkscrew bends too hard
+PITCH_MIN = 5.0          # a corkscrew's coil is at least this many base radii long: a helix of pitch P bends at most 1 / (2 P / 2 pi), and below 4 r that is more than the bend limit for SOME helix radius, which the corkscrew passes through as it grows out of the root (and closer coils of the tube meet)
+LYRE_PSI_MAX = 0.5 * math.pi  # a lyre turns out at most this much (radians), and back 0.7 of it: more made a loop
+PSI_MAX = 1.75 * math.pi # the planar spiral turns at most this much (radians): past it the log spiral meets its first coil
 HUG = 0.97               # the skin hugs this fraction of the (inscribed) sheath radius
 HALFWIDTH_CAP = 0.40     # the base radius is at most this share of the head's half-width at that height
 
@@ -89,8 +107,16 @@ TENT_RADIUS = 2.2        # rho_m: the tent's radius
 TENT_FLOOR = 0.36        # ... at least three mean cage edges (the cage is 0.125 an edge)
 TENT_MARGIN = 0.075      # the tent stays this far from the midline
 TENT_HEIGHT = 0.35       # H of the tent (base radii); a ram's is TENT_HEIGHT_RAM
-TENT_HEIGHT_RAM = 0.5
+TENT_HEIGHT_RAM = 0.4      # (round 2: 0.5; with the ram's own head bound, 0.12, a taller tent was cut into a step the validity pass backed off)
+MIDLINE_RADII = 1.6      # the base radius is at most the distance from the midline less TENT_MARGIN over this
+                         # (2.2, the tent's own radius, made the horns of a narrow-browed random face 0.54 of their size)
+MIN_FILLET = 0.3         # ... and the fillet never narrower than this many base radii (by the midline)
+FILLET_MAX = 1.5         # the junction's fillet is at most this many base radii wide on a head
 TENT_MIN = 0.10          # ... and at least this (units): the cage resolves nothing smaller
+COLLAR_SINK = 0.2        # the root collar's underside is sunk this many root radii under the skin (collar.py)
+HEAD_SILHOUETTE = None   # the junction's bound on how far a horn's spec may push the head's skin out: None = the core's
+                         # head default (8 % of the distance from the head's bone); the ram sets its own (SHAPES), whose
+                         # root on the temple crest the 8 % cut into a step the validity pass backed off
 SKIN_THICK = 0.06        # scalp skin thickness, units (0.6 cm; 3-8 mm)
 SCALP_THICK = 0.065      # galea + periosteum + skin over the outer table, units (6.7 mm)
 PLATE_GAP = 0.004        # the skull plate lies this far under the soft tissue (two coincident surfaces z-fight in a section view)
@@ -109,26 +135,30 @@ def smoothstep(u):
 SHAPES = {
     "curved": dict(length=1.6, base_radius=0.17, curve=1.31, twist=0.0, turns=0.0, segments=28,
                    tip=0.06, profile="spiral", q=1.8, aspect=0.85, lobe=0.0, rings=0.05,
-                   flare=0.15, tilt=27.0, lean=(-0.31, 0.80, -0.52), bend=(0.0, 0.0, -1.0),
-                   core=0.62, material="bone", site="horn_crown"),
+                   flare=0.0, tilt=27.0, lean=(-0.31, 0.80, -0.52), bend=(0.0, 0.0, -1.0),
+                   core=0.62, material="bone", site="horn_crown", collar=(0.45, 0.3)),
     "ram": dict(length=3.0, base_radius=0.28, curve=3.2, twist=0.0, turns=0.0, segments=36,
                 tip=0.07, profile="spiral", q=1.35, aspect=0.80, lobe=0.06, rings=0.06,
-                flare=0.15, tilt=41.0, lean=(0.14, 0.49, -0.86), bend=(0.45, -0.65, -0.55),
-                core=0.6, material="bone", site="horn_temple_crest"),
-    "spiral": dict(length=4.0, base_radius=0.13, curve=0.35, twist=0.0, turns=2.25, segments=48,
-                   tip=0.04, profile="spiral", q=2.0, aspect=1.0, lobe=0.0, rings=0.03,
-                   flare=0.15, tilt=40.0, lean=(-0.42, 0.83, -0.37), bend=(0.0, 0.0, -1.0),
-                   core=0.62, material="bone", site="horn_crown"),
-    "antelope": dict(length=4.0, base_radius=0.13, curve=0.2, twist=0.0, turns=0.0, segments=40,
-                     tip=0.04, profile="lyre", q=2.0, aspect=0.90, lobe=0.0, rings=0.04,
-                     flare=0.15, tilt=45.0, lean=(-0.31, 0.80, -0.52), bend=(0.7, 0.0, -0.7),
-                     core=0.62, material="bone", site="horn_crown"),
+                flare=0.0, tilt=41.0, lean=(0.14, 0.49, -0.86), bend=(0.45, -0.65, -0.55),
+                core=0.6, material="bone", site="horn_temple_crest", collar=(0.9, 0.3), ring_verts=32,
+                silhouette=0.12),
+    # a markhor / kudu corkscrew (A01, A26): thick at the root, an open helix of 1.5 turns twice the local radius
+    # wide (the first one, 4.0 x 0.13 with 2.25 turns, crossed itself and printed fragile)
+    "spiral": dict(length=2.4, base_radius=0.17, curve=0.35, twist=0.0, turns=1.5, segments=48,
+                   tip=0.055, profile="spiral", q=2.0, aspect=1.0, lobe=0.0, rings=0.03,
+                   flare=0.0, tilt=30.0, lean=(-0.42, 0.83, -0.37), bend=(0.0, 0.0, -1.0),
+                   core=0.62, material="bone", site="horn_crown", collar=(0.45, 0.3)),
+    # (round 2: 3.4 x 0.16, tip 0.05; the first one, 4.0 x 0.13, printed fragile at "medium": 31% of its area under 0.3 mm)
+    "antelope": dict(length=3.4, base_radius=0.16, curve=0.2, twist=0.0, turns=0.0, segments=40,
+                     tip=0.055, profile="lyre", q=2.0, aspect=0.90, lobe=0.0, rings=0.04,
+                     flare=0.0, tilt=40.0, lean=(-0.31, 0.80, -0.52), bend=(0.7, 0.0, -0.7),
+                     core=0.62, material="bone", site="horn_crown", collar=(0.45, 0.3)),
     # a giraffe's ossicone: bone that stays under the skin and hair, so the whole surface is skin
     # material; it tapers by only a quarter, ends in a dome and meets the head in a concave fillet
     "ossicone": dict(length=0.45, base_radius=0.15, curve=0.2, twist=0.0, turns=0.0, segments=16,
                      tip=0.105, profile="spiral", q=2.0, aspect=1.0, lobe=0.0, rings=0.0,
                      flare=0.45, tilt=20.0, lean=(-0.31, 0.80, -0.52), bend=(0.0, 0.0, -1.0),
-                     core=1.0, material="skin", site="horn_crown"),
+                     core=1.0, material="skin", site="horn_crown", collar=(0.8, 0.7)),
 }
 SHAPE_NAMES = tuple(SHAPES)
 
@@ -141,7 +171,7 @@ class HornParams:
     length: float = 1.6
     base_radius: float = 0.17
     segments: int = 28
-    ring_verts: int = 16
+    ring_verts: int = 24
     curve: float = 1.31
     twist: float = 0.0
     turns: float = 0.0
@@ -205,11 +235,16 @@ class Head:
     left: np.ndarray           # the head axes, unit: toward the character's left,
     up: np.ndarray             # up the head,
     fwd: np.ndarray            # and forward (left x up = fwd)
+    skull: float = SKULL_REF   # the skull's half-width (``skull_halfwidth``)
 
     @property
     def k(self) -> float:
-        """The head's size over the neutral head's: what horn lengths and radii scale by."""
-        return self.iod / IOD_REF
+        """The head's size over the neutral head's: what horn lengths and radii scale by. It is the
+        SKULL's half-width over the neutral one (the horn grows from the skull): the round-1 scale, the
+        eye distance, follows the eyes, which a face slider moves on a skull of the same width
+        (``eyes.eye_trans.in_out`` -1..1 changed it 0.89..1.17, a random face 0.54..1.28 where the skull
+        was 1.28 wide: horns 0.43-0.92 x the size the skull asks for)."""
+        return self.skull / SKULL_REF
 
     @property
     def axes(self) -> np.ndarray:
@@ -224,8 +259,9 @@ def head_frame(base, verts, cage) -> Head:
     top = A.joint_position(base, "head-2", verts)
     root = A.joint_position(base, "head", verts)
     iod = 2.0 * abs(float(eye[0]))
-    k = iod / IOD_REF
     cv = cage[0]
+    skull = skull_halfwidth(cv, root, top)
+    k = skull / SKULL_REF
     head = cv[cv[:, 1] > root[1] - 0.3 * k]
     band = ((head[:, 1] > root[1] - 0.15 * k) & (head[:, 1] < eye[1] + 0.25 * k)
             & (head[:, 2] < root[2] + 0.5 * k) & (head[:, 0] > 0))
@@ -241,7 +277,17 @@ def head_frame(base, verts, cage) -> Head:
     left = np.cross(up, fwd)
     return Head(np.asarray(eye, dtype=np.float64), np.asarray(top, dtype=np.float64),
                 np.asarray(root, dtype=np.float64), np.asarray(ear, dtype=np.float64), iod,
-                left, up, fwd)
+                left, up, fwd, skull)
+
+
+def skull_halfwidth(cage_v, root, top) -> float:
+    """The skull's half-width: the largest ``|x|`` of the cage in a slab ``SKULL_AT`` of the way from the
+    skull base joint to the crown joint (the parietal eminences; above the ears and the eyes, which a face
+    slider moves on the same skull), ``SKULL_SLAB`` of that height thick."""
+    h = float(top[1] - root[1])
+    y = float(root[1]) + SKULL_AT * h
+    sl = np.abs(cage_v[:, 1] - y) < SKULL_SLAB * abs(h)
+    return float(np.abs(cage_v[sl, 0]).max()) if sl.any() else SKULL_REF
 
 
 def local_halfwidth(cage_v, point, radius: float = 0.35) -> float:
@@ -292,11 +338,18 @@ class Site:
         """The base radius in world units."""
         return self.base_radius * self.scale
 
+    @property
+    def right(self) -> bool:
+        return float(self.point[0]) < 0.0
+
     def matrix(self, sink_offset: float = 0.0) -> np.ndarray:
-        """The 4x4 that puts the local horn (``z`` = axis, ``x`` = bend, ``y = z x x``) on the head."""
+        """The 4x4 that puts the local horn (``z`` = axis, ``x`` = bend, ``y = z x x``) on the head. On
+        the right side ``y = -(z x x)``: a mirroring frame, so the right horn is the mirror image of the
+        left one (a corkscrew and a keel of the other hand) while it stands on ITS OWN site (on a
+        symmetric head this is exactly ``diag(-1, 1, 1)`` of the left horn's matrix)."""
         m = np.eye(4)
         z, x = self.axis, self.bend
-        y = np.cross(z, x)
+        y = np.cross(z, x) * (-1.0 if self.right else 1.0)
         m[:3, :3] = np.stack([x, y, z], axis=1) * self.scale
         m[:3, 3] = self.point + z * sink_offset
         return m
@@ -343,7 +396,7 @@ def horn_site(cage, head: Head, point, params: HornParams, *, scale: float = 1.0
     cap = HALFWIDTH_CAP * hw
     if limit > cap:
         limit, why = cap, "head width"
-    margin = (abs(float(point[0])) - TENT_MARGIN) / TENT_RADIUS
+    margin = (abs(float(point[0])) - TENT_MARGIN) / MIDLINE_RADII
     if limit > margin > 0.0:
         limit, why = margin, "midline"
     return Site(point=point, normal=n, axis=axis, bend=w, halfwidth=hw, scale=k,
@@ -364,9 +417,10 @@ class PlaneField:
         n = np.asarray(normal, dtype=np.float64)
         self.n = n / np.linalg.norm(n)
 
-    def height(self, xy):
+    def height(self, xy, hits: bool = False):
         xy = np.asarray(xy, dtype=np.float64)
-        return -(self.n[0] * xy[:, 0] + self.n[1] * xy[:, 1]) / self.n[2]
+        z = -(self.n[0] * xy[:, 0] + self.n[1] * xy[:, 1]) / self.n[2]
+        return (z, np.ones(len(xy), dtype=bool)) if hits else z
 
 
 class SkinField:
@@ -386,11 +440,14 @@ class SkinField:
         self.fallback = fallback
         self.reach = reach
 
-    def height(self, xy):
+    def height(self, xy, hits: bool = False):
+        """The skin's ``z`` over each point of ``xy``; ``hits=True`` also returns which points the rays found
+        the skin under (the others are the fallback plane's: a ray past the head's silhouette)."""
         xy = np.asarray(xy, dtype=np.float64)
         out = self.fallback.height(xy)
+        found = np.zeros(len(xy), dtype=bool)
         if not len(self.tri) or not len(xy):
-            return out
+            return (out, found) if hits else out
         a, b, c = self.tri[:, 0], self.tri[:, 1], self.tri[:, 2]
         e1, e2 = b[:, :2] - a[:, :2], c[:, :2] - a[:, :2]
         det = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
@@ -408,7 +465,8 @@ class SkinField:
             j = np.argmin(nearest, axis=1)
             got = np.isfinite(nearest[np.arange(len(p)), j])
             out[lo:lo + 96][got] = z[np.arange(len(p)), j][got]
-        return out
+            found[lo:lo + 96] = got
+        return (out, found) if hits else out
 
 
 # --------------------------------------------------------------------------
@@ -468,9 +526,10 @@ class HornModel:
         phase0 = -(L / (c * pitch0)) * math.log(max(1.0 - c * RING_FIRST * R / L, 1e-9))
         x = phase - phase0
         ridge = 0.5 * (1.0 - np.cos(2.0 * np.pi * np.mod(x, 1.0) ** 0.75))
-        env = smoothstep((s + 0.3 * R) / (0.9 * R)) * \
+        env = smoothstep((s - RING_START * R) / (0.8 * R)) * \
             (1.0 - smoothstep((s - 0.84 * L) / (0.12 * L)))
         return amp * ridge * env
+
 
     # -- the centreline -------------------------------------------------------------------
 
@@ -497,7 +556,7 @@ class HornModel:
         """``(kN, kB)``: the curvature along the bend direction N and the third axis B at ``s``."""
         p, R, L = self.p, self.R, self.L
         row = p.row
-        psi = float(p.curve) * L / 2.0
+        psi = self.psi
         psi_b = float(p.twist) * L / 2.0
         s = np.asarray(s, dtype=np.float64)
         if row["profile"] == "lyre":
@@ -514,34 +573,75 @@ class HornModel:
             kN, kB = psi * f, psi_b * f
         return kN, kB
 
-    def helix_offset(self, s, N, B):
+    def taper(self, s):
+        """The sheath's smooth radius at ``s`` (the cone, no flare and no growth rings): what the path's
+        bend limits are measured against (the rings ride on it; a helix built on the rippled radius rippled
+        the centreline at the rings' pitch)."""
+        p, R, L = self.p, self.R, self.L
+        t = np.clip(np.asarray(s, dtype=np.float64) / L, 0.0, 1.0)
+        tip = min(p.tip, 0.95 * R)
+        return tip + (R - tip) * (1.0 - t) ** TAPER_P
+
+    @property
+    def turns_eff(self) -> float:
+        """The corkscrew's turns, at most so many that a coil is ``PITCH_MIN`` base radii long (closer coils
+        of a tube that thick run into each other: the first spiral's 2.25 turns at a radius twice its own
+        crossed itself 126 times per horn)."""
+        t = float(self.p.turns)
+        cap = self.L / (PITCH_MIN * self.R)
+        return math.copysign(min(abs(t), cap), t)
+
+    @property
+    def psi(self) -> float:
+        """The planar spiral's total turn ``curve x L / 2`` (radians), at most ``PSI_MAX``: a log spiral that
+        turns on past that runs into its own first coil (a ram of length 12, 19 radians, crossed itself
+        2,352 times)."""
+        psi = float(self.p.curve) * self.L / 2.0
+        cap = LYRE_PSI_MAX if self.p.row["profile"] == "lyre" else PSI_MAX
+        return math.copysign(min(abs(psi), cap), psi)
+
+    def helix_offset(self, s, N, B, rho_scale=None):
         """The corkscrew's displacement from the axis curve at ``s`` (``(n, 3)``): a circle of radius
-        ``HELIX_RHO`` x the local radius in the axis' bend frame ``N``, ``B``, turning ``turns`` times over the
-        length and growing in from the skin (a horn starts on its axis)."""
+        ``HELIX_RHO`` x the local (smooth) radius in the axis' bend frame ``N``, ``B``, turning ``turns_eff``
+        times over the length and growing in from the skin (a horn starts on its axis); ``rho_scale`` (per
+        ``s``) is what the bend limit leaves of it (:meth:`path`)."""
         p, L = self.p, self.L
-        if not p.turns:
+        turns = self.turns_eff
+        if not turns:
             return np.zeros((len(s), 3))
         sp = np.clip(s, 0.0, L)
-        rho = HELIX_RHO * np.minimum(self.radius(sp, flare=False), 1.0 * self.R * 1.5) * smoothstep(sp / (0.2 * L))
-        phi = 2.0 * np.pi * float(p.turns) * sp / L + math.radians(float(p.row.get("phase", 0.0)))
+        s0 = min(HELIX_START * self.R, 0.3 * L)                  # (above the foot: its rings follow the skin)
+        u = np.clip((sp - s0) / (HELIX_RAMP * L), 0.0, 1.0)
+        ramp = u * u * u * (u * (6.0 * u - 15.0) + 10.0)       # C2 at the root: a quadratic start bent the path there
+        rho = HELIX_RHO * np.minimum(self.taper(sp), 1.5 * self.R) * ramp
+        if rho_scale is not None:
+            rho = rho * rho_scale
+        phi = 2.0 * np.pi * turns * sp / L + math.radians(float(p.row.get("phase", 0.0)))
         return (rho * np.cos(phi))[:, None] * N + (rho * np.sin(phi))[:, None] * B
 
     def path(self):
         """``(s, centre, T, N, B)`` on a fine grid from the buried end to the tip: straight below the
         skin, then the axis curve bent by the curvature law (an equiangular spiral, a lyre), plus the
-        corkscrew's helical offset; the frames are carried along by parallel transport."""
+        corkscrew's helical offset; the frames are carried along by parallel transport. The curvature
+        of the FINAL path times the smooth radius never exceeds ``BEND_LIMIT`` (the loft would fold on its
+        inner side): the planar law is clamped, and so is the helix's radius where the sum still bends too
+        hard."""
         if self._path is not None:
             return self._path
         L = self.L
         sink = self.p.sink
         s = np.unique(np.concatenate([np.linspace(0.0, L, 481), self._stations,
                                       np.linspace(-(sink + self.p.cap_depth) * 1.05, 0.0, 12)]))
+        # no two samples closer than a fifth of the grid's step (a station a hair from a grid point made the
+        # differentiated tangent of a corkscrew jump there, and the ring frames carried along it with it)
+        keep = np.concatenate([[True], np.diff(s) > 0.2 * L / 480.0])
+        keep |= np.isclose(s, 0.0)
+        s = s[keep]
         kN, kB = self._curvature(np.where(s > 0, s, 0.0))
         kN = np.where(s > 0, kN, 0.0)
         kB = np.where(s > 0, kB, 0.0)
-        # a ring's radius times the curvature may not exceed BEND_LIMIT (the loft would fold on
-        # its own inner side): extreme parameter combinations lose some turn instead
-        r = self.radius(np.clip(s, 0.0, L), flare=False)
+        # the radius the limit is measured on: the smooth taper with the keel's lobes and the growth rings on it
+        r = self.taper(np.clip(s, 0.0, L)) * (1.0 + float(self.p.row["lobe"])) * (1.0 + max(float(self.p.rings), 0.0))
         mag = np.hypot(kN, kB)
         cap = BEND_LIMIT / np.maximum(r, 1e-9)
         sc = np.where(mag > cap, cap / np.maximum(mag, 1e-12), 1.0)
@@ -574,8 +674,27 @@ class HornModel:
             ds = s[i + 1] - s[i]
             pos[i] = pos[i + 1] - np.array([0.0, 0.0, 1.0]) * ds
             Ts[i], Ns[i], Bs[i] = Ts[i0], Ns[i0], Bs[i0]
-        if self.p.turns:
-            pos = pos + self.helix_offset(s, Ns, Bs)
+        if self.turns_eff:
+            # the bend limit of the corkscrew is worked out on a uniform grid (the path's own grid has the
+            # sheath's stations in it, some a hair apart, where a per-sample scale would itself kink the path)
+            su = np.linspace(0.0, L, 601)
+            ip = lambda a: np.stack([np.interp(su, s, a[:, c]) for c in range(3)], axis=1)   # noqa: E731
+            ax_u, n_u, b_u = ip(pos), ip(Ns), ip(Bs)
+            r_u = np.interp(su, s, r)
+            scale_u = np.ones(len(su))
+            for _ in range(HELIX_ITER):
+                pu = ax_u + self.helix_offset(su, n_u, b_u, scale_u)
+                d = np.gradient(pu, su, axis=0)
+                Tt = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-12)
+                over = (np.linalg.norm(np.gradient(Tt, su, axis=0), axis=1) * r_u / (HELIX_BEND * BEND_LIMIT))[2:-2]
+                if over.max() <= 1.0:          # (the ends: one-sided differences)
+                    break
+                # take the helix in where the sum bends too hard, and a little around it (a step in its
+                # radius would itself bend the path)
+                # (the whole helix: a helix taken in locally passes through the radii at which it bends hardest,
+                # 1 / 2c at a radius equal to its pitch over 2 pi, and kinks there)
+                scale_u = scale_u * min(1.0 / float(over.max()), 0.9)
+            pos = pos + self.helix_offset(s, Ns, Bs, np.interp(np.clip(s, 0.0, L), su, scale_u))
             # the tangent of the new path and frames carried along it (minimal rotations)
             d = np.gradient(pos, s, axis=0)
             Ts = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-12)
@@ -616,6 +735,27 @@ class HornModel:
         asp = float(self.p.row["aspect"])
         return r, r * asp
 
+    def inscribed(self, s):
+        """The radius of the largest circle about the axis that lies inside the sheath's mesh at ``s``:
+        the minor semi-axis without the growth rings (the troughs between them), less the keel's lobes,
+        the groove at the skin line and the polygon of the rings. The junction's tube is this (times
+        ``HUG``), so the skin it calls hidden is hidden by the sheath."""
+        p, R, L = self.p, self.R, self.L
+        s = np.asarray(s, dtype=np.float64)
+        t = np.clip(s / L, 0.0, 1.0)
+        tip = min(p.tip, 0.95 * R)
+        base = tip + (R - tip) * (1.0 - t) ** TAPER_P
+        # the foot's flare decays with the height over the LOCAL skin, which on the low side of a tilted
+        # root is up to Ra tan(tilt) under the skin point, and over a compressed foot (a stub) faster
+        Ra = R * (1.0 + p.flare_eff)
+        drop = Ra * math.tan(math.radians(min(p.tilt, 70.0)))
+        room = 0.85 * L - drop
+        f = 1.0 if room >= FOOT_HEIGHTS[-1] * Ra else max(room / (FOOT_HEIGHTS[-1] * Ra), 0.05)
+        fl = 1.0 + p.flare_eff * np.exp(-np.maximum(s + drop, 0.0) / (FLARE_LEN * R * f))
+        lobe = float(p.row["lobe"])
+        return (base * fl * float(p.row["aspect"]) * (1.0 - lobe)
+                * math.cos(math.pi / int(p.ring_verts)))
+
     # -- the meshes -----------------------------------------------------------------------------
 
     def _cap_rings(self, centre, direction, nvec, bvec, a, b, ring_verts, lobe, keel, height=None):
@@ -653,8 +793,19 @@ class HornModel:
         # so that the first shaft ring is at most 0.85 of the length up
         heights = np.array(FOOT_HEIGHTS)
         room = 0.85 * self.L - float(z_skin.max())
+        # ... and so that the path turns at most FOOT_TURN over the foot (its rings take their frames from the
+        # path at their own height: a ram that curls from its root, the short one a capped radius builds, crossed
+        # its own foot)
+        sp, _, Tp, _, _ = self.path()
+        cos_t = Tp[sp >= 0.0] @ np.array([0.0, 0.0, 1.0])
+        turned = np.nonzero(cos_t < math.cos(math.radians(FOOT_TURN)))[0]
+        if len(turned):
+            room = min(room, float(sp[sp >= 0.0][turned[0]]) - float(z_skin.max()))
         if room < heights[-1] * Ra:
-            f = max(room / (heights[-1] * Ra), 0.05)
+            # (never flatter than FOOT_MIN of it: rings squeezed onto the tilted skin coincide on its high side)
+            # (... unless that would put the foot's top past the tip: a stub shorter than its foot)
+            top_room = (0.92 * self.L - float(z_skin.max())) / (heights[-1] * Ra)
+            f = max(room / (heights[-1] * Ra), min(FOOT_MIN, top_room), 0.05)
             heights = np.where(heights > 0, heights * f, heights)
         s_top = max(float(z_skin.max()) + float(heights[-1]) * Ra, 0.0)
         st = self._stations
@@ -666,17 +817,18 @@ class HornModel:
         foot = []
         for i, hh in enumerate(heights):
             hh = float(hh)
-            t = (i / (K - 1)) ** FOOT_BLEND
+            t = 0.0 if i == 0 else float(smoothstep((i - 1) / (K - 2)))     # (the buried ring and the skin line: 0)
             keep = 1.0 - t
-            # the groove, the bead and the flare are functions of the NOMINAL height above the skin
-            # (they fade as the ring leaves it); a ring that flares is wider, so it is lowered to the skin
-            # at ITS OWN place, in two passes
-            groove = GROOVE_D * math.exp(-((hh - GROOVE_H) / GROOVE_W) ** 2)
-            bead = BEAD_E * math.exp(-((hh - BEAD_H) / BEAD_W) ** 2)
+            # the flare is a function of the NOMINAL height above the skin (it fades as the ring leaves it);
+            # a ring that flares is wider, so it is lowered to the skin at ITS OWN place, in two passes. The
+            # rings go from following the skin to the planar first shaft ring along a smoothstep (a power law
+            # left a tilted ring under a flat one: a crease across the foot)
             fl = p.flare_eff * math.exp(-max(hh, 0.0) / FLARE_LEN)
-            m = 1.0 + keep * (boss * (bead - groove) + fl)
+            m = 1.0 + keep * fl
             rad = 1.0 + (0.0 if lobe == 0.0 else lobe * np.cos(3.0 * (th - keel)))
             z = (1.0 - t) * (z_skin + hh * Ra) + t * s_top
+            lo_z = None if not foot else z_prev + FOOT_GAP * Ra       # each ring above the one below it ...
+            hi_z = s_top - (K - 1 - i) * FOOT_GAP * Ra                # ... and below the planar top ring
             for _ in range(2):
                 c, tt, nn, bb = self.frames_at(np.maximum(z, 0.0))
                 a, b = self.semi_axes(np.maximum(z, 0.0), flare=False)
@@ -684,19 +836,38 @@ class HornModel:
                 # the skin under this ring's own xy, in the horn's frame (the ring is nearly flat in
                 # the xy plane: its centre is on the axis below the skin)
                 z = (1.0 - t) * (field.height(v[:, :2]) + hh * Ra) + t * s_top
+                # (the skin under a ring higher up the foot can be higher than under the root ring that set the
+                # top: the rings of a squeezed foot, a short horn the head limited, crossed there)
+                z = np.minimum(z, hi_z) if i < K - 1 else z
+                if lo_z is not None:
+                    z = np.maximum(z, lo_z)
+            z_prev = z
             c, tt, nn, bb = self.frames_at(np.maximum(z, 0.0))
             a, b = self.semi_axes(np.maximum(z, 0.0), flare=False)
             v = c + (a * m * rad * ct)[:, None] * nn + (b * m * rad * st_)[:, None] * bb
             v[:, 2] = np.where(z > 0.0, v[:, 2], z)       # below the skin point the stem is straight
             foot.append(v)
-        # the buried bowl under the first ring: a quarter ellipse down to its centre
-        depth = 0.85 * max(p.sink + p.cap_depth, 0.8 * R)
-        c0 = foot[0].mean(axis=0)
+        # the buried stem: the first ring carried straight down (full width) to a level ring a hair under
+        # its LOWEST point (on a tilted skin the first ring is tilted; a bowl hung from its middle turned
+        # inward right under the skin on the high side, and the junction's tube, the sheath's first part,
+        # stood outside it); then the bowl, a quarter ellipse down to its centre
+        # (and at least as deep as the junction's tube reaches, ``junction_spec``: the tube is inside the sheath
+        # whatever the skin under the foot does). It is the root section itself, centred on the axis: the first
+        # ring's vertices on the high side of a tilted skin take their frames from the bent path above the skin
+        # point, and a stem copied from that ring was off-centre (the tube stood 0.002 out of it)
+        rad0 = 1.0 + (0.0 if lobe == 0.0 else lobe * np.cos(3.0 * (th - keel)))
+        z_stem = min(float(foot[0][:, 2].min()), -TUBE_DEPTH * p.sink) - STEM_DROP * Ra
+        stem = np.stack([a0 * rad0 * ct, b0 * rad0 * st_, np.full(nv, z_stem)], axis=1)
+        # (a closing cap, not a second stem: 0.85 x (sink + cap) sent a flared ram's bowl through the midline of the head
+        # into the other horn's)
+        depth = BOWL_DEPTH * Ra
+        c0 = stem.mean(axis=0)
         bowl = []
         for deg in BOWL_RINGS[::-1]:
             phi = math.radians(deg)
-            ring = c0 + (foot[0] - c0) * math.cos(phi)
+            ring = c0 + (stem - c0) * math.cos(phi)
             bowl.append(ring - np.array([0.0, 0.0, 1.0]) * depth * math.sin(phi))
+        bowl.append(stem)
         return bowl, foot, shaft_s
 
     def skin(self, field=None) -> Mesh:
@@ -798,27 +969,25 @@ def skin_plan(params: HornParams, site: Site, fillet: float, fillet_height: floa
     x0 = abs(float(site.point[0]))
     rho = min(max(TENT_RADIUS * R, TENT_FLOOR * site.scale), max(x0 - TENT_MARGIN, 0.5 * TENT_FLOOR))
     H = max(params.tent_height * R, TENT_MIN * site.scale)
-    return SkinPlan(rho, H, float(fillet), float(fillet_height))
+    # the scalp's fillet is at most FILLET_MAX base radii wide (the parameter goes to 4: a ram's 4 moved 400
+    # vertices of the temple and the validity pass backed tens of them off), and it stays TENT_MARGIN off the
+    # midline like the tent (a horn close to the midline, a random face's, has a narrow fillet on that side)
+    room = (x0 - TENT_MARGIN) / max(R, 1e-9) - (1.0 + params.flare_eff)
+    return SkinPlan(rho, H, min(float(fillet), FILLET_MAX, max(room, MIN_FILLET)), float(fillet_height))
 
 
-def moulded_cage(base, verts, spec):
-    """``(vertices, quads)`` of the body cage with the skin moulded around ``spec`` alone: what
-    :func:`~.junction.apply_junctions` gives for that one spec (the same displacement and the same
-    validity pass), without the pipeline's bookkeeping. The horn's collar and foot are built against
-    this surface, so they meet the skin the body will really have."""
-    cage_v, cage_q = base.body_cage(verts)
-    if spec is None or not spec.active:
-        return cage_v, cage_q
-    normals = J.vertex_normals(cage_v, cage_q)
-    idx, d = J.junction_displacement(spec, cage_v, normals)
-    total = np.zeros_like(cage_v)
-    if len(idx):
-        total[idx] += d
-        total, _, _ = J.limit_displacement(cage_v, cage_q, total)
-    return cage_v + total, cage_q
+def moulded_cage(base, verts, specs):
+    """``(vertices, quads)`` of the body cage with the skin moulded around ``specs`` (one spec or the
+    specs of a pair, as :class:`~.kinds.Placed.junction` gives them to the figure): exactly what
+    :func:`~.junction.apply_junctions` gives the body (``junction.moulded_cage``: the same displacement,
+    the head's silhouette bound, the join guard and the validity pass). The horn's foot and its soft
+    tissue are built against this surface, so they meet the skin the body will really have (the
+    round-1 version re-implemented the raw law without the guards and missed the core's head bound)."""
+    return J.moulded_cage(base, verts, specs)
 
 
-def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, keeps_world=()):
+def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, keeps_world=(),
+                  silhouette: float | None = HEAD_SILHOUETTE):
     """The :class:`~.junction.JunctionSpec` of one LEFT horn in the horn's LOCAL frame (the kind
     carries it to each side with ``transformed``): the sheath's first part as the tube the scalp
     flows into, and the pedestal's tent as a mound that lifts the skin along the horn's own axis
@@ -829,11 +998,10 @@ def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, kee
     sc = site.scale
     nv = int(p.ring_verts)
     reach = 1.5 * p.sink + 1.5 * max(plan.fillet, 0.5) * R
-    s = np.unique(np.concatenate([np.linspace(-p.sink * 0.9, 0.0, 4),
+    s = np.unique(np.concatenate([np.linspace(-p.sink * TUBE_DEPTH, 0.0, 4),
                                   np.linspace(0.0, reach, 8)[1:]]))
     c, t, n, b = model.frames_at(s)
-    a, bb = model.semi_axes(s)
-    radii = bb * math.cos(math.pi / nv) * HUG
+    radii = model.inscribed(s) * HUG
     mounds = ()
     if plan.tent_height > 0 and plan.tent_radius > 0:
         mounds = (J.Mound((0.0, 0.0, 0.0), plan.tent_radius / sc, plan.tent_height / sc,
@@ -842,10 +1010,33 @@ def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, kee
     tube_w = plan.fillet
     H_f = plan.fillet_height * tube_w * R
     move = 1.2 * (plan.tent_height / sc + H_f)
+    # owner: the head (a horn moulds no other part); conform=False: the tube is the sheath's own first
+    # part, inside it by construction (the core would cut it to the finished mesh, which does not exist
+    # yet when the foot is built against the moulded skin: tests check the tube lies in the built sheath)
     return J.JunctionSpec(name, tuple(map(tuple, c)), tuple(radii),
                           width=tube_w if tube_w > 0 else 1.0, base_radius=R,
                           height=plan.fillet_height, sharpness=2.0, strength=1.0 if tube_w > 0 else 1.0,
-                          mounds=mounds, keep=keep, max_move=move)
+                          mounds=mounds, keep=keep, max_move=move, owner="head", conform=False,
+                          silhouette=silhouette)
+
+
+def collar_axis(model: "HornModel", matrix, spec):
+    """``(points, radii)`` in the world frame: the junction tube of ``spec`` (root first) carried on along the
+    sheath's centreline to its tip, every half base radius, with the sheath's inscribed radius: the axis the root
+    collar (``collar.py``) shoots its rays from."""
+    pts = np.asarray(spec.points, dtype=np.float64)
+    rad = np.asarray(spec.radii, dtype=np.float64)
+    inv = np.linalg.inv(matrix)
+    s_end = float((pts[-1] @ inv[:3, :3].T + inv[:3, 3])[2])
+    step = 0.5 * model.R
+    s = np.arange(s_end + step, model.L - 0.5 * step, step)
+    if not len(s):
+        return pts, rad
+    c, *_ = model.frames_at(s)
+    sc = float(abs(np.linalg.det(np.asarray(matrix)[:3, :3])) ** (1.0 / 3.0))
+    world = c @ np.asarray(matrix)[:3, :3].T + np.asarray(matrix)[:3, 3]
+    r = np.maximum(model.inscribed(s) * HUG * sc, 1e-4)
+    return np.concatenate([pts, world]), np.concatenate([rad, r])
 
 
 # --------------------------------------------------------------------------
@@ -854,11 +1045,15 @@ def junction_spec(name: str, model: "HornModel", site: Site, plan: SkinPlan, kee
 
 def _annulus_solid(rho, theta, z_top, z_bot, n_theta):
     """A closed solid between two surfaces over an annulus of the horn's local ``xy`` plane: ``rho``
-    (the radii, inner first), ``z_top`` / ``z_bot`` as ``(len(rho), n_theta)`` arrays. The top and
-    bottom surfaces are joined by an inner and an outer wall: a torus."""
+    (the radii, inner first: ``(n_r,)`` or ``(n_r, n_theta)`` for an outline that depends on the angle),
+    ``z_top`` / ``z_bot`` as ``(n_r, n_theta)`` arrays. The top and bottom surfaces are joined by an inner
+    and an outer wall: a torus."""
+    rho = np.asarray(rho, dtype=np.float64)
+    if rho.ndim == 1:
+        rho = np.repeat(rho[:, None], n_theta, axis=1)
     n_r = len(rho)
     ct, st = np.cos(theta), np.sin(theta)
-    xy = np.stack([np.outer(rho, ct), np.outer(rho, st)], axis=2)         # (n_r, n_theta, 2)
+    xy = np.stack([rho * ct[None, :], rho * st[None, :]], axis=2)         # (n_r, n_theta, 2)
     top = np.concatenate([xy, z_top[:, :, None]], axis=2).reshape(-1, 3)
     bot = np.concatenate([xy, z_bot[:, :, None]], axis=2).reshape(-1, 3)
     verts = np.concatenate([top, bot])
@@ -887,23 +1082,42 @@ def _annulus_solid(rho, theta, z_top, z_bot, n_theta):
     return mesh
 
 
+def _outline(model: "HornModel", raw, rho_max: float, n_rho: int, n_theta: int):
+    """``(rho, theta)`` of the annulus the layers under the skin are built over: from the cornual process
+    out to ``rho_max``, but per angle no farther than the rays along the horn's axis still find the skull
+    (on a strongly curved temple, the ram's, the far side of the annulus is past the head's silhouette and the
+    fallback plane there stood 0.4 radii out of the head)."""
+    rho_in = max(float(model.core_radius(0.0)), 0.5 * model.R)
+    rho_out = max(rho_max, rho_in * 1.5)
+    theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
+    probe = np.linspace(rho_in, rho_out, 25)
+    xy = np.stack([np.outer(probe, np.cos(theta)), np.outer(probe, np.sin(theta))], axis=2).reshape(-1, 2)
+    _, hit = raw.height(xy, hits=True)
+    hit = hit.reshape(len(probe), n_theta)
+    # the first miss along each ray from the inside ends the annulus there (at least a quarter of the way out)
+    miss = ~hit
+    first = np.where(miss.any(axis=0), miss.argmax(axis=0), len(probe))
+    reach = probe[np.clip(first - 1, 0, len(probe) - 1)]
+    reach = np.where(first == len(probe), rho_out, np.maximum(reach, rho_in + 0.25 * (rho_out - rho_in)))
+    # smooth around the ring (no notch in the outline)
+    for _ in range(3):
+        reach = np.minimum(reach, 0.25 * np.roll(reach, 1) + 0.5 * reach + 0.25 * np.roll(reach, -1) + 1e-12)
+    u = np.linspace(0.0, 1.0, n_rho)[:, None]
+    return rho_in + u * (reach[None, :] - rho_in), theta
+
+
 def soft_tissue(model: "HornModel", moulded, raw, rho_max: float, skin_thick: float, scalp_thick: float,
                 n_rho: int = 7, n_theta: int = 32) -> Mesh:
     """The ``muscle`` layer in the horn's local frame: the soft tissue the scalp is tented over (galea,
     periosteum, the horn's germinal cuff), a lens around the cornual process from its surface out to
-    ``rho_max`` (the tent's radius): its upper surface is the MOULDED skin less the skin's thickness, its
-    lower one the skull's outer table, the RAW skin less the whole scalp's thickness. So it is thickest
-    at the horn (the tent's height more) and ``scalp - skin`` thick where the skin is not lifted."""
-    p = model.p
-    rho_in = max(float(model.core_radius(0.0)), 0.5 * model.R)
-    rho = np.linspace(rho_in, max(rho_max, rho_in * 1.5), n_rho)
-    theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
-    z_top = np.empty((n_rho, n_theta))
-    z_bot = np.empty((n_rho, n_theta))
-    for i, r in enumerate(rho):
-        xy = np.stack([r * np.cos(theta), r * np.sin(theta)], axis=1)
-        z_top[i] = moulded.height(xy) - skin_thick
-        z_bot[i] = raw.height(xy) - scalp_thick
+    ``rho_max`` (the tent's radius; less where the skull curves away, ``_outline``): its upper surface is the
+    MOULDED skin less the skin's thickness, its lower one the skull's outer table, the RAW skin less the whole
+    scalp's thickness. So it is thickest at the horn (the tent's height more) and ``scalp - skin`` thick where
+    the skin is not lifted."""
+    rho, theta = _outline(model, raw, rho_max, n_rho, n_theta)
+    xy = np.stack([rho * np.cos(theta)[None, :], rho * np.sin(theta)[None, :]], axis=2).reshape(-1, 2)
+    z_top = (moulded.height(xy) - skin_thick).reshape(n_rho, n_theta)
+    z_bot = (raw.height(xy) - scalp_thick).reshape(n_rho, n_theta)
     z_top = np.maximum(z_top, z_bot + 0.2 * (scalp_thick - skin_thick))
     return _annulus_solid(rho, theta, z_top, z_bot, n_theta)
 
@@ -911,11 +1125,8 @@ def soft_tissue(model: "HornModel", moulded, raw, rho_max: float, skin_thick: fl
 def skull_plate(model: "HornModel", raw, rho_max: float, scalp_thick: float, bone_thick: float,
                 n_rho: int = 7, n_theta: int = 32) -> Mesh:
     """The skull's outer table around the horn, a plate ``bone_thick`` thick (the cornual process grows
-    out of it): the lower boundary of the soft tissue."""
-    rho_in = max(float(model.core_radius(0.0)), 0.5 * model.R)
-    rho = np.linspace(rho_in, max(rho_max, rho_in * 1.5), n_rho)
-    theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
-    z_top = np.empty((n_rho, n_theta))
-    for i, r in enumerate(rho):
-        z_top[i] = raw.height(np.stack([r * np.cos(theta), r * np.sin(theta)], axis=1)) - scalp_thick - PLATE_GAP
+    out of it): the lower boundary of the soft tissue, over the same outline (``_outline``)."""
+    rho, theta = _outline(model, raw, rho_max, n_rho, n_theta)
+    xy = np.stack([rho * np.cos(theta)[None, :], rho * np.sin(theta)[None, :]], axis=2).reshape(-1, 2)
+    z_top = (raw.height(xy) - scalp_thick - PLATE_GAP).reshape(n_rho, n_theta)
     return _annulus_solid(rho, theta, z_top, z_top - bone_thick, n_theta)

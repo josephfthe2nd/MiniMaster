@@ -202,10 +202,16 @@ def test_a_tail_placed_on_the_side_stays_there_and_midline_false_switches_it_off
     o = K.instantiate_all([off], base, v)[0]
     cent = cv[cq[K.PRESET_FACES["tail_base"]]].mean(axis=0)
     assert np.allclose(o.anchor, cent, atol=1e-12) and o.anchor[0] > 0.01     # one quad: off the plane
-    pair = K.new_spec("tail", side="both")
-    ps = K.instantiate_all([pair], base, v)
-    assert [p.name for p in ps] == ["tail-1.l", "tail-1.r"]
-    assert ps[0].anchor[0] > 0 > ps[1].anchor[0]             # a pair is not on the midline
+    # a tail has no side: new records cannot have one, and an old record's 'both' (two tails in a T from the cleft
+    # wall: round-1 review) is built as the one midline tail, with a warning; the record keeps what it says
+    with pytest.raises(ValueError, match="midline"):
+        K.new_spec("tail", side="both")
+    for old_side in ("both", "left", "right"):
+        rec = K.new_spec("tail")
+        rec.side = old_side
+        with pytest.warns(K.AppendageWarning, match="midline"):
+            ps = K.instantiate_all([rec], base, v)
+        assert [p.name for p in ps] == ["tail-1"] and abs(ps[0].anchor[0]) < 1e-3 and rec.side == old_side
 
 
 @assets
@@ -289,3 +295,30 @@ def test_other_kinds_do_not_use_the_midline_anchor(world):
         c.appendages.append(kinds.add_from_text(text, c.appendages, base=base))
         for p in c.instantiate_appendages(base, v):
             assert abs(p.anchor[0]) > 0.05, (text, p.name)
+
+
+@assets
+def test_an_old_document_with_a_tail_pair_loads_builds_one_midline_tail_and_saves_unchanged(world, tmp_path):
+    """A v2 ``.mmchar`` written by the first versions with ``side: both`` and per-side controls: it loads, builds ONE
+    midline tail (with a warning; the shared controls apply, the per-side ``l`` / ``r`` ones belong to sides that are
+    not built), and saves its record back unchanged (the loader fills in the document's defaults, as for any file)."""
+    import json
+    base, lib = world
+    from minimaster.character.appendage_spec import AppendageSpec
+    from minimaster.character.sliders import SliderCatalog
+    old = {"format": "minimaster-character", "version": 2, "name": "old", "macro": {}, "sliders": {}, "asymmetry": {},
+           "materials": {}, "anatomy": {},
+           "appendages": [AppendageSpec(id="tail-1", kind="tail", side="both",
+                                        controls={"lift": 20.0, "l": {"sway": 30.0}}).to_dict()]}
+    path = tmp_path / "old.mmchar"
+    path.write_text(json.dumps(old, indent=2, sort_keys=True) + "\n")
+    c = Character.load(path)
+    v = lib.apply(base.verts, c.effective_target_weights(SliderCatalog(lib.names)))
+    with pytest.warns(K.AppendageWarning, match="midline"):
+        placed = c.instantiate_appendages(base, v, lib)
+    assert [p.name for p in placed] == ["tail-1"] and abs(placed[0].anchor[0]) < 1e-3
+    assert placed[0].controls == {"lift": 20.0}
+    out = tmp_path / "again.mmchar"
+    c.save(out)
+    again = json.loads(out.read_text())
+    assert again["appendages"] == old["appendages"] and again["version"] == 2       # the tail's record is not rewritten

@@ -31,6 +31,7 @@ See docs/anatomy_limb.md for the references and the measured numbers.
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,6 +43,8 @@ _EPS = 1e-12
 # -- the recipe (all lengths in R, the equivalent radius of the limb's upper-arm section at
 #    0.25 of its length, or in Lu, the length of the upper bone) ------------------------------
 
+ARM_OUT = 0.3              # lower pair: the pivot stands this many R outside the skin (0.4 before round 2b: a ball beside the ribs)
+ARM_DOME = 1.0             # ... and its dome is this many R (1.1 before)
 ARM_DROP = 0.85            # lower pair: the pivot is 0.85 Lu below the primary joint
 LEG_RISE = 1.5             # hip pair: 1.5 R_leg above the hip joint (the iliac crest)
 PIVOT_OUT = 0.4            # the pivot stands this many R outside the skin
@@ -231,18 +234,21 @@ class Site:
                                  # along the wall, so its dome has to turn inward to close inside the pelvis
     fan: tuple | None = None     # a pair that shares the primary shoulder: the pivot's offset from the
                                  # joint marker in R (medial, up, posterior) instead of a flank rule
+    clear_end: str = ""          # the end of the raise that swings the limb toward the original limb ("abduct" /
+                                 # "adduct"): pulled in on a body where it would come closer than CLEARANCE R
 
 
 SITES = {
     "lower_arms": Site("arm", drop=ARM_DROP, phi=0.0, scale=0.9, pose=(-7.0, 8.0, 20.0),
-                       limits=(("abduct", 58.0), ("adduct", -28.0), ("swing", (-25.0, 55.0))), lean=0.4),
+                       limits=(("abduct", 58.0), ("adduct", -28.0), ("swing", (-25.0, 55.0))), lean=0.4,
+                       out=ARM_OUT, dome=ARM_DOME, clear_end="abduct"),
     # the upper pair fans out of the primary shoulder (the multi-armed bronzes: one broad shoulder
     # dome per side carries all its arms, the raised pair leaving its posterior face): the pivot is
     # on the scapular spine / trapezius ridge, 1.35 R behind and above the primary joint, a third of
     # a radius under the back skin; GUESS (iconography, not anatomy: docs/anatomy_limb.md)
     "upper_arms": Site("arm", fan=(-0.55, 0.5, -1.05), scale=0.85, pose=(68.0, -30.0, -10.0),
                        limits=(("abduct", 160.0), ("adduct", -60.0), ("swing", (-60.0, 45.0))),
-                       out=0.0, dome=1.07),
+                       out=0.0, dome=1.07, clear_end="adduct"),
     "extra_legs": Site("leg", rise=LEG_RISE, phi=-30.0, scale=0.7, pose=(49.0, 5.0, 25.0),
                        limits=(("abduct", 75.0), ("adduct", -38.0), ("swing", (-20.0, 50.0))),
                        out=0.1, dome=0.97, lean=0.7),
@@ -315,7 +321,7 @@ def measure(base, verts, site: Site, side: str = "l", scale: float | None = None
         return Girdle(site.limb, (j, e, h), Lu, R, float(pv[1]), skin, n, pivot, np.array([c[0], pv[1], c[1]]),
                       s, half, loop, True)
     if point is not None:
-        y = float(point[1])
+        y = float(np.clip(float(point[1]), *_free_band(base, verts, site, side, j, Lu, R)))
     elif site.drop is not None:
         y = float(j[1] - site.drop * Lu)
     else:
@@ -331,6 +337,20 @@ def measure(base, verts, site: Site, side: str = "l", scale: float | None = None
     pivot = skin + (site.out + out_extra) * R * s * n
     half = (float((loop[:, 0].max() - loop[:, 0].min()) / 2), float((loop[:, 2].max() - loop[:, 2].min()) / 2))
     return Girdle(site.limb, (j, e, h), Lu, R, y, skin, n, pivot, np.array([c[0], y, c[1]]), s, half, loop)
+
+
+def _free_band(base, verts, site: Site, side: str, joint, Lu: float, R: float) -> tuple:
+    """``(lo, hi)``: the heights a girdle the person anchored on a quad of their own may sit at. A quad on a
+    leg, a foot or the head is snapped to the nearest height of the trunk where that girdle can be: an arm's
+    between a radius above the hip joints and a third of the upper arm below the shoulder, a leg's between
+    a half and three radii above the hip joint (the round-1 review: such quads built nothing, "no torso
+    section at y=-7.9", or an arm at head height)."""
+    from . import appendages as A
+    name = "r-upper-leg" if side == "r" else "l-upper-leg"
+    hip = A.joint_position(base, name, verts)
+    if site.limb == "leg":
+        return float(hip[1] + 0.5 * R), float(hip[1] + 3.0 * R)
+    return float(hip[1] + 1.0 * R), float(joint[1] - 0.33 * Lu)
 
 
 def _smooth(x):
@@ -385,7 +405,9 @@ def _spread_ring(P, axis, amount: float):
     return c + np.outer(plane, u) + rho_new[:, None] * (np.cos(new)[:, None] * e1 + np.sin(new)[:, None] * e2)
 
 
-RING_DIHEDRAL_MAX = 40.0     # degrees: the crease the seam between the cage's limb and the dome may have at worst
+RING_DIHEDRAL_MAX = 20.0     # degrees: the crease the seam between the cage's limb and the dome may have at worst (40 before
+                             # round 2b: 26-39 on heavy, female and slim_f bodies drew a ring; the swell, the Hermite start and
+                             # the relaxed seam band give 2.5-14.8 on twelve bodies and three sites)
 
 
 def ring_dihedral(V, T, ring) -> float:
@@ -492,8 +514,12 @@ def cut_limb(base, body_v, body_q, joints, Lu: float, R: float, t0: float = CUT_
     return LimbCut(verts, tris, ring, t0)
 
 
+SWELL_BELOW = 1.0        # the root swell starts this many ring-to-joint distances below the ring (on the cage's own arm)
+
+
 def dome_root(cut: LimbCut, joint, axis, R: float, k_flare: int = 5, k_dome: int = 8,
-              dome: float = DOME_RADIUS, slope: float | None = None, lean=None):
+              dome: float = DOME_RADIUS, slope: float | None = None, lean=None,
+              swell_below: float = SWELL_BELOW):
     """Close the root ring of ``cut`` with a flared proximal limb that ends in a hemisphere
     (the shoulder dome) centred on ``joint``: ``(verts, tris, info)`` of the open limb with its
     root ring continued by rings that swell by about 15% toward the joint's plane and then close
@@ -502,31 +528,64 @@ def dome_root(cut: LimbCut, joint, axis, R: float, k_flare: int = 5, k_dome: int
     arm's own section. ``lean`` (a vector, units of the dome radius) shears the closing hemisphere toward
     it (the trunk's inward direction): a limb whose axis runs along the wall (a leg: vertical) would
     otherwise close into the air above its girdle. ``joint`` must lie on the ring's own axis (the line through the ring's
-    centre along ``axis``); ``slope`` is the limb's own taper at the ring (relative radius per
-    unit of the ring's distance to the joint) so the flare continues it."""
+    centre along ``axis``). ``slope`` is ignored (the first version's flare started at the limb's own
+    taper at the ring, which put the whole swell into the flare: a crease of curvature at the ring that
+    the renderer drew as a tone band); the swell now starts ``swell_below`` ring-to-joint distances below
+    the ring, ON the cage's own arm, and grows smoothly (zero slope at both ends) to the dome's equator,
+    so the ring is no longer a place where anything changes (the deltoid's swell starts at its V half way
+    down the upper arm, docs/anatomy_limb.md)."""
     from .appendages import boundary_loops
     j = np.asarray(joint, dtype=np.float64)
     u = np.asarray(axis, dtype=np.float64)
     u = u / max(float(np.linalg.norm(u)), _EPS)
-    verts = [row for row in cut.verts]
     tris = [tuple(t) for t in cut.tris]
     loop = list(cut.ring)
     for lp in boundary_loops(cut.tris):                # the ring in the direction the faces want
         if set(lp) == set(loop):
             loop = list(lp)
             break
-    P = cut.verts[loop]
+    e1, e2 = _perp(u)
+
+    def ring_radius(P):
+        q = P - P.mean(axis=0)
+        q = q - (q @ u)[:, None] * u
+        area, _ = polygon_area_centroid(np.stack([q @ e1, q @ e2], axis=1))
+        return math.sqrt(abs(area) / math.pi)
+
+    CV = np.asarray(cut.verts, dtype=np.float64).copy()
+    c_ring = CV[loop].mean(axis=0)
+    r_ring0 = ring_radius(CV[loop])
+    r_dome = max(dome * R, 1.02 * r_ring0)
+    d_total = float((c_ring - j) @ u)                # the ring's distance from the joint plane
+    # THE SWELL: the radius grows by M(x) = 1 + (m_tot - 1) S(x / L) along x, measured toward the root from
+    # ``swell_below`` d_total below the ring (x = 0: nothing changes) to the joint's plane (x = L: the dome's
+    # equator), S the smootherstep (no slope, no curvature at either end): the cage's own arm swells over its first part
+    # and the flare continues the same curve
+    m_tot = r_dome / r_ring0
+    L_below = max(float(swell_below), 0.0) * d_total
+    L_all = L_below + d_total
+
+    def M(x):              # smootherstep: no slope AND no curvature at either end (a smoothstep starts with a
+        t = np.clip(np.asarray(x, dtype=np.float64) / max(L_all, _EPS), 0.0, 1.0)      # step of curvature: a faint
+        return 1.0 + (m_tot - 1.0) * t * t * t * (t * (6.0 * t - 15.0) + 10.0)          # band where the swell starts)
+
+    if L_below > 0.0:
+        rel = CV - c_ring
+        x = L_below - rel @ u                           # 0 at the start of the swell, L_below at the ring
+        axial = (rel @ u)[:, None] * u
+        sel = x > 0.0
+        CV[sel] = c_ring + axial[sel] + (rel[sel] - axial[sel]) * M(x[sel])[:, None]
+    verts = [row for row in CV]
+    P = CV[loop]
     c0 = P.mean(axis=0)
     q = P - c0
     off = q @ u                                       # the ring is ragged along the bone: flattened below
     q = q - off[:, None] * u
-    e1, e2 = _perp(u)
     xy = np.stack([q @ e1, q @ e2], axis=1)
     area, _ = polygon_area_centroid(xy)
     r_ring = math.sqrt(abs(area) / math.pi)
-    r_dome = max(dome * R, 1.02 * r_ring)
     m_p = r_dome / r_ring
-    d_total = float((c0 - j) @ u)                    # the ring's distance from the joint plane
+    m_ring = float(M(L_below))
     # the cage is a polygon: the rings of the dome are the low-pass shape of the ring (a Fourier
     # series of its radius, up to the fourth harmonic) at even angles, blended in as the rings go
     n = len(loop)
@@ -545,18 +604,15 @@ def dome_root(cut: LimbCut, joint, axis, R: float, k_flare: int = 5, k_dome: int
             out += coef[2 * h - 1] * np.cos(h * angles) + coef[2 * h] * np.sin(h * angles)
         return out
 
-    # the flare: radius ratio m(f), f = 0 at the ring, 1 at the joint's plane; m(1) = m_p and
-    # m'(1) = 0 (the dome starts as a sphere's equator), m'(0) = the slope the limb itself has there
-    a1 = 2.0 * (m_p - 1.0) if slope is None else min(max(float(slope), 0.0), 3.0 * (m_p - 1.0))
-    b1 = 3.0 * (m_p - 1.0) - 2.0 * a1
-    c1 = a1 - 2.0 * (m_p - 1.0)
+    # the flare: radius ratio m(f) to the (swollen) ring, f = 0 at the ring, 1 at the joint's plane: the
+    # same swell M continued, m(1) = m_p with m'(1) = 0 (the dome starts as a sphere's equator)
     # the first ring is farther from the cage ring than the cage ring is ragged along the bone, so no
     # triangle of the first band folds back over the cage's own faces; the rest are evenly spaced
     f1 = min(0.5, (float(np.abs(off).max()) + 0.1 * R) / max(d_total, _EPS))
     fs = [f1 + (1.0 - f1) * k / (k_flare - 1) for k in range(k_flare)]
     ring_rows = []
     for k, f in enumerate(fs):
-        m = 1.0 + a1 * f + b1 * f * f + c1 * f ** 3
+        m = float(M(L_below + f * d_total)) / m_ring
         ring_rows.append((c0 + (j - c0) * f, m, float(_smooth(f)), 1.0))
     shear = np.zeros(3)
     if lean is not None:
@@ -566,6 +622,14 @@ def dome_root(cut: LimbCut, joint, axis, R: float, k_flare: int = 5, k_dome: int
         phi = 0.5 * math.pi * k / (k_dome + 1)
         ring_rows.append((j - u * (r_dome * math.sin(phi)) + shear * r_dome * math.sin(phi) ** 2,
                           m_p * math.cos(phi), 1.0, 1.0))
+    # G1 AT THE SEAM: every vertex of the ring continues, for the first rows, along the cage's own
+    # meridian there (the chord from the cage vertex below it), and blends into the smooth flare with a
+    # weight whose slope is 0 at the ring. Without it the flare's first chord turned 6-11 degrees
+    # (median; 22 on a heavy body) from the cage's and the renderer drew that crease as a tone band
+    # across the arm a third of the way down.
+    tangents = _meridians(CV, cut.tris, loop, u)
+    d_axis = np.maximum(tangents @ (-u), 0.35)
+    hermite = HERMITE_REACH
     prev = loop
     equator = None
     for ri, (center, m, w, g) in enumerate(ring_rows):
@@ -574,9 +638,14 @@ def dome_root(cut: LimbCut, joint, axis, R: float, k_flare: int = 5, k_dome: int
             equator = np.arange(base_i, base_i + n)          # the ring at the joint's plane: the dome starts beyond it
         ang = th * (1.0 - w) + th_u * w
         rr = smooth_radius(ang) + (rho - smooth_radius(th)) * (1.0 - w)       # the ring's own ripple dies out
+        f_row = float((c0 - center) @ u) / max(d_total, _EPS) if ri < k_flare else 1.0
+        keep = 1.0 - float(_smooth(f_row / hermite)) if (hermite > 0 and ri < k_flare) else 0.0
         for i in range(n):
-            verts.append(center + m * rr[i] * (math.cos(ang[i]) * e1 + math.sin(ang[i]) * e2)
-                         + u * (off[i] * (1.0 - g)))
+            pt = center + m * rr[i] * (math.cos(ang[i]) * e1 + math.sin(ang[i]) * e2) + u * (off[i] * (1.0 - g))
+            if keep > 0.0:
+                lin = P[i] + tangents[i] * (f_row * d_total / d_axis[i])
+                pt = keep * lin + (1.0 - keep) * pt
+            verts.append(pt)
         cur = list(range(base_i, base_i + n))
         for i in range(n):
             a, b = prev[i], prev[(i + 1) % n]
@@ -589,9 +658,79 @@ def dome_root(cut: LimbCut, joint, axis, R: float, k_flare: int = 5, k_dome: int
     for i in range(n):
         a, b = prev[i], prev[(i + 1) % n]
         tris.append((pole, b, a))
+    V = np.array(verts)
+    T = np.array(tris, dtype=np.int64)
+    # the seam band (the cage's last rows below the ring, the ring and the flare's first rows) relaxed with a
+    # few rounds of Taubin smoothing: what is left of the cage polygon's own crease at the ring (a female
+    # body's cut ring: 18-27 degrees on one edge) is spread over the band instead of drawn as a line
+    n_cut = len(cut.verts)
+    s_v = (V - c0) @ u                                 # > 0 below the ring (toward the elbow), < 0 in the flare
+    band = (np.abs(s_v) < SEAM_BAND * r_ring)
+    band[:n_cut] &= s_v[:n_cut] > -1e-9
+    band[k_flare * n + n_cut:] = False                 # never the equator and the dome
+    if SEAM_ROUNDS and band.any():
+        V = _taubin(V, T, band, SEAM_ROUNDS)
     info = dict(pole=pole, ring=np.asarray(loop), equator=equator, r_ring=r_ring, r_dome=r_dome, d_total=d_total,
                 new=np.arange(len(cut.verts), len(verts)))
-    return np.array(verts), np.array(tris, dtype=np.int64), info
+    return V, T, info
+
+
+SEAM_BAND = 0.45         # the seam band relaxed after the build: this many ring radii on either side of the ring
+SEAM_ROUNDS = 6          # rounds of Taubin smoothing (lambda 0.5, mu -0.53) in it
+
+
+def _taubin(V, T, movable, rounds: int):
+    """``V`` with the ``movable`` vertices smoothed by ``rounds`` of Taubin's lambda / mu pairs (no shrink),
+    the others fixed: umbrella operator over the triangle neighbours."""
+    V = np.asarray(V, dtype=np.float64).copy()
+    T = np.asarray(T)
+    e = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    e = np.concatenate([e, e[:, ::-1]])
+    keep = movable[e[:, 0]]
+    e = np.unique(e[keep], axis=0)
+    deg = np.bincount(e[:, 0], minlength=len(V)).astype(np.float64)
+    idx = np.nonzero(movable & (deg > 0))[0]
+    for _ in range(rounds):
+        for lam in (0.5, -0.53):
+            acc = np.zeros_like(V)
+            np.add.at(acc, e[:, 0], V[e[:, 1]])
+            avg = acc[idx] / deg[idx, None]
+            V[idx] = V[idx] + lam * (avg - V[idx])
+    return V
+
+
+HERMITE_REACH = 0.45     # the share of the flare (ring -> joint plane) over which the ring's own meridians blend out
+
+
+def _meridians(V, T, loop, u):
+    """The unit tangent of the cage's surface at every vertex of the root ring ``loop``, along the limb
+    toward the root: from the neighbour on the far side (the cage vertex below it, the one most in line
+    with the bone) to the ring vertex."""
+    V = np.asarray(V, dtype=np.float64)
+    T = np.asarray(T)
+    ring = set(int(x) for x in loop)
+    nbrs: dict = {}
+    for t in T:
+        for a in t:
+            a = int(a)
+            if a in ring:
+                for b in t:
+                    b = int(b)
+                    if b not in ring:
+                        nbrs.setdefault(a, set()).add(b)
+    out = np.zeros((len(loop), 3))
+    for k, r in enumerate(loop):
+        r = int(r)
+        cands = list(nbrs.get(r, ()))
+        if not cands:
+            out[k] = -u
+            continue
+        d = V[r] - V[cands]
+        ln = np.linalg.norm(d, axis=1)
+        score = (d @ (-u)) / np.maximum(ln, _EPS)
+        b = int(np.argmax(score))
+        out[k] = d[b] / max(ln[b], _EPS) if score[b] > 0.3 else -u
+    return out
 
 
 def _perp(u):
@@ -738,15 +877,7 @@ def build_side(base, verts, site: Site, side: str = "l", scale: float | None = N
         # limb does not bend where the dome starts, and that point is the second joint
         c_ring = cut.verts[cut.ring].mean(axis=0)
         jn = c_ring - ((c_ring - j) @ u) * u
-        slope = None
-        try:                               # the limb's own taper just beyond the cut
-            tris_b = quad_triangles(body_q)
-            r0 = section_radius(body_v, tris_b, j + u * (cut.plane_t * g.Lu), e - j)
-            r1 = section_radius(body_v, tris_b, j + u * ((cut.plane_t + 0.1) * g.Lu), e - j)
-            slope = (r0 - r1) / r0 * (cut.plane_t / 0.1)
-        except ValueError:
-            pass
-        V, T, info = dome_root(cut, jn, e - j, g.R, dome=dome, slope=slope, lean=-g.normal * site.lean)
+        V, T, info = dome_root(cut, jn, e - j, g.R, dome=dome, lean=-g.normal * site.lean)
         worst = ring_dihedral(V, T, info["ring"])
         if best is None or worst < best[0]:
             best = (worst, cut, jn, V, T, info)
@@ -781,43 +912,174 @@ def _mirror_build(b: SideBuild) -> SideBuild:
     return SideBuild(mesh, tuple(_reflect(p) for p in b.joints), b.girdle, b.info, "r", b.site, plug)
 
 
+_BUILD_CACHE: "OrderedDict" = None
+BUILD_CACHE_ENTRIES = 8
+_BUILD_LOCK = threading.Lock()
+
+
+def _cache_key(app, verts):
+    """What a pair's builds depend on: the site, the record's scale / offset / dome / anchors, and the body."""
+    import hashlib
+    h = hashlib.blake2b(np.ascontiguousarray(verts, dtype=np.float64).tobytes(), digest_size=12).hexdigest()
+    free = None
+    if app.girdle_free:
+        free = (app.anchor_face, None if app.anchor_weights is None else tuple(app.anchor_weights),
+                bool(app.anchor_midline), tuple(float(x) for x in app.up_hint))
+    return (app.girdle, float(app.scale), float(app.girdle_out), app.girdle_dome, free, h)
+
+
+def _symmetric(body_v) -> bool:
+    """Is the body cage its own mirror image as a set of points (the macro bodies are; a hand-sculpted or
+    one-sided morph is not)? Then the right limb is the left one reflected, without building it."""
+    from . import appendages as A
+    return A._is_mirror_image(body_v, body_v, tol=1e-9)
+
+
 def place_limbs(app, base, verts=None) -> list:
     """``[(idx, LimbRig)]`` for the sides of ``app`` (an :class:`~.appendages.Appendage` with a
     ``girdle`` site): the character's own arm or leg, cut across the upper bone, closed with the
     shoulder dome and put on the girdle that :func:`measure` finds on this body. The right limb
     is the exact reflection of the left one on a symmetric body (and the pair's right limb when
-    it is built alone), and is built from the right limb on an asymmetric one."""
+    it is built alone), and is built from the right limb on an asymmetric one.
+
+    Round 2b: the builds are cached by the body (a digest of the cage) and the record's placement, so a
+    lab edit that does not change the body or the pair (a pose, another appendage) costs nothing; and on a
+    symmetric body (every macro body) the right side is not built at all (it was built and thrown away:
+    135-355 ms a pair in the round-1 review)."""
+    global _BUILD_CACHE
+    from collections import OrderedDict
     from . import appendages as A
     from .limbrig import LimbRig
     v = base.verts if verts is None else verts
     site = SITES[app.girdle]
     body_v, body_q = base.body_cage(v)
+    key = _cache_key(app, v)            # every vertex (the joint markers are helpers, not the cage)
+    with _BUILD_LOCK:
+        if _BUILD_CACHE is None:
+            _BUILD_CACHE = OrderedDict()
+        hit = _BUILD_CACHE.get(key)
+        if hit is not None:
+            _BUILD_CACHE.move_to_end(key)
+    if hit is not None:
+        return [(idx, rig) for idx, rig in hit if idx in app._indices()]
     scale = app.scale                      # the record's own scale (the preset's 0.9 / 0.7 is stored in it)
     left = build_side(base, v, site, "l", scale, app.girdle_out, _point_of(app, base, body_v, body_q, 0),
                       app.girdle_dome)
-    out = []
+    fitted: dict = {}
+    built = []
     right = None
-    for idx in app._indices():
+    for idx in (0, 1):
         if idx == 0:
             b = left
         else:
             if right is None:
-                try:
-                    own = build_side(base, v, site, "r", scale, app.girdle_out,
-                                     _point_of(app, base, body_v, body_q, 1), app.girdle_dome)
-                except ValueError:
-                    own = None
+                own = None
+                if app.girdle_free or not _symmetric(body_v):
+                    try:
+                        own = build_side(base, v, site, "r", scale, app.girdle_out,
+                                         _point_of(app, base, body_v, body_q, 1), app.girdle_dome)
+                    except ValueError:
+                        own = None
                 if own is not None and not A._is_mirror_image(left.info["cut_points"], own.info["cut_points"]):
                     right = own
                 else:
                     right = _mirror_build(left)
             b = right
         pivot, el, ha = b.joints
+        limits = fitted.get(id(b))
+        if limits is None and b is not left and b.info is left.info:       # the exact mirror: the same range
+            limits = fitted.get(id(left))
+        if limits is None:
+            limits = fitted[id(b)] = clear_limits(b, body_v, site, LimbRig)
         rig = LimbRig(b.mesh, pivot, el, ha, limb=site.limb, mirrored=idx == 1, root_loop=b.info["equator"],
-                      root_pole=b.info["pole"], limits=dict(site.limits), pin_fraction=GIRDLE_PIN,
+                      root_pole=b.info["pole"], limits=limits, pin_fraction=GIRDLE_PIN,
                       blend_fraction=GIRDLE_BLEND, girdle=b)
-        out.append((idx, rig))
-    return out
+        built.append((idx, rig))
+    with _BUILD_LOCK:
+        _BUILD_CACHE[key] = built
+        while len(_BUILD_CACHE) > BUILD_CACHE_ENTRIES:
+            _BUILD_CACHE.popitem(last=False)
+    return [(idx, rig) for idx, rig in built if idx in app._indices()]
+
+
+CLEARANCE = 0.4          # R: the gap a girdle limb keeps to the original limb at the ends of its raise
+LIMIT_STEP = 3.0         # degrees: how much an end of the range is pulled in per try
+
+
+def _original_skin(body_v, b: SideBuild):
+    """The cage vertices of the ORIGINAL limb next to which ``b`` sits (world frame of its side): within
+    1 R of its bones, and for a leg (whose girdle sits at the first hip) below 0.4 of its thigh."""
+    g = b.girdle
+    j, e, h = (np.asarray(p, dtype=np.float64) for p in g.joints)
+    if b.side == "r":
+        j, e, h = (_reflect(p) for p in (j, e, h))
+    d = np.full(len(body_v), np.inf)
+    for a, c in ((j, e), (e, h)):
+        ac = c - a
+        t = np.clip(((body_v - a) @ ac) / max(float(ac @ ac), _EPS), 0.0, 1.0)
+        d = np.minimum(d, np.linalg.norm(body_v - (a + t[:, None] * ac), axis=1))
+    sel = d < 1.0 * g.R
+    if g.limb == "leg" or g.fan:
+        ax = (e - j) / max(float(np.linalg.norm(e - j)), _EPS)
+        sel &= ((body_v - j) @ ax) > (0.4 if g.limb == "leg" else 0.55) * g.Lu
+    return body_v[sel]
+
+
+def _gap(mesh_v, skin_v) -> float:
+    if not len(skin_v):
+        return np.inf
+    best = np.inf
+    for k in range(0, len(skin_v), 256):
+        block = skin_v[k:k + 256]
+        d = np.linalg.norm(mesh_v[:, None, :] - block[None, :, :], axis=2)
+        best = min(best, float(d.min()))
+    return best
+
+
+def clear_limits(b: SideBuild, body_v, site: Site, rig_cls) -> dict:
+    """The site's range of motion, with the end of the raise that swings the limb toward the original limb
+    (``Site.clear_end``: the lower pair's abduction, the fan pair's adduction) pulled in, ``LIMIT_STEP`` at a
+    time and never past the preset's own pose, until the limb keeps ``CLEARANCE`` R from the original limb
+    there, at the swing's extremes too. Round 2b: the lower pair's 58-degree abduction was set on the ten
+    macro bodies; a heavy muscular body (weight 1, muscle 1) reached the original arm within 0.03-0.05 R at it
+    (round-1 review), so the limit is now measured on the body the pair is built on."""
+    limits = dict(site.limits)
+    if not site.clear_end:
+        return limits
+    skin = _original_skin(body_v, b)[::2]
+    if not len(skin):
+        return limits
+    n_l = int(b.info["n_limb_verts"])
+    pivot, el, ha = b.joints
+    R = b.girdle.R * b.girdle.scale
+    floor = CLEARANCE * R
+    rig = rig_cls(b.mesh, pivot, el, ha, limb=site.limb, mirrored=b.side == "r", root_loop=b.info["equator"],
+                  root_pole=b.info["pole"], limits=limits, pin_fraction=GIRDLE_PIN, blend_fraction=GIRDLE_BLEND)
+    geo = rig.geometry
+    lo, hi = geo.control_range("raise_")
+    key = site.clear_end
+    rest_raise = float(site.pose[0])
+    end = hi if key == "abduct" else lo
+    step = -LIMIT_STEP if key == "abduct" else LIMIT_STEP
+
+    def clear(raise_):
+        lo_s, hi_s = geo.control_range("swing", {"raise_": raise_})
+        for swing in (lo_s, hi_s, 0.0):
+            V = rig.pose({"raise_": raise_, "swing": swing}).vertices[:n_l:3]
+            if _gap(V, skin) < floor:
+                return False
+        return True
+
+    while not clear(end):
+        nxt = end + step
+        if (key == "abduct" and nxt < rest_raise + LIMIT_STEP) or (key == "adduct" and nxt > rest_raise - LIMIT_STEP):
+            break
+        end = nxt
+    if key == "abduct":
+        limits["abduct"] = float(end + geo.rest_abduction)
+    else:
+        limits["adduct"] = float(-(end + geo.rest_abduction))
+    return limits
 
 
 def _point_of(app, base, body_v, body_q, idx):
@@ -923,6 +1185,14 @@ MASSES = {
     "arm": dict(skirt=(2.8, 0.25, 0.35), anterior=(1.0, 0.20), posterior=(1.5, 0.30)),
     "leg": dict(skirt=(2.6, 0.25, 0.3), anterior=(1.0, 0.18), posterior=(1.2, 0.25)),
 }
+# the masses of a second shoulder girdle on the flank (LimbModel._arm_masses), in R: (radius, height, offsets)
+ARM_MASSES = dict(
+    pad=(2.3, 0.6, 1.0),                                          # radius, height, up offset of its centre
+    anterior=(1.0, 0.26, (0.6, -0.3), (2.2, 0.9)),                # radius, height, (ant, up) from, (ant, up) to
+    latissimus=((1.0, 0.24, (0.6, -0.35), (1.6, -1.0)),           # thick at the axilla ...
+                (0.8, 0.12, (1.6, -1.0), (2.8, -2.0))),           # ... thinning toward the iliac crest
+)
+MASS_CAP = 0.47                # the masses' height unit is at most this share of the trunk's half depth (a lean body: R)
 SKIN_THICKNESS = 0.12          # of R: skin and fat over muscle (6-10 mm on a lean male)
 KEEP_REACH = 1.45              # the original limb is protected to this many R around its bones
 KEEP_FROM_FAN = 0.5            # a fan pair shares the primary shoulder: the arm is protected from half way down
@@ -974,6 +1244,8 @@ class LimbModel:
             return (J.Mound(tuple(S), 2.4 * R, 0.30 * R * m),
                     J.Mound(tuple(S + up * 0.4 * R), 1.0 * R, 0.25 * R * m,
                             end=tuple(S + up * 1.4 * R + medial * 1.6 * R)))
+        if g.limb == "arm":
+            return self._arm_masses(S, n, up, ant, R, m)
         rs, hs, off = cfg["skirt"]
         ra, ha = cfg["anterior"]
         rp, hp = cfg["posterior"]
@@ -985,6 +1257,40 @@ class LimbModel:
                     end=tuple(S + post * (2.4 if g.limb == "arm" else 1.5) * R + up * 0.5 * R)),
         ]
         return tuple(out)
+
+    def _arm_masses(self, S, n, up, ant, R, m):
+        """The masses of a second shoulder girdle on the flank (lower arms), in the limb unit ``R``
+        with heights capped on a big trunk (``mass_unit``):
+
+        * the PAD: the base the dome sits in (deltoid origin, serratus slips), a low wide swell centred a
+          little above the pivot so the flank runs out onto the top of the dome (limb_071: the trapezius
+          slope into the deltoid);
+        * the ANTERIOR FOLD (pectoral analogue): a ridge from the front of the axilla up and forward,
+          the front wall of the armpit (limb_047, limb_069);
+        * the LATISSIMUS: a wedge from the back of the axilla DOWN and back toward the iliac crest, thick
+          at the axilla and thinning out (limb_067 fig. 74: the lat converges into the posterior axillary
+          fold; it is a sheet, not a ball: limb_068). The first version's isotropic posterior mound
+          (1.5 R wide, 0.3 R high) read as a pouch on the back and a shelf with a lower ledge on a heavy
+          body."""
+        from . import junction as J
+        post = -ant
+        H = self.mass_unit() * float(m)
+        cfg = ARM_MASSES
+        out = []
+        r, h, a = cfg["pad"]
+        out.append(J.Mound(tuple(S + up * a * R), r * R, h * H))
+        r, h, (a0, u0), (a1, u1) = cfg["anterior"]
+        out.append(J.Mound(tuple(S + ant * a0 * R + up * u0 * R), r * R, h * H, end=tuple(S + ant * a1 * R + up * u1 * R)))
+        for r, h, (a0, u0), (a1, u1) in cfg["latissimus"]:
+            out.append(J.Mound(tuple(S + post * a0 * R + up * u0 * R), r * R, h * H,
+                               end=tuple(S + post * a1 * R + up * u1 * R)))
+        return tuple(out)
+
+    def mass_unit(self) -> float:
+        """The unit the heights of the trunk masses are in: ``R``, but no more than ``MASS_CAP`` of the
+        trunk section's half depth (a heavy body's arm is fat, R = 0.83 against 0.53: masses in R alone
+        doubled the flank of a body that is already deep, the shelf of the round-1 review)."""
+        return min(self.R, MASS_CAP * float(self.girdle.section[1]) * self.girdle.scale / 0.9)
 
     def keeps(self) -> tuple:
         """Keep spheres along the original limb: its skin is not this appendage's to mould."""
@@ -1006,16 +1312,71 @@ class LimbModel:
                  hug: float = 0.97):
         """The :class:`~.junction.JunctionSpec` of the root in the WORLD frame of its side."""
         from . import junction as J
-        pv, el, ha = self.posed_joints(controls)
         R = self.R
-        g = self.girdle
         ts = np.array([0.0, 0.15, 0.3, 0.5, 0.75, 1.0])
-        pts = [pv + t * (el - pv) for t in ts]
-        radii = [float(radius_law(t)) * R * hug for t in ts]
+        n_l = int(self.build.info["n_limb_verts"])
+        posed = np.asarray(self.rig.pose(controls or {}).vertices[:n_l], dtype=np.float64)
+        pts = self.centreline(ts, controls, posed)
+        # the radius law, but never fatter than the limb's own mesh there (round 2b: a 1.0 R dome is thinner
+        # than the law's 1.07 R at the joint, and a tube fatter than its mesh leaves skin standing out of it)
+        radii = list(J.fit_radii_to_mesh(pts, [float(radius_law(t)) * R * hug for t in ts],
+                                         _reflect(posed) if self.right else posed))
+        if self.build.site.lean > 0.5:     # a leg's dome is sheared into the pelvis: the tube's round end at the pivot
+            radii[0] *= 0.8                # would reach out past its upper side (heavy body: one skin vertex "hidden" outside)
         spec = J.JunctionSpec(f"girdle", pts, radii, width=fillet,
                               base_radius=R * float(radius_law(0.25)), height=height,
                               mounds=self.mounds(mass), keep=self.keeps())
         return spec.mirrored() if self.right else spec
+
+    def centreline(self, ts, controls=None, posed=None) -> list:
+        """Points (LEFT frame) on the posed limb's own centre line at the fractions ``ts`` of its upper bone:
+        the centroid of the posed mesh's vertices that lie in a slab across the REST axis at that station.
+        The mesh is built around the axis through the pivot along the donor's bone (the dome is centred on
+        it), the rig pins the dome and turns the arm over 0.45 of the bone, so a straight line from the
+        pivot to the posed elbow (the first version's centreline) leaves the pinned flare as soon as the arm
+        is raised: the fan pair's (raised 68 degrees) left its mesh near the root and the junction core cut
+        two interior stations down to a 0.01 wire."""
+        rig = self.rig
+        n_l = int(self.build.info["n_limb_verts"])
+        rest = np.asarray(rig.mesh.vertices[:n_l], dtype=np.float64)
+        if posed is None:
+            posed = np.asarray(rig.pose(controls or {}).vertices[:n_l], dtype=np.float64)
+        pv = np.asarray(rig.joints_rest["shoulder"], dtype=np.float64)
+        el = np.asarray(rig.joints_rest["elbow"], dtype=np.float64)
+        j, e, _ = (np.asarray(p, dtype=np.float64) for p in self.girdle.joints)
+        u = self._world(_unit(e - j)) if self.right else _unit(e - j)
+        L = float(np.linalg.norm(el - pv))
+        rel = rest - pv
+        along = rel @ u
+        radial = np.linalg.norm(rel - along[:, None] * u, axis=1)
+        pj, ej, _ = (self._world(p) if self.right else p for p in self.posed_joints(controls))
+        out = []
+        for t in ts:
+            if t <= 0.0:
+                out.append(self._left(pv))
+                continue
+            sel = (np.abs(along - t * L) < 0.06 * L) & (radial < 2.0 * self.R)
+            if sel.sum() >= 6:
+                out.append(self._left(posed[sel].mean(axis=0)))
+            else:                                    # no slab (a tiny limb): the straight line of the joints
+                out.append(self._left(pj + t * (ej - pj)))
+        return out
+
+    # -- the root collar (collar.py) -------------------------------------------------------
+
+    def collar_axis(self, controls=None):
+        """``(points, radii)`` (WORLD frame of the side) of the tube the root collar grows around: the
+        dome seen as a boss on the trunk, along the outward normal of the skin under the pivot, from inside
+        the trunk to beyond the dome. The dome is pinned (the rig turns the arm below it), so the axis is
+        the same in every pose; the wall it meets is the posed mesh."""
+        g = self.girdle
+        info = self.build.info
+        piv = self._left(self.build.joints[0])
+        n = _unit(g.normal)
+        rd = float(info["r_dome"]) * g.scale
+        pts = [piv - n * (rd + 0.9 * self.R), piv - n * (0.5 * rd), piv, piv + n * (0.9 * rd)]
+        pts = [self._world(p) for p in pts]
+        return pts, [rd] * len(pts)
 
     # -- layers --------------------------------------------------------------------------
 
@@ -1128,7 +1489,29 @@ class LimbModel:
         # the masses on the trunk (under the mounds of the junction: heights less the skin), as
         # tubes along the trunk section so they follow its curve
         cfg = MASSES[g.limb]
-        strips = () if g.fan else (("anterior", (0.9, 2.2), 0.55), ("posterior", (-0.8, -2.8), 0.9))
+        if g.limb == "arm" and not g.fan:
+            # the pectoral analogue and the latissimus wedge under the junction's mounds (ARM_MASSES): strips
+            # along their own paths, the horizontal part walked round the trunk section, the vertical added
+            H = self.mass_unit()
+            r_a, h_a, (a0, u0), (a1, u1) = ARM_MASSES["anterior"]
+            paths = [((a0, u0), (a1, u1), h_a, 0.42)]
+            for r_l, h_l, (b0, v0), (b1, v1) in ARM_MASSES["latissimus"][:1]:      # its thick part: the thin end runs
+                paths.append(((-b0, v0), (-b1, v1), h_l, 0.36))                    # down off the section the strip is walked on
+            for (p0, q0), (p1, q1), h, semi in paths:
+                h_mound = h * H - t_skin
+                if h_mound <= 0.0:
+                    continue
+                semi_n = semi * R
+                ks = np.linspace(0.0, 1.0, 7)
+                centers = []
+                for k in ks:
+                    sk, nrm = loop_walk(g.loop, g.skin, (p0 + (p1 - p0) * k) * R)
+                    centers.append(sk + up * ((q0 + (q1 - q0) * k) * R) + nrm * (h_mound - semi_n - 0.2 * R))
+                taper = np.array([0.45, 0.8, 1.0, 1.0, 0.9, 0.7, 0.4])
+                muscle.append(tube_mesh(centers, semi_n * taper, segments=12, caps=(True, True), cap_rings=3))
+            strips = ()
+        else:
+            strips = () if g.fan else (("anterior", (0.9, 2.2), 0.55), ("posterior", (-0.8, -2.8), 0.9))
         for key, (a0, a1), up_ext in strips:
             h_mound = cfg[key][1] * R - t_skin
             if h_mound <= 0.0:

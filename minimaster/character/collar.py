@@ -956,7 +956,7 @@ def collar_pieces(base, shaped_verts, placed, controls=None, *, levels: int = 2,
     if axis is None:
         return []
     points, radii = axis
-    wall = placed.mesh(ctl)
+    wall = kind.collar_wall(placed, ctl)
     if isinstance(skin, SkinPatch):
         patch = skin
     else:
@@ -1088,7 +1088,7 @@ def join_report(base, shaped_verts, placed, controls=None, *, levels: int = 2, s
     prof = profile if profile is not None else placed.kind.collar_profile(placed)
     n = prof.segments
     ctl = placed.controls if controls is None else controls
-    wall = placed.mesh(ctl)
+    wall = placed.kind.collar_wall(placed, ctl)      # the surface the collar meets (a wing: its arm piece)
     top, arcs, N = diag["top"], diag["arcs"], diag["N"]
     A = len(arcs)
     n_vis = N.shape[0] - len(SKIRT_U)                     # stations of the visible sheet

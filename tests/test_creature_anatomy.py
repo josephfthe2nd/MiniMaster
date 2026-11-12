@@ -422,8 +422,8 @@ def test_a_record_the_registry_knows_sets_its_own_load():
     assert ca.appendage_load(wing) == pytest.approx(1.0 / ca.PAIR_FACTOR)   # a lone wing is lighter
     tail = K.new_spec("tail", params={"length": 12.0})
     assert ca.appendage_load(tail) == pytest.approx(2.0)
-    tail.side = "both"
-    assert ca.appendage_load(tail) == pytest.approx(2.0 * ca.PAIR_FACTOR)
+    tail.side = "both"                     # (an old record: a tail is built as ONE midline tail whatever its side, so it costs one)
+    assert ca.appendage_load(tail) == pytest.approx(2.0)
     scaled = K.new_spec("horn", scale=3.0)
     assert ca.appendage_load(scaled) == pytest.approx(3.0)
 

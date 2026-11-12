@@ -145,14 +145,14 @@ The profile (2) is what makes the fillet; the remap (1) is what makes the cage r
 
 | kind | tube | `fillet` (W in root radii) | height | mound |
 | --- | --- | --- | --- | --- |
-| tail | superseded by the tail's own anatomy spec (`tailrig.junction_spec`, [anatomy_tail.md](anatomy_tail.md)): the flared skin tube from the stem to 2 R beyond the skin point, a sacral rise, two cheek mounds, a keep along the cleft | 1.5 | 1.0 | ridge up the back + cheeks, cleft kept |
+| tail | superseded by the tail's own anatomy spec (`tailrig.junction_spec`, [anatomy_tail.md](anatomy_tail.md) section 9): the flared skin tube from the stem to 2.5 R beyond the skin point, the body-side muscle masses of `tailrig.ROOT_MASSES` (a sacral wedge with its crest at the root, pushed along the root's axis; two gluteal masses), a keep along the cleft; `tight_gap=0`, `smooth=5`, `join_guard=False` (the masses are the muscle layer), every size capped at `R_MAX` | 1.5 | 0.5 | wedge + gluteal masses, cleft kept |
 | horn | the sheath's first part (hornrig: the radius law with the ellipse's minor axis, to the foot's top) | 1.0 | 0.6 | the tent: radius 2.2 R, height max(0.35 R, 0.10), along the horn's axis; Keep on the ear and the eye ([anatomy_horn.md](anatomy_horn.md)) |
 | wing | shoulder -> elbow of the posed arm, radius = the arm bone's | 3.0 | 0.4 | scapular mass at the anchor: **radius 0.5, height 0.055 of the body's trunk radius** (`Mound(scale="trunk")`: S6 measured on the figure that HAS the wing, whose anatomy coupling reshapes the body: 0.79 x 0.087 units on the neutral body (trunk 1.58), 0.58 x 0.064 on the child (1.16); S1b documented 0.78 x 0.086 and 0.47 x 0.05, which was the bare body: on the wing figure its trunk size came out 1.14 and the mound 0.57 x 0.063 and 0.37 x 0.041; S1: 1.74 x 0.22 units on everyone). The wing track's own spec (`wingroot.py`) replaces it |
 | extra limb (legacy presets; the girdle presets have their own anatomy: [anatomy_limb.md](anatomy_limb.md)) | pivot -> elbow -> into the forearm, posed; radii = the neutral body's own limb profile (`kinds.LIMB_RADII`, fractions of the upper bone) narrowed like the cut end (`neck`) | 1.0 | 0.7 | none |
 
 Owners (S1b): tail, wing and extra limbs `trunk`, horn `head` (`Kind.junction_owner`, `JunctionSpec.owner`).
 
-`ring_verts` of a tail and a horn are now **16 by default** (they were 10 and 8 to 12): the skin meets a tube
+`ring_verts` of a tail and a horn are now **16 by default** (a tail's 24 since round 2b, anatomy_tail.md section 9) (they were 10 and 8 to 12): the skin meets a tube
 along a seam, and against a 10-gon the seam is a zigzag between the facets that no displacement of the body
 can hide (24 facets: a clean curve). It changes the mesh of every existing tail and horn, with or without the
 junction (say `tail:ring_verts=10` to get the old one back).

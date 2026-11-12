@@ -52,12 +52,36 @@ def test_layer_shells_draw_each_layer_with_its_own_material_and_colour_the_sleev
     assert cols is not None and len(cols) == len(shells[1].mesh.vertices)
     muscle_red, tendon = (np.asarray(c) for c in (po.sh.hex_to_linear(E.MUSCLE.base_color),
                                                   po.sh.hex_to_linear(E.TENDON)))
-    assert np.allclose(cols[0], muscle_red) and np.allclose(cols[-1], tendon)   # root pole: belly; tip pole: tendon
+    n_sleeve = len(p.model.model().muscle().vertices)
+    assert np.allclose(cols[0], muscle_red) and np.allclose(cols[n_sleeve - 1], tendon)   # sleeve root pole: belly; tip pole: tendon
+    assert np.allclose(cols[n_sleeve:], muscle_red)                       # the body-side masses (lenses) are all muscle
     # the model's belly fraction is the same one that colours it
     assert np.allclose(p.model.model().muscle_belly()[:5], 1.0)
-    # layers that a kind does not have are left out; a horn has the skin only
+    # every layer a kind has is drawn, with its own material (the horn's too: bone core, soft-tissue lens, sheath), and
+    # the shells follow the order asked for, per appendage
     h = K.instantiate_all([K.new_spec("horn")], base, v0)
-    assert len(E.layer_shells(base, v0, h, ("bone", "muscle", "skin"), body=False)) == 2   # a pair: two skins
+    hs = E.layer_shells(base, v0, h, ("bone", "muscle", "skin"), body=False)
+    want = [(name, hp) for hp in h for name in ("bone", "muscle", "skin")
+            if name in hp.layers() and len(hp.layers()[name].faces)]
+    assert len(hs) == len(want) >= 2
+    for shell, (name, hp) in zip(hs, want):
+        assert shell.material is (hp.material if name == "skin" else E.MATERIALS[name])
+        assert len(shell.mesh.vertices) == len(hp.layers()[name].vertices)
+    # ... and a kind without an anatomy has the skin only
+    assert len(E.layer_shells(base, v0, [_plain_placed()], ("bone", "muscle", "skin"), body=False)) == 1
+
+
+class _Plain(K.Kind):
+    """A kind with no anatomy (the base class's layers): synthetic, because every registered kind has one now."""
+
+    id = "plain"
+
+
+def _plain_placed():
+    from minimaster.core.mesh import Mesh
+    tri = Mesh(np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0]]), np.array([[0, 1, 2]]))
+    return K.Placed(name="plain-1", spec_id="plain-1", kind=_Plain(), side="", anchor=np.zeros(3), matrix=None,
+                    params={}, controls={}, static=tri)
 
 
 @assets

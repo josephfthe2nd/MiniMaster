@@ -92,6 +92,16 @@ def place(world, v, text="horn", **kw):
     return K.instantiate_all([spec], base, v, **kw)
 
 
+def random_face(world, seed, amount=0.35):
+    """The morphed body of ``--randomize-face SEED`` (the CLI's own path: ``sliders.randomize`` over the Face group)."""
+    from minimaster.character.sliders import Character, SliderCatalog, randomize
+    base, lib = world
+    cat = SliderCatalog(lib.names)
+    c = Character()
+    c.sliders.update(randomize(cat, seed=seed, amount=amount))
+    return lib.apply(base.verts, c.effective_target_weights(cat))
+
+
 def left_of(world, v, shape="curved", **params):
     base, _ = world
     spec = K.new_spec("horn", params={"shape": shape, **params}, side="left", base=base)
@@ -110,7 +120,7 @@ def model(**kw):
     shape = kw.pop("shape", "curved")
     row = HR.SHAPES[shape]
     base = dict(shape=shape, length=row["length"], base_radius=row["base_radius"], segments=row["segments"],
-                curve=row["curve"], twist=0.0, turns=0.0, tip_radius=row["tip"], flare=row["flare"],
+                curve=row["curve"], twist=0.0, turns=row["turns"], tip_radius=row["tip"], flare=row["flare"],
                 rings=row["rings"], tilt=row["tilt"])
     base.update(kw)
     return HR.HornModel(HR.HornParams(**base))
@@ -218,13 +228,55 @@ def test_a_lyre_changes_sign_and_a_corkscrew_winds_around_a_straight_axis():
     assert sk.integrity_report()["watertight"]
 
 
-def test_the_curvature_never_folds_the_loft_on_itself():
-    for shape in SHAPES:
-        m = model(shape=shape, curve=4.0, length=12.0)
-        s, pos, T, N, B = m.path()
-        kap = np.linalg.norm(np.gradient(T, s, axis=0), axis=1)
-        r = m.radius(np.clip(s, 0.0, m.L), flare=False)
-        assert (kap * r < HR.BEND_LIMIT * 1.25).all(), shape
+def _kr(m):
+    """The largest curvature x radius of the FINAL centreline (corkscrew included), measured on a uniform
+    resampling of it (the path's own grid has the stations in it)."""
+    s, pos, T, N, B = m.path()
+    su = np.linspace(0.0, m.L, 801)
+    pu = np.stack([np.interp(su, s, pos[:, c]) for c in range(3)], axis=1)
+    d = np.gradient(pu, su, axis=0)
+    t = d / np.linalg.norm(d, axis=1, keepdims=True)
+    kap = np.linalg.norm(np.gradient(t, su, axis=0), axis=1)
+    return float((kap * m.taper(su))[2:-2].max())
+
+
+GRID = [dict()] + [dict(turns=t) for t in (4.0, -4.0)] + [dict(length=12.0), dict(curve=4.0, length=12.0),
+                                                           dict(curve=-4.0), dict(turns=4.0, length=0.3)]
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_the_curvature_never_folds_the_loft_and_no_sheath_crosses_itself(shape):
+    """The round-1 bend limit was applied BEFORE the corkscrew's helix was added (the default spiral bent at
+    2.06 radii per radius and crossed itself 126 times per horn; turns 4 on a curved horn 170-470 times, a ram of
+    length 12 coiled into itself 2,352 times) and the test of it zeroed ``turns``. Now: the final path, helix
+    included, bends at most 0.8 / radius (a fixed number: raising ``BEND_LIMIT`` fails it) and no triangle of the
+    sheath crosses another, for the shape's own turns and for +-4 turns, length 12, curve +-4 and a stub."""
+    from minimaster.character import collar as CO
+    for kw in GRID:
+        m = model(shape=shape, **kw)
+        assert _kr(m) < 0.8, (shape, kw, _kr(m))
+        sk = m.skin()
+        assert CO.count_crossings(sk.vertices, sk.faces) == 0, (shape, kw)
+
+
+def test_a_corkscrew_coils_no_tighter_than_its_thickness_allows():
+    """A helix of pitch P bends at most 2 pi / 2P (where its radius equals P / 2 pi, which a corkscrew passes through
+    as it grows out of the root): ``turns`` is capped so a coil is at least ``PITCH_MIN`` base radii long, and the
+    planar spiral turns at most ``PSI_MAX`` (a lyre ``LYRE_PSI_MAX``)."""
+    m = model(shape="curved", turns=4.0)
+    assert m.turns_eff == pytest.approx(m.L / (HR.PITCH_MIN * m.R)) and m.turns_eff < 4.0
+    # ... and so the corkscrew stays a corkscrew: without the cap the bend limit takes the whole helix in (0.15 local
+    # radii off the axis at 70% of the length instead of 0.6)
+    s, pos, *_ = m.path()
+    s0, pos0, *_ = model(shape="curved", turns=0.0).path()
+    u = 0.7 * m.L
+    amp = np.linalg.norm(pos[np.searchsorted(s, u)] - pos0[np.searchsorted(s0, u)]) / float(m.taper(u))
+    assert amp > 0.4
+    assert model(shape="spiral").turns_eff == HR.SHAPES["spiral"]["turns"]          # the default is not capped
+    assert model(shape="spiral", turns=-4.0).turns_eff < 0
+    assert abs(model(shape="ram", length=12.0).psi) == pytest.approx(HR.PSI_MAX)
+    assert abs(model(shape="antelope", curve=4.0).psi) == pytest.approx(HR.LYRE_PSI_MAX)
+    assert model(shape="ram").psi == pytest.approx(HR.SHAPES["ram"]["curve"] * 3.0 / 2.0)     # the default keeps its 275 degrees
 
 
 @pytest.mark.parametrize("shape", SHAPES)
@@ -266,19 +318,26 @@ def test_the_foot_follows_the_skin_it_comes_out_of_not_a_plane():
         assert np.allclose(above, h * ra, atol=0.05 * ra)
 
 
-def test_the_foot_is_buried_below_the_skin_and_the_groove_and_bead_are_at_the_skin_line():
-    m = model(flare=0.15)
+def test_the_foot_is_buried_below_the_skin_has_no_step_and_its_rings_start_above_the_collar():
+    """The round-1 groove and bead (0.05 and 0.07 root radii) were invisible at any head-scale view and their test
+    could not fail; they are gone: the skin's collar (``collar.py``, ``HornKind.collar_profile``) is the rim now, and the
+    sheath under it is smooth. Below the skin the sheath is no wider than its root; above it the foot's rings never
+    widen going up (no bead, no step) and the growth rings start ``RING_START`` base radii up (under the collar's top
+    edge a ridge made the join ragged)."""
+    m = model(flare=0.0)
     field = HR.PlaneField((-math.sin(0.47), 0.0, math.cos(0.47)))
-    sk = m.skin(field)
-    v = sk.vertices
-    h = v[:, 2] - field.height(v[:, :2])
+    bowl, foot, shaft_s = m.foot_rings(field)
     ra = float(m.radius(0.0))
-    rho = np.hypot(v[:, 0], v[:, 1])
-    # nothing sticks out sideways below the skin: below it the sheath is at most the flare's width
-    assert rho[h < -0.3 * ra].max() <= (1.0 + m.p.flare_eff) * ra * 1.001 + 1e-9
-    # the skin line: the sheath is a bit narrower at the groove (h = GROOVE_H) than at the bead above (BEAD_H)
-    near_wall = (rho > 0.5 * ra) & (np.abs(v[:, 1]) < 1e-3 * ra + 0.02) & (v[:, 0] < 0)
-    assert near_wall.sum() > 0
+    size = [float(np.linalg.norm(r - r.mean(axis=0), axis=1).mean()) for r in foot]
+    assert all(b <= a * (1.0 + 1e-6) for a, b in zip(size[1:], size[2:])), size
+    v = m.skin(field).vertices
+    h = v[:, 2] - field.height(v[:, :2])
+    assert np.hypot(v[:, 0], v[:, 1])[h < -0.3 * ra].max() <= ra * 1.001
+    s = np.linspace(0.0, m.L, 4000)
+    w = m.ring_wave(s)
+    assert np.abs(w[s < HR.RING_START * m.R]).max() == 0.0 and w.max() > 0.0
+    # the stem under the foot reaches the junction's tube (so the tube the skin is hidden in lies in the sheath)
+    assert bowl[-1][:, 2].max() <= -HR.TUBE_DEPTH * m.p.sink + 1e-12
 
 
 # ==============================================================================================
@@ -360,8 +419,18 @@ def test_the_axis_is_the_skull_normal_tilted_by_the_shapes_angle(world, bodies, 
     a = angle(axis, n)
     assert a == pytest.approx(HR.SHAPES[shape]["tilt"], abs=1e-6)
     assert 15.0 <= a <= 45.0
-    # the normal is the skull's own (smoothed), not the quad's: within a few degrees of another smoothing
-    assert angle(n, HR.smooth_normal(cage[0], cage[1], hpl.site.point, 0.2)) < 9.0
+    # the normal is the skull's own (smoothed), not the quad's: within a few degrees of another smoothing (12: the
+    # smoothing radius is 1.2 base radii, and the round-2 skull scale makes a child's horn 8% bigger than round 1's)
+    assert angle(n, HR.smooth_normal(cage[0], cage[1], hpl.site.point, 0.2)) < 12.0
+    # it is tilted TOWARD the shape's lean (in the head's own axes), not anywhere on the cone of that angle: a lean
+    # turned inward over the vault, or a sign slip, fails here
+    head = hpl.head
+    lean = head.axes @ np.asarray(HR.SHAPES[shape]["lean"], dtype=np.float64)
+    t_want = lean - float(lean @ n) * n
+    t_want /= np.linalg.norm(t_want)
+    t_got = axis - math.cos(math.radians(a)) * n
+    t_got /= np.linalg.norm(t_got)
+    assert float(t_got @ t_want) > 0.9999
     # the bend plane contains the axis and is perpendicular to it
     bend = p.matrix[:3, 0] / np.linalg.norm(p.matrix[:3, 0])
     assert abs(float(axis @ bend)) < 1e-9
@@ -432,13 +501,17 @@ def test_a_huge_base_radius_is_limited_to_the_head_and_keeps_the_tent_off_the_mi
 @assets
 @pytest.mark.parametrize("shape", SHAPES)
 def test_a_pair_is_an_exact_mirror_and_so_are_its_specs(world, bodies, shape):
+    """On a symmetric head the right horn, built on ITS OWN site (round 2: the round-1 pair mirrored the left horn,
+    and a random face's right horn floated or sank), is the mirror image of the left one to rounding (1e-9: the two
+    are computed separately, no longer one from the other)."""
     base, _ = world
     spec = K.new_spec("horn", params={"shape": shape}, side="both", base=base)
     l, r = K.instantiate_all([spec], base, bodies["neutral"])
     assert (l.name, r.name) == ("horn-1.l", "horn-1.r")
     flip = np.array([-1.0, 1.0, 1.0])
-    assert np.allclose(r.mesh().vertices, l.mesh().vertices * flip, atol=1e-12)
+    assert np.allclose(r.mesh().vertices, l.mesh().vertices * flip, atol=1e-9)
     assert np.allclose(r.anchor, l.anchor * flip, atol=1e-12)
+    assert np.linalg.det(r.matrix[:3, :3]) < 0 < np.linalg.det(l.matrix[:3, :3])     # the mirror IMAGE (a keel of the other hand)
     assert r.mesh().integrity_report()["outward"]
     sl, sr = l.junction(), r.junction()
     assert np.allclose(np.asarray(sl.points) * flip, np.asarray(sr.points), atol=1e-9)
@@ -449,7 +522,7 @@ def test_a_pair_is_an_exact_mirror_and_so_are_its_specs(world, bodies, shape):
     # a lone right horn is the pair's right one
     one = K.instantiate_all([K.new_spec("horn", params={"shape": shape}, side="right", base=base)], base,
                             bodies["neutral"])[0]
-    assert np.allclose(one.mesh().vertices, r.mesh().vertices, atol=1e-12)
+    assert np.allclose(one.mesh().vertices, r.mesh().vertices, atol=1e-9)
 
 
 @assets
@@ -493,9 +566,13 @@ def test_the_two_horns_of_a_pair_never_meet_over_the_head(world, bodies):
     for body in ("neutral", "child", "tall"):
         for shape in SHAPES:
             p = left_of(world, bodies[body], shape)
-            x = p.mesh().vertices[:, 0]
+            hpl = p.repose.horn
+            inv = np.linalg.inv(p.matrix)
+            loc = p.mesh().vertices @ inv[:3, :3].T + inv[:3, 3]
+            out = loc[:, 2] > hpl.field.height(loc[:, :2])            # (the buried stem and bowl are inside the head)
+            x = p.mesh().vertices[out, 0]
             assert x.min() > 0.5 * HR.TENT_MARGIN, (body, shape, x.min())
-            assert x[np.argmax(p.mesh().vertices[:, 1])] > 0.5 * p.anchor[0]
+            assert x[np.argmax(p.mesh().vertices[out, 1])] > 0.5 * p.anchor[0]
 
 
 # -- the sheath meets the skin ---------------------------------------------------------------------
@@ -556,8 +633,10 @@ def test_the_built_sheath_touches_the_real_moulded_skin_at_its_skin_line(world, 
         m = p.mesh()
         inv = np.linalg.inv(p.matrix)
         loc = m.vertices @ inv[:3, :3].T + inv[:3, 3]
-        k = len(HR.BOWL_RINGS) + 1                                         # the bowl's rings, then the buried ring
+        bowl, foot, _ = hpl.model.foot_rings(hpl.field)
+        k = len(bowl) + 1                                                  # the bowl's rings and the stem, the buried ring
         ring = loc[k * nv:(k + 1) * nv]
+        assert np.allclose(ring, foot[1])
         ra = hpl.model.p.root_radius
         assert np.abs(ring[:, 2] - real.height(ring[:, :2])).max() < 0.15 * ra, body
         # and not a plane: the skin's height over the ring varies by more than the plane's, on every body
@@ -567,19 +646,49 @@ def test_the_built_sheath_touches_the_real_moulded_skin_at_its_skin_line(world, 
 
 @assets
 def test_the_skins_foot_reaches_the_moulded_surface_on_every_body(world, bodies):
-    """The foot is built against the moulded cage: at the sheath's wall the first foot ring is under the skin
-    and the sheath emerges from it (the ring at the skin line is within a hair of the skin)."""
+    """The foot is built against the skin the FIGURE has: ``hornrig.moulded_cage`` is ``junction.moulded_cage`` (the
+    whole pipeline: the head's silhouette bound, the join guard, the validity pass) over the specs of the pair, which
+    are the specs ``Placed.junction`` hands the figure. Round 1 re-implemented the raw law and missed the core's
+    guards: its field was 0.03 off the real skin. Now the two are the same to rounding, for a lone horn and for each
+    horn of a pair (the figure with both horns), on every body and every shape."""
+    base, _ = world
+    th = np.linspace(0, 2 * np.pi, 16, endpoint=False)
     for body, v in bodies.items():
-        p = left_of(world, v, "curved")
-        hpl = p.repose.horn
-        out, shaped = shaped_body(world, v, [p])
-        # the moulded surface the foot was built against is the one the body really has: sample both
-        base, _ = world
-        f_real = HR.SkinField(base.body_cage(out), p.matrix, 0.9, hpl.field.fallback)
-        th = np.linspace(0, 2 * np.pi, 16, endpoint=False)
-        ra = hpl.model.p.root_radius
-        xy = np.stack([1.3 * ra * np.cos(th), 1.3 * ra * np.sin(th)], axis=1)
-        assert np.abs(f_real.height(xy) - hpl.field.height(xy)).max() < 1e-9, body
+        for text in ("horn:side=left", "horn", "horn:shape=ram", "horn:shape=ossicone"):
+            if body != "neutral" and text != "horn":
+                continue
+            placed = place(world, v, text)
+            out, _ = shaped_body(world, v, placed)          # the figure: every horn's spec through apply_junctions
+            for p in placed:
+                hpl = p.repose.horn
+                f_real = HR.SkinField(base.body_cage(out), p.matrix, 0.9, hpl.field.fallback)
+                ra = hpl.model.p.root_radius
+                for k in (1.1, 1.3, 1.8):
+                    xy = np.stack([k * ra * np.cos(th), k * ra * np.sin(th)], axis=1)
+                    assert np.abs(f_real.height(xy) - hpl.field.height(xy)).max() < 1e-9, (body, text, p.name)
+                # and the spec the foot was built against is the one the figure gets
+                assert p.junction() is hpl.spec or p.junction().digest() == hpl.spec.digest()
+
+
+@assets
+def test_the_junctions_tube_lies_inside_the_built_sheath(world, bodies):
+    """The horn's spec has ``conform=False`` (the core cannot cut its tube to a mesh that does not exist yet when the
+    foot is built against the moulded skin), so the tube must lie in the sheath by construction
+    (``HornModel.inscribed``: the minor semi-axis less the keel's lobes and the polygon, the flare measured from the
+    low side of the skin, and a stem that reaches the tube's deepest station): every sample of it is inside the built
+    mesh, on every shape, both sides, the bodies and random faces."""
+    from minimaster.character import junction_checks as JC
+    base, lib = world
+    cases = [(bodies[b], s) for b in ("neutral", "child", "tall") for s in SHAPES]
+    for seed in (0, 9):
+        cases.append((random_face(world, seed), "curved"))
+    for v, shape in cases:
+        for p in place(world, v, f"horn:shape={shape}"):
+            spec = p.junction()
+            assert spec.conform is False and spec.owner == "head"
+            m = p.mesh()
+            res = JC.tube_in_mesh(spec.points, spec.radii, m.vertices, m.faces)
+            assert res["worst"] == 1.0 and res["max_outside"] == 0.0, (shape, p.name, res["worst"])
 
 
 @assets
@@ -596,7 +705,11 @@ def test_the_skin_is_moulded_locally_without_flips_or_ear_and_midline_drag(world
     cs = base.body_cage(out)[0]
     d = np.linalg.norm(cs - cv, axis=1)
     moved = d > 1e-12
+    # (round 2: the core's 8% head silhouette bound cut the ram's tent into a step and backed 2 of its vertices off;
+    # the ram's spec sets its own bound, SHAPES["ram"]["silhouette"]: 0 again; the other shapes keep the core's)
     assert info["limited"] == 0 and info["moved"] == int(moved.sum()) and 10 < moved.sum() < 150
+    assert spec.silhouette == HR.SHAPES[shape].get("silhouette", HR.HEAD_SILHOUETTE) and spec.owner == "head"
+    assert not spec.conform
     # local: nothing beyond the tent (plus a root radius) from the anchor moves
     far = np.linalg.norm(cv - p.anchor, axis=1) > hpl.plan.tent_radius + hpl.site.radius
     assert (d[far] < 1e-12).all()
@@ -679,7 +792,10 @@ def test_layers_are_bone_muscle_and_skin_from_the_same_parameters(world, bodies,
     longer = left_of(world, v, shape, length=HR.SHAPES[shape]["length"] * 1.5)
     ext = lambda m: np.linalg.norm(m.bounds[1] - m.bounds[0])                       # noqa: E731
     assert ext(longer.layers()["bone"]) > 1.08 * ext(L["bone"])                    # (the extent includes the skull plate)
-    assert np.allclose(longer.layers()["muscle"].vertices, L["muscle"].vertices, atol=2e-3)     # (the path is sampled over L)
+    # (the path is sampled over L; a corkscrew's coil starts within the junction tube's reach and its pitch is L / turns,
+    # so its tube, hence the moulded skin over the lens, moves by a few thousandths)
+    tol = 2e-3 if not HR.SHAPES[shape]["turns"] else 2e-2
+    assert np.allclose(longer.layers()["muscle"].vertices, L["muscle"].vertices, atol=tol)
 
 
 @assets
@@ -707,31 +823,40 @@ def test_the_bone_is_a_cone_inside_the_sheath_and_continuous_into_the_skull(worl
 
 
 @assets
-def test_the_soft_tissue_is_a_lens_under_the_moulded_skin_and_over_the_skull(world, bodies):
-    """Its upper surface is the skin the body REALLY has (the junction's moulded cage) less the skin's thickness,
-    its lower one the skull's outer table: the layers are derived from the numbers the body is moulded with."""
+@pytest.mark.parametrize("shape", SHAPES)
+def test_the_soft_tissue_is_a_lens_under_the_moulded_skin_and_over_the_skull(world, bodies, shape):
+    """The layers are inside what is drawn: the lens (soft tissue) and the skull plate lie in the body the figure
+    really has or in the sheath, on every shape (round 1 checked only the curved horn, against the formula it is built
+    with, and on the ram 24-45 of their vertices stood 0.33-0.5 radii out of the head where the temple curves away
+    from the horn's axis: the annulus now ends where the axis-parallel rays stop finding the skull, ``_outline``). The
+    lens is thicker at the horn than at its rim (the tent), its top under the moulded skin, its bottom over the plate."""
+    from minimaster.character import junction_checks as JC
     base, _ = world
-    v = bodies["neutral"]
-    p = left_of(world, v, "curved")
-    hpl = p.repose.horn
-    out, body = shaped_body(world, v, [p])
-    sc = hpl.site.scale
-    mus = hpl.layers_local()["muscle"]
-    inv = np.linalg.inv(p.matrix)
-    f_body = HR.SkinField(base.body_cage(out), p.matrix, 1.2, hpl.field.fallback)
-    f_raw = HR.SkinField(base.body_cage(v), p.matrix, 1.2, hpl.field.fallback)
-    pts = mus.vertices
-    top = pts[: len(pts) // 2]
-    bot = pts[len(pts) // 2:]
-    assert np.abs(top[:, 2] - (f_body.height(top[:, :2]) - HR.SKIN_THICK / sc)).max() < 1e-6
-    assert np.abs(bot[:, 2] - (f_raw.height(bot[:, :2]) - HR.SCALP_THICK / sc)).max() < 1e-6
-    # thicker at the horn (the tent) than where the skin is not lifted
-    thick = top[:, 2] - bot[:, 2]
-    rho = np.hypot(top[:, 0], top[:, 1])
-    assert thick[rho < 1.5 * hpl.model.R].min() > thick[rho > 0.95 * rho.max()].min()
-    # the muscle's whole upper surface is below the skin (parity): inside the shaped body
-    world_pts = top[rho > 1.4 * hpl.model.p.root_radius] @ p.matrix[:3, :3].T + p.matrix[:3, 3]
-    assert len(world_pts) > 20 and parity_inside(world_pts, body).all()
+    for body in ("neutral", "child", "tall"):
+        v = bodies[body]
+        p = left_of(world, v, shape)
+        hpl = p.repose.horn
+        out, body_mesh = shaped_body(world, v, [p])
+        sc = hpl.site.scale
+        lay = hpl.layers_local()
+        mus = lay["muscle"]
+        pts = mus.vertices
+        top, bot = pts[: len(pts) // 2], pts[len(pts) // 2:]
+        assert (top[:, 2] - hpl.field.height(top[:, :2]) <= -HR.SKIN_THICK / sc + 1e-9).all()   # under the moulded skin
+        assert (top[:, 2] >= bot[:, 2]).all()
+        thick = top[:, 2] - bot[:, 2]
+        rho = np.hypot(top[:, 0], top[:, 1])
+        assert thick[rho < 1.5 * hpl.model.R].mean() > 1.5 * thick[rho > 0.95 * rho.max()].mean()
+        # in world: inside the shaped body or the sheath, but for a hair at the rim (at most 3% of the vertices,
+        # by at most a fifth of a base radius: the lens' outer wall is vertical in the horn's frame; the ram's temple
+        # has 8 of 448 out by 0.02)
+        shells = (JC.Shells(body_mesh.vertices, body_mesh.faces), JC.Shells(p.mesh().vertices, p.mesh().faces))
+        for name in ("muscle", "bone"):
+            P = p.layers()[name].vertices
+            bad = ~(shells[0].inside(P) | shells[1].inside(P))
+            if bad.any():
+                depth = JC.distance_to_mesh(P[bad], body_mesh.vertices, body_mesh.faces, reach=1.0).max()
+                assert bad.mean() <= 0.03 and depth <= 0.2 * hpl.site.radius, (shape, body, name, bad.sum(), depth)
 
 
 @assets
@@ -836,3 +961,150 @@ def test_building_a_pair_is_fast_and_the_document_round_trips(world, bodies):
     d = K.instantiate_all([spec], base, bodies["neutral"], draft=True)
     assert len(d[0].mesh().faces) < len(a[0].mesh().faces)
     assert d[0].params == a[0].params
+
+
+# -- round 2: a random face, the skull's size, the extremes, the print ------------------------------------------
+
+
+@assets
+@pytest.mark.parametrize("seed", [0, 9, 4, 11])
+def test_each_horn_of_a_pair_sits_on_its_own_skin_on_a_random_face(world, seed):
+    """``--randomize-face`` makes the head asymmetric: round 1 built the right horn as the mirror of the left one and on
+    seeds 0 and 9 it sank 1.9 base radii into the scalp or floated 1.7 above it (the critic's measure: the unmoulded
+    skin's height over the horn's origin along its axis, in root radii). Each horn is now built on its own quad, its
+    own skull normal and its own skin: both origins are within 0.3 root radii of the skin, and the right horn is still
+    the mirror IMAGE of a left one (the same model, a mirroring frame)."""
+    base, _ = world
+    v = random_face(world, seed)
+    l, r = place(world, v, "horn")
+    cage = base.body_cage(v)
+    for p in (l, r):
+        hpl = p.repose.horn
+        f = HR.SkinField(cage, p.matrix, 0.9, hpl.field.fallback)
+        z0 = float(f.height(np.zeros((1, 2)))[0])
+        assert abs(z0) < 0.3 * hpl.model.p.root_radius, (seed, p.name, z0 / hpl.model.p.root_radius)
+        # the foot's skin-line ring is on that side's moulded skin (to the two passes that lower it: 0.1 root radii)
+        bowl, foot, _ = hpl.model.foot_rings(hpl.field)
+        assert np.abs(foot[1][:, 2] - hpl.field.height(foot[1][:, :2])).max() < 0.1 * hpl.model.p.root_radius
+    assert l.repose.horn.model is r.repose.horn.model
+    assert np.linalg.det(r.matrix[:3, :3]) < 0
+    # and the head IS asymmetric there: the right anchor is not the mirror of the left one
+    assert np.linalg.norm(r.anchor * np.array([-1.0, 1.0, 1.0]) - l.anchor) > 1e-4
+
+
+@assets
+def test_the_horn_is_sized_by_the_skull_not_the_eyes(world, bodies):
+    """Round 1 scaled the horn by the eye distance: ``eyes.eye_trans.in_out`` -1..1 changed it 0.89..1.17 on the same
+    skull and a random face 0.54..1.28 where the skull was 1.28 wide (horns 0.43-0.92 x what the skull implies, which
+    then printed fragile). The scale is now the skull's half-width over the neutral one (``skull_halfwidth``): moving
+    the eyes changes nothing, a wider skull (``head.head_scale_horiz``) a proportionally bigger horn, and on random
+    faces the base radius stays the same share of the skull unless the head limits it (and then the whole horn keeps
+    its proportions)."""
+    from minimaster.character.sliders import Character, SliderCatalog
+    base, lib = world
+    cat = SliderCatalog(lib.names)
+
+    def body(**sl):
+        c = Character()
+        c.sliders.update(sl)
+        return lib.apply(base.verts, c.effective_target_weights(cat))
+
+    neutral = bodies["neutral"]
+    k0 = HR.head_frame(base, neutral, base.body_cage(neutral)).k
+    assert k0 == pytest.approx(1.0, abs=0.01)
+    ks = []
+    for io in (-1.0, 1.0):
+        v = body(**{"eyes.eye_trans.in_out": io})
+        h = HR.head_frame(base, v, base.body_cage(v))
+        assert h.iod / HR.IOD_REF == pytest.approx(1.0 + 0.16 * io, abs=0.06)            # the eyes did move ...
+        ks.append(h.k)
+    assert ks[0] == pytest.approx(k0, abs=1e-9) and ks[1] == pytest.approx(k0, abs=1e-9)   # ... the horn's scale did not
+    wide = body(**{"head.head_scale_horiz": 1.0})
+    hw = HR.head_frame(base, wide, base.body_cage(wide))
+    assert hw.k == pytest.approx(k0 * hw.skull / HR.SKULL_REF / k0, rel=1e-9) and hw.k > 1.15 * k0
+    shares = []
+    for seed in (0, 9, 4, 11, 7, 3):
+        p = place(world, random_face(world, seed), "horn:side=left")[0]
+        hpl = p.repose.horn
+        assert hpl.site.scale == pytest.approx(hpl.head.skull / HR.SKULL_REF)
+        if not hpl.site.limited:
+            shares.append(hpl.site.radius / hpl.head.skull)
+        # a limited horn keeps its proportions: length / radius as asked
+        assert hpl.model.L / hpl.model.R == pytest.approx(1.6 / 0.17, rel=1e-6)
+    assert len(shares) >= 3 and max(shares) / min(shares) < 1.05
+    # a narrow brow (seeds 0 and 9: the crown quad 0.33 from the midline on a skull 0.76 wide) limits the radius by the
+    # midline, but to (x - 0.075) / 1.6, not the tent's 2.2 radii (0.54 of the asked size printed fragile)
+    for seed in (0, 9):
+        hpl = place(world, random_face(world, seed), "horn:side=left")[0].repose.horn
+        assert hpl.site.limited == "midline"
+        assert hpl.site.radius > 0.65 * 0.17 * hpl.site.scale
+
+
+@assets
+def test_a_limited_horn_says_so_in_the_report(world, bodies):
+    """A saved ``base_radius`` the head cannot carry (the first version's 0.42) was limited silently to about a third
+    of its size; the build report says it now (a note, not a warning: every parameter at its limit must still build
+    with warnings as errors), and the default horn says nothing."""
+    base, _ = world
+    report = []
+    K.instantiate_all([K.new_spec("horn", params={"base_radius": 0.42}, base=base)], base, bodies["neutral"],
+                      report=report)
+    assert len(report) == 1 and "built at" in report[0] and "horn-1" in report[0]
+    report = []
+    first = K.new_spec("horn", base=base)
+    K.instantiate_all([first, K.new_spec("horn", [first], params={"shape": "ram"}, base=base)], base,
+                      bodies["neutral"], report=report)
+    assert report == []                         # (the default ram is limited to 0.99 by the head's width: no note)
+
+
+@assets
+@pytest.mark.parametrize("shape", SHAPES)
+def test_extremes_build_clean_skin_and_sheaths_that_do_not_cross(world, bodies, shape):
+    """The critic's grid, on the body: fillet and turns were not in the round-1 extremes (a ram at fillet 3 moved 403
+    vertices and backed 10 off; turns +-4 crossed itself 170-470 times; a ram of length 12, 2,209). Every extreme of
+    every shape builds a pair whose sheaths cross neither themselves nor each other, a valid junction (no quality
+    violation, fewer than 300 vertices moved and 25 backed off for the pair: the head's own skin only)."""
+    from minimaster.character import collar as CO
+    base, _ = world
+    v = bodies["neutral"]
+    for e in ("fillet=4", "flare=1.5", "base_radius=0.6", "length=12", "turns=4", "turns=-4", "boss=2", "collar=2",
+              "base_radius=0.6,flare=1.5,fillet=4"):
+        placed = place(world, v, f"horn:shape={shape},{e}")
+        info = {}
+        out = J.apply_junctions(base, v, J.junction_specs(placed), info)
+        q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=())
+        assert J.quality_violations(q) == [], (shape, e)
+        assert info["moved"] < 300 and info["limited"] < 25, (shape, e, info["moved"], info["limited"])
+        a, b = (p.mesh() for p in placed)
+        assert CO.count_crossings(a.vertices, a.faces) == 0, (shape, e)
+        assert CO.count_crossings(a.vertices, a.faces, b.vertices, b.faces) == 0, (shape, e)
+        assert placed[0].repose.horn.plan.fillet <= HR.FILLET_MAX
+
+
+@assets
+@pytest.mark.parametrize("shape", SHAPES)
+def test_the_default_of_every_shape_prints_at_small_and_medium(world, bodies, shape):
+    """Round 1 tested the print of the curved default at "medium" only; the spiral and the antelope were fragile there
+    (28% and 33% of their area under 0.3 mm). Every shape's default pair now prints at "medium" with no blocking
+    finding and no thin-area warning, and at "small" with no blocking finding (the slender ones warn there: the
+    report says so), with a real weld and a tip the printer resolves (measured on the mesh: the last ring)."""
+    base, _ = world
+    v = bodies["neutral"]
+    placed = place(world, v, f"horn:shape={shape}")
+    shaped, _ = shaped_body(world, v, placed)
+    shells = pp.character_print_shells(base, shaped)
+    app = [[(p.name, p.mesh())] for p in placed]
+    for size in ("small", "medium"):
+        mm = pp.figure_scale(shells + pp.appendage_print_shells(app), size=size, reference=pp.FIGURE_SHELLS)
+        rep = pr.appendage_report(app, base, v, mm, body_verts=shaped)
+        assert not rep.blocking, (shape, size, rep.as_text())
+        if size == "medium":
+            assert not [f for f in rep.findings if f.code == "thin"], (shape, rep.as_text())
+        for g in rep.groups.values():
+            assert 0.15 <= g.root_embed <= 0.75, (shape, g.root_embed)
+        hpl = placed[0].repose.horn
+        s, pos, T, N, B = hpl.model.path()
+        tip_ring = hpl.model.skin().vertices
+        far = np.linalg.norm(tip_ring - pos[-1], axis=1) < 1.2 * float(hpl.model.radius(hpl.model.L))
+        tip_mm = 2.0 * np.linalg.norm(tip_ring[far] - tip_ring[far].mean(axis=0), axis=1).max() * hpl.site.scale * mm
+        assert tip_mm >= 0.2, (shape, size, tip_mm)

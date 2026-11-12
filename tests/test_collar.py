@@ -114,8 +114,9 @@ def test_a_profile_is_validated_hashable_data():
 
 def test_the_default_kind_has_no_collar():
     assert K.Kind().collar_profile(None) is None
-    for kid in ("wing", "horn", "harvest"):
-        assert K.KINDS[kid].collar_profile(None) is None        # the next stage enables them
+    for kid in ("horn", "harvest"):
+        assert K.KINDS[kid].collar_profile(None) is None        # the next stage enables them (the wing has one:
+                                                                # tests/test_wing_root.py)
 
 
 # -- the pieces of the geometry ------------------------------------------------------------------------------------
@@ -450,10 +451,12 @@ def test_the_tail_has_a_collar_of_its_own_and_other_kinds_do_not(world):
     assert K.KINDS["tail"].collar_profile(_tail(world)[2]).active
     base, lib, cat = world
     c = Character()
-    for t in ("wing", "horn"):
+    for t in ("horn",):            # (the wing's collar: tests/test_wing_root.py)
         c.appendages.append(K.add_from_text(t, c.appendages, base=base, lib=lib))
     verts = lib.apply(base.verts, c.effective_target_weights(cat))
     for p in c.instantiate_appendages(base, verts, lib):
+        if p.kind.id == "horn":
+            continue                                    # (the horn's collar: tests/test_horn_collar.py, S6b horn)
         assert p.kind.collar_profile(p) is None and CO.collar_pieces(base, verts, p) == []
 
 

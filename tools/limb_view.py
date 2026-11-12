@@ -8,8 +8,8 @@
 masses that shape it, ``bone`` the chain inside); ``--cut`` slices the body and the outer layers away
 on one side of the plane through the girdle's pivot (``coronal``: the front half goes, look from the
 front; ``sagittal``: the lateral half goes, look from the side) so that the layers inside can be seen.
-Needs the CC0 assets. Run from the repository root. Uses ``minimaster.character.ecorche`` when it
-exists (the tail track's helper) and its own copy of the same drawing otherwise.
+Needs the CC0 assets. Run from the repository root. Draws with ``minimaster.character.ecorche`` (the
+shared helper; the copy this tool carried until round 2b is gone).
 """
 
 from __future__ import annotations
@@ -24,13 +24,9 @@ import numpy as np  # noqa: E402
 
 import junction_view as jv  # noqa: E402
 from minimaster.character import kinds, mhbase as mh, portrait as po  # noqa: E402
-from minimaster.character import shading as sh  # noqa: E402
 from minimaster.character.sliders import SliderCatalog  # noqa: E402
-from minimaster.core.mesh import Mesh  # noqa: E402
 
 LAYERS = ("bone", "muscle", "skin")
-MATERIALS = {"bone": sh.Material(base_color="#e4d8b8", roughness=0.55),
-             "muscle": sh.Material(base_color="#9c2f2b", roughness=0.45, specular=0.5)}
 
 
 def parse_layers(text) -> tuple:
@@ -41,50 +37,15 @@ def parse_layers(text) -> tuple:
     return tuple(n for n in LAYERS if n in names)
 
 
-def cut_mesh(mesh: Mesh, point, normal) -> Mesh:
-    """``mesh`` without the faces on the positive side of the plane, inside out (so that a viewer
-    on the cut side sees the inner face of the open shell)."""
-    n = np.asarray(normal, dtype=np.float64)
-    n = n / max(float(np.linalg.norm(n)), 1e-12)
-    cent = mesh.vertices[mesh.faces].mean(axis=1)
-    keep = ((cent - np.asarray(point, dtype=np.float64)) @ n) <= 0.0
-    return Mesh(mesh.vertices, mesh.faces[keep][:, ::-1])
-
-
 def layer_shells(base, verts, placed, layers=LAYERS, *, cut: str = "none", plane=None, levels: int = 1,
                  body: bool = True):
-    """Render shells (Z up): the body and the ``layers`` of every appendage in ``placed``."""
-    try:                                                    # the shared helper, when the tail track's is merged
-        from minimaster.character import ecorche
-        if cut != "none" and plane is None:
-            plane = _plane(placed, cut)
-        return ecorche.layer_shells(base, verts, placed, layers, cut=cut != "none", plane=plane,
-                                    levels=levels, body=body)
-    except ImportError:
-        pass
-    layers = parse_layers(layers)
+    """Render shells (Z up): the body and the ``layers`` of every appendage in ``placed``, drawn by the
+    shared :mod:`minimaster.character.ecorche` (round 2b: the tool's own copy of it is gone)."""
+    from minimaster.character import ecorche
     if cut != "none" and plane is None:
         plane = _plane(placed, cut)
-    xf = po.MH_TO_Z_UP
-    shells = []
-    if body:
-        shells = list(po.character_shells(base, verts, levels=levels, with_eyes=cut == "none"))
-        if cut != "none":
-            pz = xf[:3, :3] @ np.asarray(plane[0]) + xf[:3, 3]
-            nz = xf[:3, :3] @ np.asarray(plane[1])
-            shells = [po.Shell(cut_mesh(s.mesh, pz, nz), s.material, s.ao, s.ao_strength, s.base_colors)
-                      if i == 0 else s for i, s in enumerate(shells)]
-    for p in placed:
-        meshes = p.layers()
-        for name in layers:
-            m = meshes.get(name)
-            if m is None or not len(m.faces):
-                continue
-            if cut != "none" and name != layers[0]:
-                m = cut_mesh(m, plane[0], plane[1])
-            mat = p.material if name == "skin" else MATERIALS[name]
-            shells.append(po.Shell(m.transform(xf), mat))
-    return shells
+    return ecorche.layer_shells(base, verts, placed, parse_layers(layers), cut=cut != "none", plane=plane,
+                                levels=levels, body=body)
 
 
 def _plane(placed, cut: str):

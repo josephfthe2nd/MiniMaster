@@ -505,13 +505,13 @@ def test_each_kind_supplies_a_generic_junction_built_from_its_own_geometry(world
     assert tail.radii[-1] < tail.radii[0]
     # read off the tail's own anatomy (tailrig.py): the chain starts at the buried end of the skin shell
     # (the hidden stem, 1.75 R below the skin point, on the tail's own axis) and its radius is the skin's
-    # at the root: the flared semi-axis (1 + F = 1.35 R) times the inscribed-circle factor of 16 facets and
-    # the hug
+    # at the root: the flared semi-axis (1 + F = 1.35 R) times the inscribed-circle factor of its facets
+    # (24 since round 2b: the collar's join with a 16-gon wall showed facets) and the hug
     tail_placed = next(p for p in placed if p.name == "tail-1")
     stem = np.array([0.0, 0.0, -1.75 * 0.45, 1.0])      # in the tail's local frame (the matrix scales it)
     assert np.allclose(tail.points[0], (tail_placed.matrix @ stem)[:3], atol=1e-9)
     k0 = tail_placed.model.scale              # the body's height over the neutral body's: the tail follows it
-    assert tail.radii[0] == pytest.approx(0.45 * 1.35 * np.cos(np.pi / 16) * J.HUG * k0, rel=1e-6)
+    assert tail.radii[0] == pytest.approx(0.45 * 1.35 * np.cos(np.pi / 24) * J.HUG * k0, rel=1e-6)
     assert tail.base_radius == pytest.approx(0.45 * k0) and tail.width == pytest.approx(kinds_mod.TAIL_FILLET)
     # a tube is described from the sunk base outward: the first point is inside the body, the
     # last is clear of the skin
@@ -677,14 +677,13 @@ def test_the_skin_meets_the_root_at_a_smaller_angle_and_without_new_creases(worl
     out = c.shaped_body(base, v, placed)
     m = J.measure_junction(base, v, out, spec, levels=2)
     assert m["flipped"] == 0 and m["min_area_ratio"] >= J.MIN_AREA_RATIO - 1e-9
-    # the skin ran into the root at 56-92 degrees from tangent; now it meets it at 15-30 less. The wing is
-    # the one kind whose skin meets the arm mostly through its SHOULDER anatomy (wingroot.py: a boss that
-    # tilts the skin toward the arm over a distance of two radii, tested in test_wing_root.py: the arm
-    # leaves the skin 12-23 degrees more steeply) and through a narrow fillet kept narrow on purpose (a wide
-    # one stretched the skin 3x and crossed it through itself in the armpit): this measure only sees the
-    # fillet's own quarter-width band, so it gains less there
-    gain = 8.0 if text == "wing" else 15.0
+    # the skin ran into the root at 56-92 degrees from tangent; now it meets it at 15-30 less (the wing: the
+    # skin met its arm at 101 degrees, round 1's 8-degree exception is gone: it gains 29 now, S6b, with the arm
+    # leaving the back over the shoulder blade, the fillet 0.45 high and the tube on the arm's own axis)
+    gain = 15.0
     assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - gain, m
+    if text == "wing":          # and lower than the round-1 wing's 78.7 (the generic S1 wing's: 67.4)
+        assert m["join_angle_deg_after"] < 75.0, m
     # no crease the body did not already have: the 99th percentile of what the junction adds to
     # the crease of an edge, on the twice-subdivided skin (S1: 14), and the 95th percentile of the zone
     assert m["dihedral_increase_p99_deg"] < 10.0, m
@@ -746,11 +745,15 @@ def test_the_cli_png_and_stl_use_the_shaped_body(world, tmp_path, monkeypatch):
     real = junction.apply_junctions
     monkeypatch.setattr(junction, "apply_junctions",
                         lambda *a, **k: calls.append(1) or real(*a, **k))
+    # (S6b horn: a horn's build moulds the cage for its own pair, junction.moulded_cage, so its foot is built against
+    # the skin the figure gets; those calls are the build's, not the pipeline's, and are not counted)
+    real_mc = junction.moulded_cage
+    monkeypatch.setattr(junction, "moulded_cage", lambda *a, **k: calls.append(-1) or real_mc(*a, **k))
     assert main(common + ["-o", str(tmp_path / "c.stl")]) == 0
-    assert len(calls) == 1
+    assert calls.count(1) - calls.count(-1) == 1
     calls.clear()
     assert main(common + ["--no-junction", "-o", str(tmp_path / "d.stl")]) == 0
-    assert calls == []
+    assert calls.count(1) - calls.count(-1) == 0
 
 
 @assets
@@ -767,13 +770,20 @@ def test_cli_saves_and_restores_the_junction_switch(tmp_path):
 
 
 @assets
-def test_a_tail_that_only_touches_the_skin_is_welded_by_the_junction(tmp_path):
-    """A tail slid out of its stem (offset +1.0) is tangent to the skin: a hairline weld and a blocked
-    export (``--no-junction``: tests/test_character_cli.py). The skin that flows up around its root
-    encloses part of it, so the weld is real."""
+def test_a_tail_slid_out_of_its_stem_is_blocked_and_one_still_sunk_is_welded(tmp_path, capsys):
+    """A tail slid along its axis by +0.8 has the end of its stem on the skin (the skin risen round it holds 11 % of its
+    volume): it exports. Slid by +1.0 (more than its 0.82-unit stem) its buried end is 0.16 units OUT of the skin on
+    its axis (measured: every point of its skin tube lies 0.16 - 0.97 units above the skin, and the core cuts the tube
+    to the tail's mesh, which starts out there): the fillet only reaches up to it, 1.6 % of it ends up in the body,
+    and the report blocks it with the hint to sink it, junction or not (``--no-junction``: tests/test_character_cli.py;
+    the round-2 code blocked it the same way). The first version expected the junction to weld it."""
     from minimaster.__main__ import main
     out = tmp_path / "o.stl"
-    assert main(["character", "--add", "tail:offset=1.0", "-o", str(out), "--size", "medium"]) == 0
+    assert main(["character", "--add", "tail:offset=0.8", "-o", str(out), "--size", "medium"]) == 0
+    capsys.readouterr()
+    assert main(["character", "--add", "tail:offset=1.0", "-o", str(out), "--size", "medium"]) == 3
+    err = capsys.readouterr().err
+    assert "BLOCK tail-1" in err and "sink it into the body" in err
 
 
 @assets
@@ -1280,11 +1290,13 @@ def test_a_swung_arm_does_not_make_spikes_on_the_chest(world):
     specs = J.junction_specs(placed)
     q = J.junction_quality(base, v, out, specs, levels=(1,))
     assert J.quality_violations(q) == [], q
-    # the cone is a stretch signature: the unguarded law (S1's) grows a quad 3x and makes
-    # neighbours move 2 edge lengths apart there
+    # the cone was a stretch signature: the unguarded S1 law grew a quad 3x and made neighbours move 2
+    # edge lengths apart there. Since the girdle placement (round 1: the swing is clamped to the girdle's
+    # range, 26 degrees here) and the tube cut to the mesh (S6 core) the raw law no longer makes the cone;
+    # what is left of it is a quad stretched more than 2x, which the guards remove (above: no violation)
     raw = J.apply_junctions(base, v, specs, **LAW_ONLY)
     bad = J.quality_violations(J.junction_quality(base, v, raw, specs, levels=()))
-    assert any("quad grew" in m for m in bad) and any("edge lengths apart" in m for m in bad), bad
+    assert any("quad grew" in m for m in bad), bad
     cv0, cq = base.body_cage(v)
     cv1, _ = base.body_cage(out)
     nrm = J.vertex_normals(cv0, cq)
@@ -1299,20 +1311,44 @@ def test_a_swung_arm_does_not_make_spikes_on_the_chest(world):
 
 
 @assets
-@pytest.mark.parametrize("text", ["horn:flare=2", "horn:length=8,base_radius=1.0", "horn:flare=1.5,base_radius=0.8"])
-def test_an_oversized_horn_root_does_not_swell_the_head(world, text):
+@pytest.mark.parametrize("shape", ["curved", "ram", "spiral", "antelope", "ossicone"])
+def test_an_oversized_horn_root_does_not_swell_the_head(world, shape):
     """S1: ``flare=2`` moved 2,803 vertices (1,424 backed off by the limiter) and swelled the
-    temples; a root fatter than the head it grows from has no skin to flow into, so it moulds
-    nothing; a big but sane one moulds the head locally and boundedly."""
+    temples. The horn's ranges are narrower since S4 (flare <= 1.5, base_radius <= 0.6: the old
+    flare=2 / base_radius=1.0 raise ValueError), and the site limits the radius to the head (a root
+    thicker than the head, the old "moulds nothing" case, cannot be built any more: it is limited
+    instead). So: the in-range extremes, every shape, a pair. The head's own skin only, locally,
+    with no quality violation, and the head's silhouette bound holds: outside the horns' tubes no
+    skin vertex grows out of the head by more than the spec's ``silhouette`` share of its distance
+    from the head's bone (the horn sets its own bound, 0.2, for its tent: bony mass)."""
     base, lib, verts = world
+    text = f"horn:shape={shape},flare=1.5,base_radius=0.6"
     c, v, placed, out, info = _shaped(world, text, BODIES5["neutral"])
-    q = J.junction_quality(base, v, out, J.junction_specs(placed), levels=(1,))
+    specs = J.junction_specs(placed)
+    q = J.junction_quality(base, v, out, specs, levels=(1,))
     assert J.quality_violations(q) == []
     head_part = q.get("by_part", {}).get("head", (0, 0.0))
-    assert q["moved"] <= 700 and q["max_move"] <= 0.3, (text, q["moved"], q["max_move"])
+    assert 0 < q["moved"] <= 700 and q["max_move"] <= 0.3, (text, q["moved"], q["max_move"])
     assert head_part[0] == q["moved"]                  # only the head's own skin
-    if text != "horn:flare=1.5,base_radius=0.8":
-        assert q["moved"] == 0                         # thicker than the head: nothing to mould
+    for p in placed:                                   # limited to the head, not swelling it
+        site = p.repose.horn.site
+        assert site.radius <= 0.4 * site.halfwidth + 1e-9 and site.limited
+    frame = BF.frame_or_none(base, v)
+    cv0 = base.body_cage(v)[0]
+    cv1 = base.body_cage(out)[0]
+    d = cv1 - cv0
+    moved = np.linalg.norm(d, axis=1) > 1e-9
+    hidden = np.zeros(len(cv0), dtype=bool)
+    for s in specs:
+        hidden |= J.tube_distance(cv0, np.asarray(s.points), np.asarray(s.radii))[0] < 0.0
+    sel = moved & ~hidden
+    head = frame.parts.index("head")
+    ctr, dist = frame.bone_closest(cv0[sel], head)
+    u = (cv0[sel] - ctr) / dist[:, None]
+    growth = (d[sel] * u).sum(axis=1)
+    cap = max(J.PART_SILHOUETTE["head"] if s.silhouette is None else s.silhouette for s in specs)
+    allowed = cap * np.maximum(dist, 0.5 * frame.part_size(head))
+    assert (growth <= allowed + 1e-9).all(), (text, float((growth - allowed).max()))
 
 
 @assets
@@ -1481,7 +1517,10 @@ def test_the_default_call_smooths_the_displacement_over_the_cage(world):
     assert inspect.signature(J.apply_junctions).parameters["smooth"].default == J.DIFFUSE_ITERATIONS > 0
     base, lib, verts = world
     c, v, placed, _, _ = _shaped(world, "harvest:preset=lower_arms", BODIES5["neutral"])
-    specs = [s.with_(smooth=None) for s in J.junction_specs(placed)]       # a spec's own override out of the way
+    # a spec's own override out of the way, and its mounds (round 2b: the lower pair's masses, a pad and a
+    # latissimus wedge, overlap near the root and the steepest neighbour difference became a mound's, which
+    # diffusion does not and need not flatten: 15 % lower, not 20; the tube's crease alone: 27 %)
+    specs = [s.with_(smooth=None, mounds=()) for s in J.junction_specs(placed)]
     law = {**LAW_ONLY, "drop_worse": None}
     rough = J.apply_junctions(base, v, specs, **{**law, "smooth": 0})
     smooth = J.apply_junctions(base, v, specs, **{**law, "smooth": J.DIFFUSE_ITERATIONS})
@@ -2022,7 +2061,11 @@ def test_a_horn_does_not_reshape_the_head(world, text, body):
     (``PART_SILHOUETTE`` 8 %) at every height, for the default horn, the curved one and the ram's, on four
     bodies."""
     growth = _visible_head_growth(world, text, BODIES5[body])
-    assert growth <= J.PART_SILHOUETTE["head"] + 0.005, (text, body, growth)
+    # (S6b horn: the ram's spec sets its own bound, 0.12, hornrig.SHAPES["ram"]["silhouette"]: its root is on the
+    # temple crest over the temporalis, and the core's 8 % cut its boss into a step the validity pass backed 2
+    # vertices off (the assigned limited == 0 failure); measured 8.5-10.3 % on these four bodies, at the root's height)
+    bound = 0.105 if "ram" in text else J.PART_SILHOUETTE["head"] + 0.005
+    assert growth <= bound, (text, body, growth)
 
 
 @assets
@@ -2034,7 +2077,8 @@ def test_the_head_bound_is_what_holds_the_ram_s_horn_in(world):
                          (BODIES5["slim_f"], 0.04)):
         free = _visible_head_growth(world, "horn:shape=ram", macro, edit=lambda s: s.with_(silhouette=0.0))
         held = _visible_head_growth(world, "horn:shape=ram", macro)
-        assert free > bound + extra and held <= bound + 0.005, (macro, free, held)
+        # (the ram's own bound, 0.12 of the distance from the head's bone: 8.9-10.1 % held, 10.4-17.8 % free)
+        assert free > bound + extra and held <= 0.105 and free > held + 0.01, (macro, free, held)
 
 
 # -- sizes come from the body, not from the appendage that is on it -----------------------------

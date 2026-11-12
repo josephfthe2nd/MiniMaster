@@ -50,10 +50,20 @@ def test_the_load_is_the_length_and_the_thickness_over_the_neutral_tail():
     assert ca.appendage_load(A.Appendage("tail")) == pytest.approx(1.0)          # a legacy record: by its length
 
 
-def test_a_pair_of_tails_costs_more_than_one_and_a_switched_off_one_nothing():
+def test_a_tail_is_one_midline_tail_whatever_side_an_old_record_says_and_a_switched_off_one_costs_nothing():
+    """A tail has no side (``TailKind.allowed_sides``): ``new_spec`` refuses one with a hint, and a record written by
+    the first versions with ``side='both'`` (two tails in a T, from the same point of the sacrum) is built as ONE
+    midline tail, so it costs the pelvis one tail (it cost a pair)."""
     one = tail_sliders()
-    s, _, _ = ca.consequences([K.new_spec("tail", side="both")])
-    assert s[BUT] > one[BUT]
+    with pytest.raises(ValueError, match="midline"):
+        K.new_spec("tail", side="both")
+    old = K.new_spec("tail")
+    old.side = "both"
+    s, _, _ = ca.consequences([old])
+    assert s == pytest.approx(one)
+    two = K.new_spec("wing")                                    # a kind that has sides still pays for its pair
+    left = K.new_spec("wing", side="left")
+    assert ca.appendage_load(two) > ca.appendage_load(left)
     off = K.new_spec("tail")
     off.enabled = False
     assert ca.consequences([off])[0] == {}

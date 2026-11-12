@@ -7,6 +7,135 @@ Design context: [appendages_system_design.md](appendages_system_design.md), the 
 
 ![before (left pair of columns) and after (right pair): lower arms, upper arms, extra legs](images/limb_before_after.png)
 
+## Round 2b (what changed after the round-1 review and the S6 core)
+
+![lower arms before (HEAD c808d60) and after round 2b, real pipeline, level 2: front, 3/4, side, back 3/4](images/limb_r2b_before_after.png)
+
+**The tone band across the arm** (the user's close-up, `cmp2_arm.png`). It was the cut ring a third of the way down
+the upper arm, and it is geometry, not a material or a vertex-normal bug: with cavity AO off the band stays, and on
+the front meridian the shell's normals tilted from 0.03 (cage, below the ring) to 0.12-0.19 (flare, above it) within one
+row; the luminance stepped from 0.17 to 0.12. The flare put the whole swell to the dome (x1.2 over 0.9 units) above the
+ring: a jump of curvature. Three changes (`dome_root`):
+
+* **the swell starts on the cage's own arm**, `SWELL_BELOW` = one ring-to-joint distance below the ring (about 0.6 Lu: the
+  deltoid's V), and grows along a smootherstep (no slope, no curvature at either end) to the dome's equator; the flare
+  continues the same curve. The `slope` argument is ignored now;
+* **the flare's first rows continue each ring vertex's own meridian** (the chord from the cage vertex below it), blended
+  out over `HERMITE_REACH` = 0.45 of the flare;
+* **the seam band is relaxed**: `SEAM_ROUNDS` = 6 rounds of Taubin smoothing (no shrink) on the vertices within
+  `SEAM_BAND` = 0.45 ring radii of the ring (never the equator or the dome). A female body's ring had a 27-degree crease on
+  one edge of the cage polygon that the first two changes left.
+
+Worst ring dihedral on twelve bodies x three sites: 2.5-14.8 degrees (was up to 39.6); `RING_DIHEDRAL_MAX` is now 20 (was
+40). On the synthetic tube no meridian turns more than 1.5 degrees per row (3.9 with the swell confined to the flare).
+
+![the band: before, swell + Hermite only (female), and with the relaxed seam](images/limb_band_fix.png)
+
+**The root collar: tried, and NOT enabled by default** (`collar` parameter, 0 by default, 0..2). The task was to decide
+whether the dome rim or the collar (`collar.py`) carries the transition. Tried on renders, level 2, neutral and heavy:
+
+* the collar around the dome **seen as a boss** (axis along the skin normal through the pivot, `LimbModel.collar_axis`):
+  the dome bulges 0.01-0.02 units outside the collar's straight chord from the exit to the wall join (measured: the
+  bulge grows with the climb `height` squared, `H^2 / 8 r`), so the arm's flare pokes through the sheet near the wall:
+  red tabs along the join. Lowering the climb to 0.12-0.2 root radii and narrowing the open side (30-80 degrees from up)
+  leaves tabs where the arm leaves the dome (the hair-thin part of the collar against a wall that is not along its
+  generator); `facet_correction` and four axis tilts (0, 30, 50 degrees toward the arm) change nothing;
+* the collar **along the arm's own axis**: exact for the dome and flare (they are built round that axis), but it draws a
+  ring line where it meets the arm on the neutral body and breaks into flaps on the heavy body's folds.
+
+So **the junction and the dome carry the transition** (one mechanism): the dome is smaller and closer (1.0 R, pivot 0.3 R
+out of the skin: 1.1 and 0.4 before, a ball beside the ribs), the masses below are new, and the collar stays available as
+an experiment (`harvest:collar=1`; `test_the_root_collar_of_a_girdle_limb_is_opt_in`). A saved record without `collar`
+renders without one.
+
+![the collar tried on the dome: tabs (top), and along the arm: a ring line and flaps on the heavy body (bottom)](images/limb_collar_tried.png)
+
+**The masses** (`LimbModel._arm_masses`, `ARM_MASSES`, lower pair; legs and the fan pair as before):
+
+* a **pad** (radius 2.3 R, height 0.6 x the mass unit, centred 1.0 R above the skin point): the flank runs out onto the
+  top of the dome, as the trapezius slope runs into the deltoid (`limb_071`: dome 1.23 arm radii over the chord, fillet
+  radius 1.4); in the front view the arm now leaves a shoulder mass, not a ball beside the ribs;
+* the **anterior fold** (pectoral analogue, the front wall of the axilla: `limb_047`, `limb_069`): a ridge from 0.6 R in front
+  and 0.3 R below to 2.2 R in front and 0.9 R above, radius 1.0 R, height 0.26;
+* the **latissimus**: a WEDGE from the back of the axilla down and back toward the iliac crest (`limb_067` fig. 74, the lat
+  converging into the posterior axillary fold; `limb_068`: a sheet, not a ball), thick at the axilla (radius 1.0 R,
+  height 0.24, to 1.6 R behind and 1.0 R down) and thinning (0.8 R, 0.12, to 2.8 R behind and 2.0 R down). It replaces the
+  isotropic posterior mound (1.5 R, 0.3 R) that read as a pouch;
+* heights are in the **mass unit** `min(R, 0.47 x the trunk's half depth)` (a heavy muscular body's arm is fat, R = 0.83
+  against 0.53: masses in R alone made the shelf of the round-1 review; on it the unit is 11 % lower, on lean bodies it is R).
+
+**The tube's centreline follows the mesh** (`LimbModel.centreline`): the centroid of the posed mesh across the rest axis at
+each station. The dome is pinned and the arm turns over 0.45 Lu, so the straight line from the pivot to the posed elbow
+left the raised fan arm near the root (the S6 core's caveat: two interior stations cut to a 0.01 wire, and the join guard
+then applied the fan pair's girdle with its tube only on the thin, child and old bodies, `moved` 80 < 100). Now the join is
+34-45 degrees on ten bodies (68-78 without the junction) for the fan pair and 63-87 (105-120) for the lower pair, with no
+tube-only, mounds-only or dropped verdict. The radii are the radius law capped by the mesh (`fit_radii_to_mesh`: a 1.0 R
+dome is thinner than the law's 1.07 at the joint).
+
+**The Keep**: since the S6 core the junction protects foreign skin twice before the Keep (the tube is cut to its mesh; a
+spec moulds only its own part), so the old test's careless tube moved 0.0005 R either way. Measured: the Keep IS what
+holds the original arm against the lower pair's own masses (without it the real spec moves the original arm's skin by up
+to 0.14 R on the ten bodies), and what holds it when a spec opens both escape hatches (`conform=False, ownership=False`:
+0.18-0.2 R without, 0 with). The fan pair's original arm is held by `ownership` (0 without the Keep, 0.03-0.19 R without
+both). The extra legs' Keep is never load-bearing in the measured poses.
+
+**The range is measured on the body** (`clear_limits`, `Site.clear_end`): the end of the raise that swings the limb toward
+the original limb (the lower pair's abduction, the fan pair's adduction) is pulled in, 3 degrees at a time and never past
+the preset's pose, until the limb keeps 0.4 R from the original limb there at both swing extremes. Lower pair: 58 degrees
+on the lean bodies, 55 on the heavy one, 40 on the heavy muscular one (its arm hangs at 44 degrees: raise -16..-4 around the
+preset's -7; gap 0.30 R at the swing extremes: the swing range is not fitted; it was 0.03-0.05 R at 58). Fan pair: the lower end moves from 60 to 66-78 degrees (gap 0.40-0.61 R; it was
+0.02-0.10 R).
+
+**Cost**: a pair is built once per body and placement (cached, 8 entries: a lab edit that changes neither costs 2-3 ms), and
+on a symmetric body the right side is the left one reflected without building it (it was built and thrown away). Cold:
+80-280 ms a pair (440 ms for the fan pair on the heavy muscular body, where the clearance search takes eleven steps), at
+machine load 3; HEAD c808d60 measured 130-220 ms cold on the neutral body at the same load and had no cache. The junction
+(`apply_junctions` of a pair) is 70-115 ms.
+
+**A quad off the trunk** (a leg, a foot, the head) no longer builds nothing or an arm at head height: the girdle is
+snapped to the nearest height of the trunk where it can be (`_free_band`: an arm's between a radius above the hips and a
+third of the upper arm below the shoulder, a leg's between half and three radii above the hip joint).
+
+**The extra legs** are labelled low confidence in the preset ("they splay, they do not stand"); their rest pose is
+unchanged. The core's validity pass already keeps the gluteal cleft clean (0 new crossings at levels 0 and 1 on six
+bodies); the smallest quad of the heavy body keeps 0.17 of its area, on the medial underside of the root (10 of the 20
+most shrunk quads are inside the leg; the core's bound is 0.12).
+
+![lower arms after round 2b: neutral, female, heavy muscular, slim female, child; front, 3/4, side, back 3/4](images/limb_r2b_bodies.png)
+
+**References looked at this round** (opened as images, not only the digest): `limb_067` (Duval fig. 74: the latissimus
+converging into the posterior axillary fold, the serratus slips and the oblique on the flank: the lat wedge and its
+direction down and back), `limb_071` (the swimmer: the trapezius slope running into the deltoid dome with a 1.4-radius
+fillet: the pad above the dome), `limb_031` (the Shiva bronze from behind: each shoulder one continuous rounded mound),
+`limb_022` (the steer's extra forelimb: a rounded skin-covered lump merging into the shoulder with no edge: what the
+transition should read as, and does not yet in the 3/4 view). The `limb` and the `TAKEAWAYS` digests for the numbers
+(dome 1.23 arm radii, fillet 1.4, root flare 1.26 over the first quarter, one shallow axillary crease).
+
+![the references beside the render of the same view: limb_071, limb_067, limb_022](images/limb_r2b_refs.png)
+
+Side by side, honestly: against `limb_071` the back of the second shoulder is a mass the arm leaves from, but the top of
+the arm still shows a light rim where it meets the trunk instead of a dome flowing out of the slope; against `limb_022`
+the front 3/4 view still shows the end of a sleeve on the flank, where the steer's extra limb is a lump the skin runs
+over without an edge. The tube junction's per-pose cost is 2-3.5 ms (`Placed.junction` with a new pose: it re-poses the
+mesh for the centreline and fits the radii); `harvest:collar=1` on the fan pair and the legs builds (no error) and shows
+the same tabs as on the lower pair.
+
+**What still looks wrong** (judged on the renders above): in the front three-quarter view the top of the arm still reads as
+a rounded sleeve end lying against the flank (the pad softens the front view, not the 3/4); on the heavy muscular body the
+arm leaves the back under a fold with a crease line across it; the fan pair's root shows a round edge where the raised arm
+leaves its dome (worst on the heavy body); the extra legs splay and hover. The layers are still derived from the skin (the
+muscle is the skin's inscribed radius less the skin thickness), not the other way round: the skin is the character's own
+arm, so this is stated, not fixed.
+
+**Disclosure: how a saved document renders now** (no `.mmchar` change, no migration: the records store the preset, the
+scale, the controls; everything below is derived): the lower pair's dome is 1.0 R and 0.3 R out (was 1.1 and 0.4), the arm
+swells from 0.6 Lu up, the trunk masses are the pad, the fold and the lat wedge (the flank above the second shoulder is
+raised up to 0.6 x the mass unit), the junction's tube follows the posed mesh (every girdle pair's skin moulds differently,
+most visibly the fan pair's), the range is clamped per body (a stored `raise_` above the fitted limit builds with the
+existing clamp warning: on the heavy muscular body anything above -4, the preset's own -7 builds), and `collar` defaults to 0 (nothing changes unless a
+record sets it). The anatomy coupling (`CONSEQUENCES["harvest"]`, round 1: the trunk 4.5-7 % wider at the girdle) is
+unchanged in this round and still applies to old documents silently: disclosed here, not versioned.
+
 ## What was wrong
 
 A harvested limb was the character's own arm or leg cut out with a radius around its bones, moved so that its
@@ -76,8 +205,8 @@ vertices evenly along itself (validity-checked: no face of the cut turns over or
 tiny quads where its edge loops converge (the front of the armpit) and a plane cut of the triangles has
 near-duplicate points; both made slivers and a visible seam.
 
-`dome_root` continues the ring with rings that **swell 15 percent toward the joint** (a cubic that starts with
-the slope the limb itself has at the ring, measured on the body, and ends horizontal: no step) and then close
+`dome_root` continues the ring with rings that **swell toward the joint** (round 2b: the swell starts on the cage's
+own arm below the ring, see above; the first version's cubic started at the ring with the limb's own slope) and then close
 over the joint as a **hemisphere of radius `dome R`** that ends in one pole. The rings are the low-pass shape
 (Fourier series, four harmonics) of the ring at even angles, so the dome is smooth even though the cage is a
 polygon; the ring's own ellipse (longer front to back) is kept. The joint is moved onto the ring's own axis
@@ -196,11 +325,11 @@ units above the ground and a 0.7 leg is 5.6 units long), so they cannot be suppo
 | --- | --- |
 | time to build a pair (cut, dome, deep mass) | 0.05 to 0.15 s per side |
 | second limb buried (print report, medium) | arms 31 percent, legs 25 to 28 (0 blocking, 0 warnings; thinnest 5th percentile 0.5 / 0.6 mm) |
-| ring seam, median / worst dihedral | 1.5 to 4.5 / <= 38.6 degrees (limit 40) |
+| ring seam, worst dihedral (round 2b, 12 bodies x 3 sites) | 2.5 to 14.8 degrees (limit 20; was <= 38.6, limit 40) |
 | keep: displacement within 1.3 R of the original limb | 0.000 R |
 | largest cage displacement | 0.73 to 0.80 R |
 | clearance to the original arm at rest (35 degrees) | 1.06 to 2.37 R |
-| pivot outside the skin | 0.4 R / 0.1 R, exact |
+| pivot outside the skin | 0.3 R (lower arms, was 0.4) / 0.1 R (legs), exact |
 
 ## References used
 

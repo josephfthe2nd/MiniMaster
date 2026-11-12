@@ -403,7 +403,8 @@ def test_the_horn_shapes_have_their_own_defaults_through_when():
         values, notes = horn.clean({"shape": shape, "length": 99.0})
         assert values["length"] == 12.0 and any("outside" in n for n in notes)
     assert len(seen) == 5                                         # five different horns
-    assert horn.defaults(shape="spiral")["turns"] == 2.25 and horn.defaults()["turns"] == 0.0
+    # (S6b: the spiral is a thicker, shorter corkscrew of 1.5 turns, hornrig.SHAPES)
+    assert horn.defaults(shape="spiral")["turns"] == 1.5 and horn.defaults()["turns"] == 0.0
     bad, notes = horn.clean({"shape": "unicorn"})
     assert bad["shape"] == "curved" and any("one of" in n for n in notes)
 
@@ -742,10 +743,13 @@ def test_the_tail_controls_re_evaluate_the_loft_where_the_tail_is_placed(world):
     assert tip(p.mesh({"sway": -40.0}))[0] < base_tip[0] - 0.3
     assert tip(p.mesh({"droop": 0.5}))[1] < base_tip[1] - 0.3          # droop pulls the end down
     assert tip(p.mesh({"curl": 0.5}))[1] > base_tip[1] + 0.1           # curl rolls it up
-    # the base stays where it is bound: only the end moves
+    # the base stays where it is bound: only the end moves (the lift bends the chain about the sacrococcygeal
+    # joint, which is inside the body, 1.5 R below the skin point: the buried end moves by less than 0.2 R)
     n_ring = p.params["ring_verts"]
     base_ring = lambda m: m.vertices[:n_ring].mean(axis=0)              # noqa: E731
-    assert np.allclose(base_ring(p.mesh({"lift": 60.0, "sway": -60.0})), base_ring(rest), atol=1e-9)
+    R = p.params["base_radius"] * p.model.scale
+    assert np.linalg.norm(base_ring(p.mesh({"lift": 60.0, "sway": -60.0})) - base_ring(rest)) < 0.2 * R
+    assert np.allclose(base_ring(p.mesh({"sway": -60.0})), base_ring(rest), atol=1e-9)        # sway: the base does not move
     # the controls come with the record
     spec.controls = {"lift": 30.0}
     moved = K.instantiate_all([spec], base, v0)[0]

@@ -139,19 +139,48 @@ def test_the_dome_closes_the_cut_ring_into_a_flared_root_that_ends_in_a_hemisphe
     assert rr[band].max() == pytest.approx(info["r_dome"], rel=0.03) and rr[band].min() >= 0.97 * rim_r
 
 
-def test_the_dome_continues_the_taper_the_limb_has_at_its_ring_instead_of_a_step():
+def _meridian_turns(V, info, n, rows_below=5, rows_above=3):
+    """The angle (degrees) between consecutive chords of every meridian of the synthetic tube, from
+    ``rows_below`` cage rows below the ring over the ring into ``rows_above`` rows of the flare:
+    ``(n, rows_below + rows_above)``."""
+    out = []
+    for k in range(n):
+        chain = ([V[k + i * n] for i in range(rows_below, 0, -1)] + [V[k]]
+                 + [V[info["new"][k + i * n]] for i in range(rows_above)])
+        d = np.diff(np.array(chain), axis=0)
+        d /= np.linalg.norm(d, axis=1)[:, None]
+        out.append(np.degrees(np.arccos(np.clip((d[1:] * d[:-1]).sum(1), -1.0, 1.0))))
+    return np.array(out)
+
+
+def test_the_root_swell_starts_on_the_cage_arm_so_the_ring_is_no_crease_of_curvature(monkeypatch):
+    """Round 2b: the cut ring showed as a tone band a third of the way down the arm (cmp2_arm.png). The
+    flare started at the ring with the limb's own taper and put the whole swell (x1.2 to the dome) into
+    the next 0.9 units: on this synthetic tube the meridian turned 2.1-2.6 degrees per row from the ring
+    on (the first version's cubic; 3.9 with the swell curve confined to the flare, ``swell_below=0``) and
+    not at all below it, a jump of curvature the renderer shades as a band. The swell now starts a
+    ring-to-joint distance below the ring, on the cage's own arm (the deltoid swells from its V half way
+    down the humerus): the turning is spread over the rows below the ring (1.5 degrees at most)."""
     cut = _tube_cut()
     up = np.array([0.0, -1.0, 0.0])
-    V0, T0, i0 = G.dome_root(cut, (0.0, 0.0, 0.0), up, R=0.5, dome=1.1, slope=0.0)
-    V1, T1, i1 = G.dome_root(cut, (0.0, 0.0, 0.0), up, R=0.5, dome=1.1, slope=0.6)
-    ring = np.linalg.norm(cut.verts[cut.ring][:, [0, 2]], axis=1).mean()
-
-    def first_ring_radius(V, info):
-        first = V[info["new"][:len(cut.ring)]]
-        return float(np.linalg.norm(first[:, [0, 2]], axis=1).mean())
-
-    # the first ring of the flare swells by more where the limb itself was swelling toward the joint
-    assert first_ring_radius(V1, i1) > first_ring_radius(V0, i0) > ring - 1e-6
+    n = len(cut.ring)
+    V, T, info = G.dome_root(cut, (0.0, 0.0, 0.0), up, R=0.5, dome=1.1)
+    with monkeypatch.context() as mp:              # the baseline: the swell confined to the flare, no relaxed seam
+        mp.setattr(G, "SEAM_ROUNDS", 0)
+        V0, T0, i0 = G.dome_root(cut, (0.0, 0.0, 0.0), up, R=0.5, dome=1.1, swell_below=0.0)
+    new, old = _meridian_turns(V, info, n), _meridian_turns(V0, i0, n)
+    # before: nothing below the ring, then 2+ degrees per row from the ring on
+    assert old[:, :4].max() < 1e-6 and old[:, 4:].max() > 2.0
+    # now: the cage rows below the ring take part, and the worst row turns less than 0.6 of the old worst
+    assert new[:, 1:4].min() > 0.3
+    assert new.max() < 0.6 * old.max()
+    # the cage below the swell's start is untouched, the cage in it is wider, the dome is the dome
+    r = np.linalg.norm(V[: len(cut.verts)][:, [0, 2]], axis=1)
+    r0 = np.linalg.norm(cut.verts[:, [0, 2]], axis=1)
+    depth = -0.8 - cut.verts[:, 1]                                # below the ring
+    assert np.allclose(r[depth > info["d_total"] * G.SWELL_BELOW + 1e-9], r0[depth > info["d_total"] * G.SWELL_BELOW + 1e-9])
+    assert (r[depth < 0.5 * info["d_total"]] > r0[depth < 0.5 * info["d_total"]] + 1e-4).all()
+    assert info["r_dome"] == pytest.approx(i0["r_dome"])
 
 
 def test_a_girdle_limbs_range_of_motion_is_its_own_not_the_free_limbs():
@@ -329,7 +358,11 @@ def test_the_limb_is_one_closed_shell_without_a_cut_ring_on_every_body(world, bo
                 if len(fs) == 2 and a in ring and c in ring:
                     cosv = float(np.clip(n[fs[0]] @ n[fs[1]], -1, 1))
                     worst = max(worst, math.degrees(math.acos(cosv)))
-            assert worst < G.RING_DIHEDRAL_MAX, (name, p.name, worst)
+            assert worst < 20.0 and worst < G.RING_DIHEDRAL_MAX, (name, p.name, worst)
+            # round 2b: the gate is 20 degrees (was 40) and the lower pair meets it at the first plane on all ten
+            # bodies (the relaxed seam band: without it a female body's first plane gave 27 and the next was tried)
+            if site == "lower_arms":
+                assert b.info["plane_t"] == G.CUT_T, (name, b.info["plane_t"])
 
 
 @assets
@@ -432,9 +465,17 @@ def test_the_junction_moulds_the_skin_around_the_root_and_never_touches_the_orig
 @assets
 @pytest.mark.parametrize("site", ALL_SITES)
 def test_a_tube_beside_the_original_limb_leaves_its_skin_alone_with_the_keep_and_takes_it_without(world, bodies, site):
-    """Held 0.4 R from the original limb (a limb raised into it, or a spec built carelessly), the fillet of
-    the tube is 1 R wide and takes the original limb's skin with it (the generic junction's armpit web and
-    shoulder ridge); the Keep spheres along the original limb hold it exactly."""
+    """A tube held 0.1 R off the original limb's skin (1.1 R from its bone: a limb raised into it, or a spec
+    built carelessly) takes that skin with it, the generic junction's armpit web and shoulder ridge; the Keep
+    spheres along the original limb hold it exactly.
+
+    Round 2b: since the S6 core the junction protects foreign skin twice before the Keep is reached: the tube
+    is cut down to the limb's own mesh (``conform``: this tube lies outside the mesh and is cut to nothing)
+    and a spec only moulds the skin of the part it belongs to (``ownership``: the trunk, not the arm). The
+    test used to rely on neither and its bare tube moved 0.0005 R. So it now checks the layering: with the
+    default switches the careless tube moves nothing either way; with both escape hatches open (a kind may
+    open them, ``JunctionSpec.conform`` / ``ownership``) it moves the original skin by 0.18-0.2 R without the
+    Keep and not at all with it."""
     base, _, _ = world
     for name in ("neutral", "heavy"):
         v = bodies[name]
@@ -446,14 +487,42 @@ def test_a_tube_beside_the_original_limb_leaves_its_skin_alone_with_the_keep_and
         near = _chain_distance(bv, chain) < 1.3 * g.R
         ax = (chain[1] - chain[0]) / np.linalg.norm(chain[1] - chain[0])
         near &= ((bv - chain[0]) @ ax) > 0.55 * g.Lu
-        beside = tuple(tuple(chain[0] + t * (chain[1] - chain[0]) + np.array([0.0, 0.0, 1.9 * g.R]))
+        beside = tuple(tuple(chain[0] + t * (chain[1] - chain[0]) + np.array([0.0, 0.0, 1.1 * g.R]))
                        for t in (0.6, 0.75, 0.9))
         carelessly = spec.with_(points=beside, radii=tuple(spec.radii[:3]), mounds=())
-        held, _ = base.body_cage(J.apply_junctions(base, v, [carelessly]))
-        bare, _ = base.body_cage(J.apply_junctions(base, v, [carelessly.with_(keep=())]))
         assert near.sum() > 50
+        for guarded in (carelessly, carelessly.with_(keep=())):          # the core's guards alone hold it
+            moved, _ = base.body_cage(J.apply_junctions(base, v, [guarded]))
+            assert np.linalg.norm(moved - bv, axis=1)[near].max() < 0.02 * g.R, (name, site)
+        opened = carelessly.with_(conform=False, ownership=False)
+        held, _ = base.body_cage(J.apply_junctions(base, v, [opened]))
+        bare, _ = base.body_cage(J.apply_junctions(base, v, [opened.with_(keep=())]))
         assert np.linalg.norm(held - bv, axis=1)[near].max() < 0.02 * g.R, (name, site)
         assert np.linalg.norm(bare - bv, axis=1)[near].max() > 0.05 * g.R, (name, site)
+
+
+@assets
+def test_the_keep_is_what_holds_the_original_arm_against_the_lower_girdles_own_masses(world, bodies):
+    """Round 2b: the lower pair's masses (the pad over the dome reaches 3.3 R) lie on the flank right beside
+    the original arm's elbow and forearm, which are trunk-side skin for nothing but the Keep: without it the
+    real spec moves the original arm's skin by up to 0.14 R (the worst of the ten bodies); with it, not at
+    all, in the preset's pose and at both ends of its raise."""
+    base, _, _ = world
+    worst = 0.0
+    for name, v in bodies.items():
+        p = _placed(world, "harvest:preset=lower_arms", v)[2][0]
+        g = p.limb.girdle.girdle
+        bv, _ = base.body_cage(v)
+        near = _chain_distance(bv, _original(base, v, g.limb)) < 1.3 * g.R
+        lo, hi = p.limb.control_range("raise_", p.controls)
+        for ctl in (None, {"raise_": lo}, {"raise_": hi}):
+            spec = p.junction(ctl)
+            held, _ = base.body_cage(J.apply_junctions(base, v, [spec]))
+            assert np.linalg.norm(held - bv, axis=1)[near].max() < 0.02 * g.R, (name, ctl)
+            if ctl is None:
+                bare, _ = base.body_cage(J.apply_junctions(base, v, [spec.with_(keep=())]))
+                worst = max(worst, float(np.linalg.norm(bare - bv, axis=1)[near].max() / g.R))
+    assert worst > 0.1, worst
 
 
 @assets
@@ -466,7 +535,11 @@ def test_the_muscle_masses_lift_the_trunks_skin_over_the_girdle(world, site):
     spec = p.junction()
     g = p.limb.girdle.girdle
     R = g.R * g.scale
-    assert len(spec.mounds) == 3 and all(m.height > 0.15 * R for m in spec.mounds)
+    if g.limb == "arm":           # round 2b: pad, anterior fold and a two-piece latissimus wedge (thick, thinning)
+        assert len(spec.mounds) == 4 and all(m.height > 0.15 * R for m in spec.mounds[:3])
+        assert spec.mounds[3].height < 0.6 * spec.mounds[2].height and spec.mounds[3].radius < spec.mounds[2].radius
+    else:
+        assert len(spec.mounds) == 3 and all(m.height > 0.15 * R for m in spec.mounds)
     bv, _ = base.body_cage(v0)
     with_m, _ = base.body_cage(J.apply_junctions(base, v0, [spec]))
     without, _ = base.body_cage(J.apply_junctions(base, v0, [spec.with_(mounds=())]))
@@ -562,7 +635,12 @@ def test_posed_at_the_limits_the_limb_stays_watertight_with_its_root_where_it_wa
             g = lim.girdle
             R = g.girdle.R * g.girdle.scale
             pv = g.joints[0]
-            near = np.linalg.norm(lim.mesh.vertices[:g.info["n_limb_verts"]] - pv, axis=1) < 1.0 * R
+            # the dome: within 1 R of the pivot and on its side of the equator (round 2b: a 1.0 R dome and the swell
+            # put flare vertices, which the rig turns, within 1 R of the pivot just past the equator)
+            V0 = lim.mesh.vertices[:g.info["n_limb_verts"]]
+            u = (g.joints[1] - pv) / np.linalg.norm(g.joints[1] - pv)
+            s_eq = float(((V0[g.info["equator"]] - pv) @ u).max())
+            near = (np.linalg.norm(V0 - pv, axis=1) < 1.0 * R) & (((V0 - pv) @ u) <= s_eq + 1e-9)
             moved = np.linalg.norm(posed.vertices[:g.info["n_limb_verts"]] - lim.mesh.vertices[:g.info["n_limb_verts"]], axis=1)
             assert moved[near].max() < 0.02 * R, (name, val)
     assert lim.control_range("raise_", {})[1] + lim.geometry.rest_abduction == pytest.approx(
@@ -726,3 +804,159 @@ def test_the_girdle_limbs_print_clean_and_stay_one_connected_figure(world, text,
     assert "printability  OK  (0 blocking" in printed
     assert "watertight   True" in printed
     assert out.stat().st_size > 10000
+
+
+@assets
+@pytest.mark.parametrize("site", SITES)
+def test_a_quad_off_the_trunk_snaps_the_girdle_to_the_trunk_instead_of_building_nothing(world, site):
+    """Round 2b (round-1 review: on a sample of 45 quads every quad on a leg or a foot built NOTHING, "no
+    torso section at y=-7.9", and a quad on the head built an arm at head height). A quad the person chose
+    off the trunk is snapped to the nearest height of the trunk where that girdle can be."""
+    base, lib, v0 = world
+    cv, cq = base.body_cage(v0)
+    cent = cv[cq].mean(axis=1)
+    left = cent[:, 0] > 0.3
+    foot = int(np.nonzero(left)[0][np.argmin(cent[left, 1])])
+    head = int(np.nonzero(left)[0][np.argmax(cent[left, 1])])
+    ref = _placed(world, f"harvest:preset={site},side=left")[2][0]
+    g = ref.limb.girdle.girdle
+    hip = A.joint_position(base, "l-upper-leg", v0)
+    for face in (foot, head):
+        spec = K.new_spec("harvest", preset=site, side="left", base=base, face=face)
+        p = K.instantiate_all([spec], base, v0)[0]
+        assert p.model is not None
+        y = p.model.girdle.y
+        if g.limb == "leg":
+            assert hip[1] + 0.5 * g.R - 1e-9 <= y <= hip[1] + 3.0 * g.R + 1e-9, (face, y)
+        else:
+            assert hip[1] + 1.0 * g.R - 1e-9 <= y <= g.joints[0][1] - 0.33 * g.Lu + 1e-9, (face, y)
+
+
+@assets
+def test_the_raise_limit_is_measured_on_the_body_so_a_heavy_muscular_pair_keeps_clear_of_the_original_arm(world):
+    """Round 2b (round-1 review: a heavy muscular male, weight 1 and muscle 1, raised to the lower pair's fixed
+    58 degrees came within 0.03-0.05 R of the original arm, one lump in a print; the old test used weight 1
+    alone). The end of the raise is pulled in on the body the pair is built on until the limb keeps 0.4 R
+    from the original limb there, at both swing extremes, but never past the preset's own pose plus a step; a
+    body with room keeps the site's 58 degrees. On the heavy muscular body the limit comes down to 40 degrees
+    and the gap there is 0.30 R at the swing's extremes (the swing range is not fitted: honest limit)."""
+    base, lib, _ = world
+    out = {}
+    for name, kw in (("neutral", dict(gender=1.0, muscle=0.55)), ("heavy_muscular", dict(gender=1.0, weight=1.0, muscle=1.0))):
+        v = lib.apply(base.verts, mh.macro_weights(**kw))
+        p = _placed(world, "harvest:preset=lower_arms", v)[2][0]
+        lo, hi = p.limb.control_range("raise_", {})
+        b = p.model.build
+        skin = G._original_skin(base.body_cage(v)[0], b)
+        n_l = b.info["n_limb_verts"]
+        gaps = [G._gap(p.limb.pose({"raise_": hi, "swing": s}).vertices[:n_l], skin) / p.model.R
+                for s in p.limb.control_range("swing", {"raise_": hi})]
+        out[name] = (hi + p.limb.geometry.rest_abduction, min(gaps))
+    assert out["neutral"][0] == pytest.approx(58.0, abs=1e-6) and out["neutral"][1] >= 0.4
+    assert out["heavy_muscular"][0] < 50.0 and out["heavy_muscular"][1] >= 0.25, out
+
+
+@assets
+@pytest.mark.parametrize("site", ALL_SITES)
+def test_the_junction_centreline_runs_inside_the_posed_limb_not_on_the_straight_line_of_its_joints(world, bodies, site):
+    """Round 2b (the S6 core's caveat: the fan pair's centreline was not on its mesh's axis near the root and the
+    cut turned two interior stations into a 0.01 wire; the join guard then left the thin bodies' girdle with its
+    tube only). The dome is pinned and the arm turns over 0.45 of the bone, so the straight line from the pivot
+    to the posed elbow leaves the flare as soon as the arm is raised; the centreline is now the centroid of the
+    posed mesh across the rest axis. Every station lies inside the posed limb, and the junction keeps the
+    girdle whole (no tube-only or mounds-only verdict) on every body."""
+    from minimaster.character import junction_checks as JC
+    base, _, _ = world
+    for name in ("neutral", "thin", "child", "old"):
+        v = bodies[name]
+        placed = _placed(world, f"harvest:preset={site}", v)[2]
+        p = placed[0]
+        n_l = p.model.build.info["n_limb_verts"]
+        mesh = p.mesh()
+        spec = p.junction()
+        pts = np.asarray(spec.points)
+        inside = JC.points_in_mesh(pts[1:], mesh.vertices[:], mesh.faces)
+        assert inside.all(), (name, inside)
+        info = {}
+        J.apply_junctions(base, v, [q.junction() for q in placed], info)
+        assert not info["tube_only"] and not info["mounds_only"] and not info["dropped"], (name, info)
+    if site == "upper_arms":          # the first version's straight line leaves the raised fan arm
+        pv, el, _ = p.model.posed_joints()
+        straight = np.array([pv + t * (el - pv) for t in (0.15, 0.3, 0.5)])
+        assert not JC.points_in_mesh(straight, mesh.vertices, mesh.faces).all()
+
+
+@assets
+def test_the_root_collar_of_a_girdle_limb_is_opt_in(world):
+    """Round 2b: the collar (collar.py) was tried on the girdle dome and leaves tabs where the arm leaves the dome
+    and a ring where it meets the arm (docs/anatomy_limb.md, images); the skin junction carries the transition.
+    The collar is a parameter, 0 by default: no profile (no collar, no shell, a saved record renders as before);
+    ``collar=1`` gives one (the dome seen as a boss: the axis along the skin normal through the pivot), and a
+    first-version limb never has one."""
+    base, _, v0 = world
+    p = _placed(world, "harvest:preset=lower_arms")[2][0]
+    assert p.params["collar"] == 0.0 and p.kind.collar_profile(p) is None
+    q = _placed(world, "harvest:preset=lower_arms,collar=1")[2][0]
+    prof = q.kind.collar_profile(q)
+    assert prof is not None and prof.strength == 1.0
+    pts, radii = q.kind.collar_axis(q)
+    n = q.model.girdle.normal
+    d = np.asarray(pts[-1]) - np.asarray(pts[0])
+    assert abs(float(d @ n) / float(np.linalg.norm(d))) > 0.999          # along the skin normal (left side)
+    lspec = K.new_spec("harvest", preset="shoulder_socket", side="left", base=base)
+    lspec.params["collar"] = 1.0
+    legacy = K.instantiate_all([lspec], base, v0)[0]
+    assert legacy.kind.collar_profile(legacy) is None
+
+
+@assets
+def test_the_trunk_masses_are_capped_on_a_deep_trunk_and_a_pair_is_built_once_per_body(world, bodies):
+    """Round 2b. (1) The masses' heights are in R, capped at half the trunk's half depth: a heavy body's arm is
+    fat (R 0.83 against 0.53) and masses in R alone made a shelf with a lower ledge on its back (round-1
+    review); a lean body keeps R. (2) A pair is built once per body and placement (a lab edit that changes
+    neither costs nothing: cached), and on a symmetric body the right side is the left one reflected."""
+    base, lib, _ = world
+    heavy_m = lib.apply(base.verts, mh.macro_weights(gender=1.0, weight=1.0, muscle=1.0))
+    p = _placed(world, "harvest:preset=lower_arms", heavy_m)[2][0]
+    assert p.model.mass_unit() < 0.92 * p.model.R
+    q = _placed(world, "harvest:preset=lower_arms", bodies["thin"])[2][0]
+    assert q.model.mass_unit() == pytest.approx(q.model.R)
+    a = _placed(world, "harvest:preset=lower_arms", bodies["neutral"])[2]
+    b = _placed(world, "harvest:preset=lower_arms", bodies["neutral"])[2]
+    assert a[0].limb is b[0].limb and a[1].limb is b[1].limb
+    c = _placed(world, "harvest:preset=lower_arms", bodies["tall"])[2]
+    assert c[0].limb is not a[0].limb
+    assert a[1].model.build.info is a[0].model.build.info          # the reflection of the left build
+
+
+@assets
+def test_on_a_symmetric_body_the_right_limb_is_not_built_at_all(world, bodies, monkeypatch):
+    """Round 2b: the right limb of a pair on a symmetric body (every macro body) is the left one reflected, without
+    being cut and domed first (the first version built it and threw it away when it came out the mirror image);
+    on an asymmetric body both are built (``test_an_asymmetric_body_builds_each_side_from_its_own_limb``)."""
+    calls = []
+    real = G.build_side
+
+    def counting(*a, **k):
+        calls.append(a[3] if len(a) > 3 else k.get("side"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(G, "build_side", counting)
+    monkeypatch.setattr(G, "_BUILD_CACHE", None)
+    left, right = _placed(world, "harvest:preset=lower_arms", bodies["short"])[2]
+    assert calls == ["l"]
+    assert np.allclose(right.mesh().vertices, left.mesh().vertices * [-1, 1, 1], atol=1e-12)
+
+
+@assets
+def test_the_flare_starts_along_the_cages_own_meridians(world):
+    """Round 2b: the flare's first rows continue each ring vertex along the chord from the cage vertex below it
+    (``HERMITE_REACH``) before they blend into the smooth flare: on a heavy muscular body the worst angle between
+    the faces on the ring is 8 degrees with it and 13 without (the relaxed seam band on top of either)."""
+    base, lib, _ = world
+    v = lib.apply(base.verts, mh.macro_weights(weight=1.0, gender=1.0, muscle=1.0))
+    b = G.build_side(base, v, G.SITES["lower_arms"], "l")
+    V = b.mesh.vertices[:b.info["n_limb_verts"]]
+    T = b.mesh.faces[:b.info["limb_faces"]]
+    assert b.info["plane_t"] == G.CUT_T
+    assert G.ring_dihedral(V, T, b.info["ring"]) < 11.0

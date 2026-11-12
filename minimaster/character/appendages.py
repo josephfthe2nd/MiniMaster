@@ -771,6 +771,25 @@ WING_ROOT = (1.20, 0.40, -0.60)
 # a heavy one and its orientation stays independent of the body's sliders.
 WING_PLACEMENT = {"feathered": {"root_point": (0.60, -3.50, -0.27), "root_relative": True}}
 
+# ---- the second version of the wing's placement (kinds.WingKind, docs/anatomy_wing.md section 1) ----
+# The first version (WING_ANCHOR, WING_OFFSET, WING_UP_HINT above, kept for ``back_wings()`` and for
+# records pinned to it) put the shoulder joint 0.9 units inside the torso under the posterolateral
+# corner of the back and aimed the humerus 30-45 degrees off the skin, so the arm left through the
+# human deltoid (on a child and a woman beyond the human shoulder joint's own x). The second puts the
+# joint where a winged body has it: ON THE RIBS UNDER THE SHOULDER BLADE, as a landmark of the body
+# (not a quad): x a share of the human shoulder joint's x, y a share of the upper trunk's height above
+# spine-1 (the scapula spans about 0 .. 0.9 of it), the sink a share of the body size s
+# (wingroot.Landmarks.s). The span axis is tilted 5 degrees further back, so the humerus leaves the
+# back over the upper scapula (x 0.72-0.76 of the shoulder, clear of the human arm) at 55-64 degrees
+# to the plain skin (the heavy body 39-46), and the shoulder anatomy's boss steepens that to about 70.
+# Found by a ray-cast search over socket x 0.40-0.56, y 0.25-0.55, depth 0.40-0.70 s and 28 hints on six
+# bodies (scratchpad grid1.py); frozen as version 2: a change is a version 3.
+WING_SOCKET_X = 0.48          # the joint's x / the human shoulder joint's x (the medial border is at 0.37-0.53)
+WING_SOCKET_Y = 0.50          # (the joint's y - spine-1's y) / (neck's y - spine-1's y): the level of the scapular spine
+WING_SOCKET_DEPTH = 0.50      # how far the joint lies under the skin of the back, in s (0.59 units on the neutral man)
+WING_UP_HINT_V2 = (1.0, 1.4, -0.6)
+WING_OFFSET_V2 = -WING_SOCKET_DEPTH     # what a version-2 record stores as its sink: in units of s
+
 
 def back_wings(style: str = "membrane", scale: float = 1.0,
                mirror: bool = True, **params) -> "Appendage":

@@ -72,8 +72,8 @@ def test_wing_defaults_are_what_the_builders_really_use(style):
     if style == "dragon":
         real.update({k: v for k, v in W.DRAGON.items() if k in real})
     for key, value in values.items():
-        if key in ("style", "fillet"):      # the style is not a builder argument; the fillet is
-            continue                        # how the BODY'S SKIN meets the wing (junction.py)
+        if key in ("style", "fillet", "muscle", "collar"):   # the style is not a builder argument; the fillet,
+            continue                        # the muscle (kinds.wing_sleeve) and the collar are how the BODY meets the wing
         assert key in real, f"{key} is not a {style} builder argument"
         assert value == pytest.approx(real[key]), (style, key)
 
@@ -94,14 +94,25 @@ def test_loft_defaults_are_what_the_builders_really_use(kind_id, fn):
     # skull and the skin boss to the legacy builder's parameters, and its numbers are the research's
     # (a 1.6 long horn of base radius 0.17 on the neutral head, radius and length scale with the head),
     # not the first version's 2.2 / 0.42: the legacy builder keeps its own defaults, test_limbs.py)
-    registry_only = {"tail": {"fillet", "collar", "vertebrae", "crest"}, "horn": {"shape", "fillet", "rings", "tilt", "boss"}}[kind_id]
+    registry_only = {"tail": {"fillet", "collar", "vertebrae", "crest"}, "horn": {"shape", "fillet", "rings", "tilt", "boss", "collar"}}[kind_id]
     builder_only = {"tail": {"lift", "sway", "flare_length"}, "horn": {"flare_length"}}[kind_id]
     assert set(kind.defaults()) - registry_only == set(real) - builder_only
     anatomical = {"horn": {"length", "base_radius", "segments", "curve", "twist", "turns"}}.get(kind_id, set())
     for key, value in kind.defaults().items():
         if key in real and key not in {"tip_radius", "ring_verts", "flare"} | anatomical:
             assert value == pytest.approx(real[key]), key
-    assert kind.defaults()["ring_verts"] == 16 and real["ring_verts"] in (8, 10)
+    # (the tail's ring is 24 since round 2b: its root collar's join with a 16-gon wall showed its facets;
+    # the horn's sheath is 24 around: its root collar meets the sheath tangentially and a 16-gon's corners poked
+    # through it; S6b horn)
+    assert kind.defaults()["ring_verts"] == {"tail": 24, "horn": 24}[kind_id] and real["ring_verts"] in (8, 10)
+    if kind_id == "horn":
+        # the anatomical keys are not exempt from a check: they are what really builds the registry horn, the
+        # curved row of hornrig.SHAPES (HornModel), not the legacy builder's
+        from minimaster.character import hornrig as HR
+        row = HR.SHAPES["curved"]
+        for key in anatomical:
+            assert kind.defaults()[key] == pytest.approx(row[key]), key
+        assert kind.defaults()["tip_radius"] == pytest.approx(row["tip"])
     assert real["tip_radius"] is None and kind.defaults()["tip_radius"] > 0     # blunt by default
 
 
@@ -192,7 +203,12 @@ def test_new_spec_places_by_preset_and_picks_ids():
     assert (a.id, a.side, a.params) == ("wing-1", "both", {})
     assert a.placement["anchor"] == {"face": K.PRESET_FACES["shoulder_blades"]}
     assert a.placement["preset"] == "shoulder_blades"
-    assert a.placement["roll"] == A.WING_ROLL and a.placement["offset"] == A.WING_OFFSET
+    # a new wing record is the second version of the placement (kinds.WingKind.resolve_placement): the joint
+    # on the ribs under the shoulder blade, its sink in units of the body's size, stamped so that it reads as
+    # that version on every later build
+    assert a.placement["roll"] == A.WING_ROLL and a.placement["offset"] == A.WING_OFFSET_V2
+    assert a.placement["version"] == K.WING_PLACEMENT_VERSION == 2
+    assert a.placement["up_hint"] == list(A.WING_UP_HINT_V2)
     b = K.new_spec("wing", [a], side="left", params={"style": "feathered", "span": 15})
     assert b.id == "wing-2" and b.side == "left" and b.params == {"style": "feathered", "span": 15.0}
     t = K.new_spec("tail", [a, b])
@@ -568,7 +584,10 @@ def test_the_membrane_root_follows_the_waist(world):
         rel.append(np.linalg.norm(sk.joints["root"] - sk.joints["shoulder"]) / torso)
         sk0 = app.build_rigs(base, v)[0][1].rig.skeleton
         hybrid.append(np.linalg.norm(sk0.joints["root"] - sk0.joints["shoulder"]) / torso)
-    assert 0.65 < min(rel) and max(rel) < 1.0 and max(rel) / min(rel) < 1.4, rel
+    # (the second placement put the joint 0.5 of the upper trunk higher on the back: the shoulder-to-root
+    # distance is 0.95-1.05 of the torso on every body instead of 0.72-0.92; the spread across bodies, which
+    # is what this pins, is 1.09)
+    assert 0.65 < min(rel) and max(rel) < 1.15 and max(rel) / min(rel) < 1.4, rel
     assert max(hybrid) / min(hybrid) > 3.0, hybrid                # what a face id alone leaves
 
 
@@ -576,11 +595,13 @@ def test_the_membrane_root_follows_the_waist(world):
 def test_the_membrane_root_is_exactly_where_it_always_was_on_the_neutral_body(world):
     base, _, v0 = world
     for style in ("membrane", "dragon", "feathered"):
-        new = K.instantiate_all([K.new_spec("wing", params={"style": style}, base=base)],
-                                base, v0)
-        # the registry wing has the shoulder anatomy's muscular upper arm (wings.Sleeve, S3); with the same
-        # sleeve the legacy builder produces the registry's wing bit for bit: the ROOT is where it always was
-        old = A.back_wings(style, sleeve=K.WING_SLEEVES[style]).build(base, v0)
+        spec = K.new_spec("wing", params={"style": style}, base=base)
+        # a record pinned to the FIRST version of the placement (``placement.version = 1``, its numbers)
+        # builds the legacy builder's wing bit for bit, the bone-thin upper arm included: the ROOT is where it
+        # always was. A new record is the second version (tests/test_wing_root.py)
+        spec.placement.update(version=1, offset=A.WING_OFFSET, up_hint=list(A.WING_UP_HINT))
+        new = K.instantiate_all([spec], base, v0)
+        old = A.back_wings(style).build(base, v0)
         for p, (_, mesh) in zip(new, old):
             assert np.array_equal(p.mesh().vertices, mesh.vertices), style
             assert np.array_equal(p.mesh().faces, mesh.faces), style
@@ -889,7 +910,8 @@ def _extreme_cases():
 def test_every_parameter_at_its_limits_builds_a_watertight_solid(world, kind_id, given, key,
                                                                  value):
     base, _, v0 = world
-    spec = K.new_spec(kind_id, params={**given, key: value}, side="left")
+    side = "left" if "left" in K.KINDS[kind_id].allowed_sides else None      # (a tail has no side: the midline)
+    spec = K.new_spec(kind_id, params={**given, key: value}, side=side)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         placed = K.instantiate_all([spec], base, v0)
