@@ -75,6 +75,10 @@ CAP1_ON = 0.7         # the cap's first ring: this many edges on past the last r
 CAP1_BACK = 0.1       # ... and this share of the way back to where it was, under the wall (distinct points)
 CAP1_FULL = 1.5       # the cap's first ring is moved in full where the reach is at least this many edges
 TOP_LIFT = 0.1        # the last ring stands this many edges off the wall (see _solve)
+WIDTH_EDGES = 3.2     # the fillet is at least this many of the skin's (longer) edges wide: the last ring, a ring of
+#                       sleeve and the rim, and the reach fades over the outer part of that width.  With less the
+#                       mesh has no ring to draw it with and the root was left bare
+WIDTH_ASPECT = 3.0    # ... but no wider than this many reaches (a coarse cage under a thin root: left as it is)
 MIN_AREA = 1e-10      # a welded triangle smaller than this is degenerate (Mesh.degenerate_faces: 1e-12): refused
 LAND_MAX = 1.5        # a fillet lands at most this many times its nominal distance (``region`` reaches) out
 GUARD_SHRINK = 0.45    # the reach where a fold was found is cut by this share per guard round
@@ -125,7 +129,7 @@ class WeldProfile:
     kept_min: float = KEPT_MIN
 
     def __post_init__(self):
-        for key in ("reach", "reach_max", "region", "strength", "open", "ventral", "acute", "valley",
+        for key in ("reach", "reach_max", "reach_min", "region", "strength", "open", "ventral", "acute", "valley",
                     "wall_clip", "inset", "grade"):
             v = getattr(self, key)
             if not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0.0:
@@ -421,7 +425,21 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         diag.update(info)
     if not pr.active or k0 < 1e-4 or wall is None or not len(wall.faces):
         return out
+
+    def coarse():
+        # skin at the root and not enough of it within the weld's reach to draw a ring with: the mesh is too
+        # coarse for this root (said aloud by weld_vertices: it used to be left bare without a word)
+        if diag is not None:
+            diag.update(info, coarse=True, seconds=time.perf_counter() - t0)
+        return out
     topo = topo if topo is not None else Topology.of(F, len(V))
+    # the fillet is at least as wide as this mesh can draw one (a horn's tight cuff, 1.6 reaches of 0.14, is a
+    # level-1 edge and a half wide: whether the skin had a ring between the wall and the rim was luck, and without
+    # one the root was left bare -- a horn of radius 0.13 or 0.15 between welded ones of 0.11 and 0.17)
+    e_loc = _local_edge(V, topo, centre, float(radius) + 2.0 * k0)
+    if e_loc > 0.0 and pr.region * k0 < WIDTH_EDGES * e_loc:
+        pr = pr.with_(region=max(pr.region, min(WIDTH_EDGES * e_loc / k0, WIDTH_ASPECT)))
+    info["aspect"] = pr.region
     spread = max(pr.open, pr.ventral, 1.0)
     rad = float(radius) + (1.25 * pr.region * spread + 0.5) * k0 + 0.3
     try:
@@ -441,7 +459,7 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         centre = _exit_point(ax_pts, skin, centre)
         near = np.nonzero(((V - centre) ** 2).sum(axis=1) < rad * rad)[0]
         if len(near) < 8:
-            return out
+            return coarse() if len(near) else out
     except ValueError:
         return out
     # the skin within reach of the wall only: a nearest wall VERTEX farther than the reach plus the wall's longest
@@ -453,13 +471,13 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     r_wall = float(_axis_distance(ax_pts, wnear).max()) if len(wnear) else float(radius) * 2.0
     near = near[_axis_distance(ax_pts, V[near]) < r_wall + kmax + 0.05]
     if len(near) < 8:
-        return out
+        return coarse()
     wv = wp.nearest_vertex(V[near])
     emax = float(np.linalg.norm(wp.V[wp.F[:, 1]] - wp.V[wp.F[:, 0]], axis=1).max()) if len(wp.F) else 0.0
     keep_near = np.linalg.norm(V[near] - wp.V[wv], axis=1) < kmax + emax + 0.05
     near, wv = near[keep_near], wv[keep_near]
     if len(near) < 8:
-        return out
+        return coarse()
     wq, nb0, b0, gb = wp.closest(V[near], wv)
     na0, ga = skin.vertex_normals_of(V, near)
     kv = _reach(pr, V[near], na0, nb0, centre, float(radius), k0, spread)
@@ -560,9 +578,7 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
             # one, before the probe's cuts: nothing under the wall drags the ring down as it did inside _solve.)
             kv = _envelope_on(topo, V, near, np.where(taken, 0.0, kv_start), REACH_SLOPE)
     if best is None:
-        if diag is not None:
-            diag.update(info, seconds=time.perf_counter() - t0)
-        return out
+        return coarse()
     region = best["region"]
     applied = best["crossings"] == 0
     # how much of the root's ring is welded in the end (the guard's hard rounds take patches out): the share of the
@@ -592,6 +608,18 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         diag["ids"] = best["ids"]
         diag["kv"] = best["kv"]
     return out
+
+
+def _local_edge(V, topo, centre, r) -> float:
+    """The length of the skin's longer edges (their upper quartile: the quads of a scalp are half again as long
+    as they are wide) within ``r`` of ``centre``; 0 with no skin there."""
+    ids = np.nonzero(((V - centre) ** 2).sum(axis=1) < r * r)[0]
+    if len(ids) < 3:
+        return 0.0
+    tab = topo.table(ids)
+    has = tab >= 0
+    d = np.linalg.norm(V[np.where(has, tab, 0)] - V[ids][:, None, :], axis=2)
+    return float(np.percentile(d[has], 75.0)) if has.any() else 0.0
 
 
 def _axis_points(axis, wp, centre, radius) -> np.ndarray:
@@ -1200,6 +1228,11 @@ def weld_vertices(V, F, targets, *, diags: list | None = None) -> np.ndarray:
             from .kinds import AppendageWarning
             warnings.warn(f"appendage {t.name!r}: the skin is not welded onto the root here (the weld would "
                           "fold the skin); it meets the root as the junction left it", AppendageWarning, stacklevel=2)
+        elif d.get("coarse"):
+            from .kinds import AppendageWarning
+            warnings.warn(f"appendage {t.name!r}: the skin is not welded onto the root here (the root is too thin "
+                          "for the body's mesh at this level; a higher level can draw it)", AppendageWarning,
+                          stacklevel=2)
     return out
 
 
@@ -1281,17 +1314,33 @@ def seam(character) -> str:
 
 def default_levels(character) -> int:
     """The subdivision a character (a :class:`~.sliders.Character`) is meshed at when none is asked for:
-    ``MIN_LEVEL`` (1) when a root of its RECORDS is welded (or, with the old collar asked for, has a collar),
-    else 0 (the cage).  The ONE decision the command line, the lab's final render and its export all use (they
-    disagreed: the command line asked the built appendages, the lab the records; the ossicone came out at
-    different levels).  Read from the records: nothing is built."""
+    ``MIN_LEVEL`` (1) when a root of its RECORDS is welded (or, with the old collar asked for, has a collar) or
+    has a foot fitted to the drawn skin (:func:`fitted_level`: the ossicone), else 0 (the cage).  The ONE decision
+    the command line, the lab's final render and its export all use (they disagreed: the command line asked the
+    built appendages, the lab the records; the ossicone came out at different levels).  Read from the records:
+    nothing is built."""
     how = seam(character)
     specs = list(getattr(character, "appendages", ()) or ())
+    fitted = fitted_level(specs)
     if how == "weld":
-        return MIN_LEVEL if wants_weld(specs) else 0
+        return max(MIN_LEVEL if wants_weld(specs) else 0, fitted)
     if how == "collar":
-        return CO.default_levels(specs, True)
-    return 0
+        return max(CO.default_levels(specs, True), fitted)
+    return fitted
+
+
+def fitted_level(specs) -> int:
+    """The highest level any enabled record of ``specs`` is fitted to the drawn skin at (``Kind.fitted_level``: 1
+    for a skin-covered ossicone, whose foot the level-0 cage cuts across as a ragged polygon; 0 otherwise)."""
+    from . import kinds as K
+    out = 0
+    for sp in specs or ():
+        if not getattr(sp, "enabled", True):
+            continue
+        kind = K.kind_of(sp)
+        if kind is not None:
+            out = max(out, int(kind.fitted_level(dict(getattr(sp, "params", {}) or {}), sp)))
+    return out
 
 
 def welded_shell_mesh(mesh: Mesh, placed, character=None, *, controls=None, diags: list | None = None) -> Mesh:
@@ -1332,15 +1381,29 @@ def arrival_report(V, F, wall, centre, radius, *, V0=None, tol: float = 2e-3, re
     fi = np.nonzero(near[F].all(axis=1))[0]
     wp = Surface(wall.vertices, wall.faces, centre, rad + 1.0)
     rep: dict = {}
-    _, _, sd, _ = wp.closest(V[ids])
+    if V0 is not None:
+        V0 = np.asarray(V0, dtype=np.float64)
+    # only skin inside the wall's own box can be under the wall or on it: the rest is outside it (the ball round a
+    # horn holds the whole face, twenty thousand vertices at level 1: their closest points were 18 s of one report)
+    lo, hi = wp.V.min(axis=0) - 0.1, wp.V.max(axis=0) + 0.1
+    inbox = np.all((V[ids] >= lo) & (V[ids] <= hi), axis=1)
+    if V0 is not None:
+        inbox |= np.all((V0[ids] >= lo) & (V0[ids] <= hi), axis=1)
+    box = ids[inbox]
+    sd = np.full(len(ids), np.inf)
+    if len(box):
+        _, _, sd[inbox], _ = wp.closest(V[box])
     s = np.full(len(V), np.inf)
     s[ids] = sd
     f = F[fi]
     # the plug (what the wall covers in the ORIGINAL skin) and the skin's last ring outside it
+    s0 = sd
     if V0 is not None:
-        _, _, sd0, _ = wp.closest(np.asarray(V0, dtype=np.float64)[ids])
+        s0 = np.full(len(ids), np.inf)
+        if len(box):
+            _, _, s0[inbox], _ = wp.closest(V0[box])
         s_ref = np.full(len(V), np.inf)
-        s_ref[ids] = sd0
+        s_ref[ids] = s0
     else:
         s_ref = s
     plug = s_ref <= tol
@@ -1378,17 +1441,16 @@ def arrival_report(V, F, wall, centre, radius, *, V0=None, tol: float = 2e-3, re
             rep[tag + name] = float(np.percentile(a, q)) if len(a) else float("nan")
     rep["crossings"] = int(len(CO.crossing_pairs(V, f)))
     if V0 is not None:
-        V0 = np.asarray(V0, dtype=np.float64)
         rep["crossings_before"] = int(len(CO.crossing_pairs(V0, f)))
         # the plug: inside any of the closed wall's shells by ray parity (deep in a root the sign of a closest-point
         # distance flips at the medial axis); the signed distance where the wall is not closed
         if wall.is_watertight:
             from .junction_checks import points_in_mesh
-            _, _, s0, _ = wp.closest(V0[ids])
-            was_in = points_in_mesh(V0[ids], wall.vertices, wall.faces) & (s0 < -tol)
-            rep["plug_outside"] = int((was_in & ~points_in_mesh(V[ids], wall.vertices, wall.faces)).sum())
+            under = box[s0[inbox] < -tol]
+            was_in = under[points_in_mesh(V0[under], wall.vertices, wall.faces)] if len(under) else under
+            rep["plug_outside"] = int((~points_in_mesh(V[was_in], wall.vertices, wall.faces)).sum()) if len(was_in) \
+                else 0
         else:
-            _, _, s0, _ = wp.closest(V0[ids])
             rep["plug_outside"] = int(((s0 < -tol) & (sd > tol)).sum())
         moved = np.linalg.norm(V - V0, axis=1) > 1e-12
         rep["moved"] = int(moved.sum())

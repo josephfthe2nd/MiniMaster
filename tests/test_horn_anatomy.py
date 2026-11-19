@@ -562,6 +562,47 @@ def test_a_ram_curls_back_down_past_the_ear_and_forward_not_over_the_skull(world
 
 
 @assets
+@pytest.mark.parametrize("body", ["neutral", "short", "female", "child"])
+def test_a_rams_curl_stops_short_of_the_head(world, bodies, body):
+    """A ram at curve 3.5 (0.3 above its default; the slider goes to 4) ended with its tip in the ear on every adult
+    body: 130-220 of its faces through the drawn skin away from the root.  The curl is built at the share of its
+    curve that keeps the sheath ``CURL_MARGIN`` off the skin beyond ``CURL_ROOT`` base radii (``HR.curl_room``),
+    the report says so, and the default (and a ram curled the other way) keeps all of it."""
+    from minimaster.character import collar as CO
+    from minimaster.character import weld as W
+    base, _ = world
+    v = bodies[body]
+    for curve, limited in ((3.2, False), (3.5, True), (4.0, True), (-4.0, False)):
+        report = []
+        spec = K.new_spec("horn", params={"shape": "ram", "curve": curve}, base=base)
+        placed = K.instantiate_all([spec], base, v, report=report)
+        notes = [r for r in report if "curl is built at" in r]
+        assert bool(notes) == limited, (body, curve, report)
+        out, _ = shaped_body(world, v, placed)
+        sv, sf = CO.shaped_skin(base, out, 1)
+        sv, sf = np.asarray(sv), np.asarray(sf)
+        for p in placed:
+            hpl = p.repose.horn
+            built = hpl.model.p.curve
+            assert (abs(built) < abs(curve) - 1e-6) == limited and built * curve > 0
+            if limited:
+                assert abs(built) > 3.2 - 1e-6                              # no less than the default's own curl
+            skin = W.Surface(sv, sf, hpl.site.point, hpl.model.L * hpl.site.scale + 0.6, walk=1)
+            assert HR.body_room(hpl.model, p.matrix, skin) >= HR.CURL_MARGIN - 0.01, (body, curve)
+            # ... and no face of the sheath away from the root goes through the drawn skin
+            mesh = p.mesh()
+            V, Fh = np.asarray(mesh.vertices), np.asarray(mesh.faces)
+            lo, hi = V.min(axis=0) - 0.05, V.max(axis=0) + 0.05
+            Fb = sf[((sv[sf] >= lo) & (sv[sf] <= hi)).all(axis=2).any(axis=1)]
+            pairs = np.asarray(CO.crossing_pairs(np.vstack([V, sv]), np.vstack([Fh, Fb + len(V)])))
+            if len(pairs):
+                mixed = pairs[(pairs[:, 0] < len(Fh)) ^ (pairs[:, 1] < len(Fh))]
+                hf = np.where(mixed[:, 0] < len(Fh), mixed[:, 0], mixed[:, 1])
+                far = np.linalg.norm(V[Fh[hf]].mean(axis=1) - p.anchor, axis=1) > 3.0 * hpl.site.radius
+                assert not far.any(), (body, curve, int(far.sum()))
+
+
+@assets
 def test_the_two_horns_of_a_pair_never_meet_over_the_head(world, bodies):
     """The first corkscrew leaned inward and its tips crossed the midline (and each other): every vertex of a
     horn stays on its own side of the sagittal plane, with the tent's margin at the root."""

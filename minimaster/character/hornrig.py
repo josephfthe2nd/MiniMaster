@@ -135,6 +135,7 @@ def smoothstep(u):
     return u * u * (3.0 - 2.0 * u)
 
 
+KNOB_SHARE = 0.7         # a skin-covered column's tip is at least this share of its base radius (HornParams.tip)
 # the fillet foot of a skin-covered shape (the ossicone, round 4): see ``HornModel._fillet_foot``
 FILLET_RHO = (0.2, 1.0)  # the fillet's radius is ``flare`` base radii, within these (A29: 0.5)
 FILLET_STEP = 5.0        # degrees of the fillet's arc between two rings (the profile turns at most this much a ring)
@@ -275,7 +276,12 @@ class HornParams:
 
     @property
     def tip(self) -> float:
-        return max(float(self.tip_radius), TIP_FLOOR)
+        tip = max(float(self.tip_radius), TIP_FLOOR)
+        if self.fillet_foot:
+            # a skin-covered column ends in a knob (A29: 0.63-0.8 of its base), whatever its base: with the tip left
+            # at the default's 0.11 a base of 0.3-0.4 made a cone with a bead on it (it read as a teat)
+            tip = max(tip, KNOB_SHARE * float(self.base_radius))
+        return tip
 
     @property
     def tent_height(self) -> float:
@@ -525,6 +531,53 @@ def twist_room(params: HornParams, matrices, mids, iterations: int = 10) -> floa
     for _ in range(iterations):
         f = 0.5 * (lo + hi)
         if midline_room(HornModel(params, twist_scale=f), matrices, mids) >= need:
+            lo = f
+        else:
+            hi = f
+    return lo
+
+
+# the curl: away from its root the sheath stays off the head (a ram at curve 3.5, 0.3 above its default, ended in
+# the ear on four bodies of five: 130-220 of its faces through the skin; the slider goes to 4)
+CURL_ROOT = 3.0        # "away from its root": more than this many base radii along the sheath
+CURL_MARGIN = 0.03     # ... it keeps this gap (world units; the default ram has 0.05-0.19)
+
+
+def body_room(model: "HornModel", matrix, skin, stations: int = 96) -> float:
+    """The least gap (world units; negative = inside) between a horn's sheath more than ``CURL_ROOT`` base radii
+    along it and the skin: ``skin.closest(points) -> (point, normal, signed distance, ...)`` (a
+    ``weld.Surface`` of the body's cage), ``matrix`` the horn's local -> world."""
+    s, pos, *_ = model.path()
+    idx = np.nonzero(s >= CURL_ROOT * model.R)[0]
+    if not len(idx):
+        return math.inf
+    idx = np.unique(np.concatenate([idx[:: max(1, len(idx) // stations)], idx[-1:]]))
+    m = np.asarray(matrix, dtype=np.float64)
+    sc = float(abs(np.linalg.det(m[:3, :3])) ** (1.0 / 3.0))
+    P = pos[idx] @ m[:3, :3].T + m[:3, 3]
+    r = model.radius(s[idx]) * (1.0 + float(model.p.row["lobe"])) * sc
+    q, _, b, _ = skin.closest(P)
+    d = np.linalg.norm(P - q, axis=1) * np.where(np.asarray(b) < 0.0, -1.0, 1.0)
+    return float((d - r).min())
+
+
+def curl_room(params: HornParams, twist_scale: float, matrices, skins, iterations: int = 8) -> float:
+    """The share of its ``curve`` a horn of ``params`` keeps so that, on the sites ``matrices`` with the skins
+    ``skins`` (:func:`body_room`), its sheath away from the root stays ``CURL_MARGIN`` off the body: 1 when the full
+    curve does (or when the straight horn does not either: then the curl is not what brings it there), else the
+    largest share found by bisection."""
+    def room(f):
+        model = HornModel(params.with_(curve=params.curve * f), twist_scale=twist_scale)
+        return min(body_room(model, m, sk) for m, sk in zip(matrices, skins))
+
+    if not params.curve or room(1.0) >= CURL_MARGIN:
+        return 1.0
+    if room(0.0) < CURL_MARGIN:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    for _ in range(iterations):
+        f = 0.5 * (lo + hi)
+        if room(f) >= CURL_MARGIN:
             lo = f
         else:
             hi = f

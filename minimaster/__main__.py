@@ -577,8 +577,10 @@ def main(argv: list[str] | None = None) -> int:
             # the records, shared with the lab: weld.default_levels); level 0 is the 0.28-unit cage
             args.subdivide = weld_mod.default_levels(doc)
             if args.subdivide:
+                why = ("weld" if seam == "weld" and weld_mod.wants_weld(doc.appendages) else
+                       "collars" if seam == "collar" and collar_mod.wants_collar(doc.appendages, True) else "fit")
                 print(f"note: the body is subdivided once (--subdivide {args.subdivide}) for the roots' "
-                      f"{'weld' if seam == 'weld' else 'collars'}; --subdivide 0 draws the cage")
+                      f"{why}; --subdivide 0 draws the cage")
         elif (placed and seam == "collar" and args.subdivide < collar_mod.MIN_LEVEL
               and collar_mod.wants_collar(placed, True)):
             print("note: the root collar needs a subdivided body (--subdivide 1 or 2); it is not drawn at level 0")

@@ -740,3 +740,43 @@ levels 1 and 2, the carried shading through the pipeline's transform, print and 
 replaced), the UI ranges and old records beyond them, the extremes grid with tilt / facets / twist and the midline, the
 bone's flare and the ossicone's column, the true containment of every layer, the facets, the temporalis, the round-3
 document; `tests/test_horn_collar.py`: the cuff on the keratin shapes only.
+
+## Round 7: thin horns, the ram's curl, the ossicone's knob and level
+
+Four of the round-5 critic's findings on the horn, each with a test that fails without the change.
+
+* **Thin horns were left bare.** The weld's reach was the horn's own radius, and below about 0.11 that is less than
+  one edge of the level-1 scalp (0.08-0.11 units): the mesh had no ring to raise, and the horn went into the head as a
+  rod with no cuff, without a word. Horns of radius 0.13 and 0.15 were bare too, between welded ones of 0.11 and 0.17:
+  a cuff 1.6 reaches wide held a ring of skin between the wall and the rim only by luck. Now the reach is at least
+  `kinds.HORN_WELD_MIN` (0.14 units, one edge), and the weld's fillet is at least as wide as the mesh can draw
+  (`weld.WIDTH_EDGES`, [weld.md](weld.md)). Measured at level 1: ten radii from 0.05 to 0.6 on the neutral body, 0.05
+  and 0.13 on the child and the heavy one, all welded all round; at level 2: 0.05 and the default
+  (`tests/test_weld.py::test_a_horn_of_any_radius_is_welded`). The arrival angle of a 0.05 horn is still steep at
+  level 1 (48 degrees against the bare 68: six vertices round a 0.04 rod); level 2 gives 26. A root the mesh still
+  cannot draw a ring round (a tail of radius 0.10 at level 1) is left bare WITH a warning and a note in the lab.
+* **The ram's curl stops short of the head.** At `curve` 3.5 (the default is 3.2, the slider goes to 4) the tip ended
+  in the ear on every adult body: 130-220 of the sheath's faces through the drawn skin. `hornrig.curl_room` builds
+  the horn at the largest share of its curve that keeps the sheath `CURL_MARGIN` (0.03 units) off the body's cage
+  more than `CURL_ROOT` (3) base radii along it, as `twist_room` does for the twist, and the build report says so
+  ("the curl is built at 0.94 of its curve"). The default ram keeps all of its curve on every body (its gap is
+  0.05-0.19), and so does a ram curled the other way. The gap measured against the cage is within 0.004 of the gap
+  against the drawn level-1 skin; the check costs about 25 ms a horn.
+  (`tests/test_horn_anatomy.py::test_a_rams_curl_stops_short_of_the_head`.)
+* **The ossicone's knob follows its base.** The tip radius stayed at the default's 0.11 while the base grew, so a base
+  of 0.3-0.4 made a cone with a bead on it. A skin-covered column's tip is now at least `KNOB_SHARE` (0.7) of its base
+  radius (A29: 0.63-0.8), and the build report says so when that is more than the record asks. The default ossicone
+  (tip 0.75 of its base) is unchanged.
+* **The ossicone is meshed at the level its foot is fitted to.** Its fillet foot is laid on the level-1 skin, but a
+  figure with only an ossicone was meshed at level 0 (no weld, so no reason to subdivide), and the cage cut across
+  the foot. `Kind.fitted_level` says 1 for a fillet foot and `weld.default_levels` takes it, with the seam on or off.
+
+How saved documents change: a horn thinner than 0.14 gets a visible cuff of skin (it had none); a ram or any curved
+horn saved with a curve that drives it into the head is built with less curve and a note; an ossicone saved with a
+base radius above the default and the default tip gets a broader top; an ossicone-only figure is exported one level
+finer by default.
+
+Not done: the other half of the critic's ossicone finding (at a base radius of 0.6 the fillet foot read as a lens
+with a hard edge: looked at here only from a distance, where it is a low boss; no close flat-shaded check), the ram's site (the critic wants it higher, behind the orbit, with a larger base), the temporalis' visible
+lift, the corkscrew's keel, juvenile sizes for a child, and the print report does not yet flag an appendage that
+pierces the body away from its root (the curl limit removes the one case found).

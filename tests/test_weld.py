@@ -432,7 +432,13 @@ def test_one_function_decides_the_default_level_from_the_records():
     assert W.default_levels(doc()) == 0
     assert W.default_levels(doc("tail")) == 1
     assert W.default_levels(doc("tail:collar=0")) == 0
-    assert W.default_levels(doc("horn:shape=ossicone")) == 0              # no weld on a skin-covered horn
+    # no weld on a skin-covered horn, but its foot is fitted to the level-1 skin (the cage cut across it at level 0)
+    assert W.default_levels(doc("horn:shape=ossicone")) == 1
+    assert W.default_levels(doc("horn:shape=ossicone", collar=False)) == 1
+    assert W.default_levels(doc("horn:shape=ossicone", junction=False)) == 1
+    off = doc("horn:shape=ossicone")
+    off.appendages[0].enabled = False
+    assert W.default_levels(off) == 0
     assert W.default_levels(doc("horn")) == 1
     assert W.default_levels(doc("harvest:preset=lower_arms")) == 1
     assert W.default_levels(doc("tail", collar=False)) == 0
@@ -447,7 +453,7 @@ def test_one_function_decides_the_default_level_from_the_records():
 def test_the_command_line_and_the_lab_take_the_same_level(tmp_path):
     from minimaster.character import lab as L
     res = L.Resources.shared()
-    for text, want in (("tail", 1), ("horn:shape=ossicone", 0)):
+    for text, want in (("tail", 1), ("horn:shape=ossicone", 1), ("horn:collar=0", 0)):
         done = subprocess.run([sys.executable, "-m", "minimaster", "character", "--add", text, "-o",
                                str(tmp_path / "x.stl")], capture_output=True, text=True)
         assert done.returncode == 0, done.stderr
@@ -753,3 +759,51 @@ def test_a_horn_s_base_is_drawn_in_the_skin_s_colour_past_the_welded_skin(world)
             warnings.simplefilter("ignore")
             pl = ch.instantiate_appendages(base, verts, lib)
         assert getattr(pl[0].mesh(), "colors_for", None) is None, text
+
+
+# --------------------------------------------------------------------------
+# round 7: thin roots (a fillet at least as wide as the mesh can draw; a horn's least reach)
+
+# base radius (the slider goes 0.05-0.6; the default is 0.17), body, level.  Before: bare at level 1 for 0.05-0.09
+# (the reach was the horn's own radius: less than one edge), and for 0.13 and 0.15 BETWEEN welded neighbours (a
+# cuff 1.6 reaches wide had a ring of skin between the wall and the rim only by luck)
+THIN_HORNS = [(0.05, "neutral", 1), (0.09, "neutral", 1), (0.13, "neutral", 1), (0.15, "neutral", 1),
+              (0.6, "neutral", 1), (0.05, "child", 1), (0.13, "heavy", 1), (0.05, "neutral", 2)]
+
+
+@assets
+@pytest.mark.parametrize("radius,body,levels", THIN_HORNS)
+def test_a_horn_of_any_radius_is_welded(world, radius, body, levels):
+    reps = _reports(_figure(world, f"horn:base_radius={radius}", body, levels=levels))
+    assert len(reps) == 2
+    for t, d, before, after in reps:
+        assert d["applied"] and d["kept"] >= 0.9, (t.name, {k: d.get(k) for k in ("applied", "kept", "coarse", "k0")})
+        assert t.profile.k(t.radius) >= K.HORN_WELD_MIN - 1e-9
+        assert after["open_p50"] < before["open_p50"] - 10.0, (after["open_p50"], before["open_p50"])
+        assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
+
+
+def test_the_fillet_is_at_least_as_wide_as_the_mesh_can_draw(sphere):
+    """A root whose own fillet would be narrower than three of the skin's edges gets a wider one (up to
+    ``WIDTH_ASPECT`` reaches), and a root the mesh still cannot draw a ring round is left bare WITH a warning (it
+    used to be left bare without a word)."""
+    V, F = sphere                                                         # edges of 0.15-0.2
+    axis = np.array([[0, 0, 5.0], [0, 0, 9.0]])
+    d: dict = {}
+    out = W.weld_skin(V, F, _tube(r=0.2), np.array([0.0, 0.0, 6.0]), 0.2, W.WeldProfile(), axis=axis, diag=d)
+    assert d["applied"] and d["kept"] == 1.0 and d["aspect"] > W.WeldProfile().region + 0.5, d["aspect"]
+    d = {}
+    W.weld_skin(V, F, _tube(), np.array([0.0, 0.0, 6.0]), 0.6, W.WeldProfile(), axis=axis, diag=d)
+    assert d["applied"] and d["aspect"] == W.WeldProfile().region          # a root of ordinary size: its own width
+    for r in (0.03, 0.1):
+        t = W.WeldTarget("a", _tube(r=r), np.array([0.0, 0.0, 6.0]), r, W.WeldProfile(), axis)
+        diags: list = []
+        with pytest.warns(K.AppendageWarning, match="too thin for the body's mesh"):
+            out = W.weld_vertices(V, F, [t], diags=diags)
+        assert not diags[0]["applied"] and diags[0]["coarse"] and np.array_equal(out, V)
+    # ... and a root nowhere near the skin is not "too thin": nothing to say
+    far = W.WeldTarget("a", _tube(x=40.0), np.array([40.0, 0.0, 6.0]), 0.6, W.WeldProfile(), axis + [40.0, 0, 0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert np.array_equal(W.weld_vertices(V, F, [far]), V)
+

@@ -218,8 +218,10 @@ TAIL_WELD = dict(open=1.0, ventral=0.35, kept_min=0.5)    # (a horseshoe by desi
 TAIL_WELD_MAX_R = 1.0                       # ... none on a tail BUILT thicker than this.  Since the base radius stops at
                                             # TAIL_MAX_RADIUS (0.9) every tail is welded; the gate stays for a kind that
                                             # raises the range again (a 1.2 tail's weld folded on the cheeks)
-# ... of a horn: a tight cuff (the reach is at least HORN_WELD_MIN units: a 0.14-radius horn's 0.13 is one level-1 edge)
-HORN_WELD = dict(reach=1.0, region=1.6)
+# ... of a horn: a tight cuff.  The reach is at least HORN_WELD_MIN units, one edge of the level-1 head: a thinner
+# horn's own radius is less than the mesh can raise a ring by, and it was left bare without a word
+HORN_WELD_MIN = 0.14
+HORN_WELD = dict(reach=1.0, region=1.6, reach_min=HORN_WELD_MIN)
 # The sheath's own base is skin-coloured up to HORN_TINT_HOLD reaches over the skin (along its axis: a leaning horn's
 # last ring of skin is that much further up it) and turns keratin over HORN_TINT_BLEND root radii.  The welded skin
 # arrives on the sheath nearly flat, and where two separate, faceted surfaces of two colours meet at a few degrees the
@@ -592,6 +594,12 @@ class Kind:
             return float(params.get("collar", default)) > 0.0
         except (TypeError, ValueError):
             return False
+
+    def fitted_level(self, params: dict, record=None) -> int:
+        """The subdivision level a RECORD of this kind is fitted to the body's skin at when it needs no weld (0: the
+        cage).  A shell whose own foot is laid on the DRAWN skin (the skin-covered ossicone: the level-1 skin) is
+        cut across by the coarse cage at level 0, so ``weld.default_levels`` meshes its figure at this level."""
+        return 0
 
     def weld_root(self, placed, controls: dict | None = None):
         """``(centreline points, root radius)`` of the root the skin is welded onto (MakeHuman frame, the
@@ -1399,6 +1407,10 @@ class HornKind(_LoftKind):
                                   f"radius {hp.base_radius:.3g} is more than the head allows there ({why})")
             hp = hp.with_(length=hp.length * f, tip_radius=hp.tip_radius * f)
         hp = hp.with_(base_radius=R, boss=boss)
+        if hp.tip > max(hp.tip_radius, HR.TIP_FLOOR) * 1.02:
+            # (a skin-covered column's tip follows its base, HR.KNOB_SHARE: said, as every other limit is)
+            ctx.report.append(f"appendage {spec.id!r}: the tip is built {hp.tip:.3g} wide, not {hp.tip_radius:.3g}: "
+                              f"a skin-covered horn ends in a knob at least {HR.KNOB_SHARE:g} of its base")
         model = HR.HornModel(hp)
         if hp.twist:
             # the twist turns the bend plane, and one sign turns the pair toward each other: a curved horn at twist 3
@@ -1411,6 +1423,26 @@ class HornKind(_LoftKind):
                 model = HR.HornModel(hp, twist_scale=f)
                 ctx.report.append(f"appendage {spec.id!r}: the twist is built at {f:.2f} of its turn: more turns "
                                   "the pair over the head into each other")
+        # the curl keeps the share of its curve that leaves the sheath off the head away from its root (HR.curl_room:
+        # a ram a little above its default curve ended in the ear)
+        if hp.curve:
+            from . import weld as W
+            cq = np.asarray(ctx.cage[1])
+            tris = np.concatenate([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])
+            mats, skins = [], []
+            for s_ in sites.values():
+                s_ = dataclasses.replace(s_, base_radius=R)
+                mats.append(s_.matrix(float(pl["offset"])))
+                try:
+                    skins.append(W.Surface(ctx.cage[0], tris, s_.point, hp.length * s_.scale + 0.6, walk=1))
+                except ValueError:
+                    mats.pop()
+            g = HR.curl_room(hp, model.twist_scale, mats, skins) if mats else 1.0
+            if g < 1.0:
+                hp = hp.with_(curve=hp.curve * g)
+                model = HR.HornModel(hp, twist_scale=model.twist_scale)
+                ctx.report.append(f"appendage {spec.id!r}: the curl is built at {g:.2f} of its curve: more turns "
+                                  "the horn into the head")
         fillet = float(values.get("fillet", self.fillet_default))
         # the right side's keeps (the ear, the eye) mirrored about the head's OWN midline
         flip = np.diag([-1.0, 1.0, 1.0])
@@ -1510,7 +1542,10 @@ class HornKind(_LoftKind):
         v = np.asarray(local.vertices, dtype=np.float64)
         scale = float(site.scale)
         height = (v[:, 2] - field.height(v[:, :2])) * scale          # over the skin, along the horn's axis
-        u = np.clip((height - (HORN_TINT_HOLD * reach + 0.02)) / max(HORN_TINT_BLEND * radius, 0.03), 0.0, 1.0)
+        # (past the welded skin by half a reach, and by no more than half the horn's own radius: a thin horn's reach
+        # is the mesh's least, three of its radii, and half of that again drew a skin-coloured stalk)
+        hold = reach + (HORN_TINT_HOLD - 1.0) * min(reach, radius) + 0.02
+        u = np.clip((height - hold) / max(HORN_TINT_BLEND * radius, 0.03), 0.0, 1.0)
         w = 1.0 - u * u * (3.0 - 2.0 * u)
         # (the root only: a ram's curl comes back down past its own base, far from it)
         w = np.where(np.linalg.norm(v[:, :2], axis=1) * scale < 3.0 * radius, w, 0.0)
@@ -1565,6 +1600,11 @@ class HornKind(_LoftKind):
     def welds(self, params, record=None):
         row = HR.SHAPES.get(params.get("shape", "curved"), HR.SHAPES["curved"])
         return row.get("collar") is not None and Kind.welds(self, params)
+
+    def fitted_level(self, params, record=None):
+        # the ossicone's fillet foot is fitted to the moulded cage subdivided once (build(): ``fit``)
+        row = HR.SHAPES.get(params.get("shape", "curved"), HR.SHAPES["curved"])
+        return 1 if row.get("foot") == "fillet" else 0
 
     def collar_axis(self, placed, controls=None):
         """The junction tube's centreline carried on along the whole sheath (``hornrig.collar_axis``): the collar
