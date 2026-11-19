@@ -75,7 +75,9 @@ numbers = J.measure_junction(base, verts, new_verts, spec, levels=1)  # see "Num
   bit-identical), never modifies its input, never fed its own result (that would be a second junction on
   the first). Each spec is computed from the INPUT body and the displacements are summed (so the result
   does not depend on the order of the specs and a mirrored pair gives a mirror-symmetric result on a
-  symmetric body, to 1e-12), each spec is capped by its own `max_move`, the sum by the largest, and a
+  symmetric body, to 1e-12; round 6: a spec with `stack="max"`, the tail's, is added after the summed
+  ones and only by what they have not already moved the skin along its own direction, see
+  [anatomy_tail.md](anatomy_tail.md) section 11), each spec is capped by its own `max_move`, the sum by the largest, and a
   **validity pass** backs off the displacement of the corners of any cage quad that would flip (normal
   turned past 78 degrees) or collapse (area under 12% of its own). `info` receives `moved`, `max_move`,
   `limited` (vertices backed off), `rounds`, `specs`.
@@ -613,6 +615,15 @@ check AFTER building; `printprep.character_print_shells` now leaves them out BEF
 skin with itself on the subdivided body too (`junction_quality(..., levels=(1, 2))`): a cage that does not cross
 itself can still make a subdivided body that does where two sheets of skin touch (the closed gluteal cleft), which is
 what `tight_gap` holds.
+
+## Round 6 (the tail track): stacking by max
+
+`JunctionSpec.stack` (`"sum"`, the default, or `"max"`; serialised only when not the default, so every other spec's digest is
+unchanged): a `"max"` spec's displacement is added after every summed spec, and at each vertex only by what they have not
+already moved the skin along its own direction (`junction._stack_max`: `d * (1 - c(r))`, `r` the others' push along `d` over
+`|d|`, `c` a soft clamp of `r` to [0, 1] over `STACK_SOFT` = 0.25 about 1, so the field has no kink). The tail's spec uses it:
+beside extra legs, whose gluteal masses raise the sacrum, the summed rise passed the move cap and the validity pass sank the
+midline into a pit above the root (the round-5 integration critic, B-I1). Order matters only among several `"max"` specs.
 
 ## A kind that knows its anatomy: the tail
 

@@ -9,8 +9,10 @@ numbers, so the skin that is printed and rendered is the envelope of the muscle 
 skin thickness, never a second, unrelated shape:
 
 * ``bone``   the vertebra chain (centra, transverse processes, neural spines on the first four,
-             chevron bones ventrally from Cd3-4) and the sacrum it continues (a tilted, curved wedge whose apex
-             carries Cd1 on the tail's axis);
+             chevron bones ventrally from Cd3-4) and the sacrum it continues: a HUMAN sacrum set in the body's
+             sagittal plane (round 6: tilted ~57 degrees, base anterior-superior, concave anteriorly, seated under the
+             body's own back skin), whose apex segments turn back into the tail; the caudal column leaves the apex
+             along it and bends into the tail's own axis over the first caudals (``bone_path``);
 * ``muscle`` the sleeve: its outer surface is the skin's inward by the skin thickness, lobed where
              the muscle bellies are (dorsal pair with a median groove, ventral pair, lateral bands);
 * ``skin``   the shell: the muscle surface plus ``skin_thickness`` (low-passed in the lobes).
@@ -33,7 +35,9 @@ THE NUMBERS (``docs/anatomy_tail.md`` says where each one comes from, and which 
   distal 45 % up, ``lift`` rotates it about the sacrococcygeal joint, ``sway`` flexes it
   sideways; the curvature is limited so the shell never folds on its own inner side;
 * the caudal vertebra count is ``round(48 L / H_ref)`` (6..30), their lengths rise from Cd1 (0.55 of
-  the longest) to a maximum at 29 % of the chain and fall to 0.35 at the tip.
+  the longest) to a maximum at 29 % of the chain and fall to 0.35 at the tip;
+* the radius at the skin point is at most ``ROOT_CAP`` (the flare saturates: what a pelvis carries), the flare eases out
+  no steeper than ``FLARE_SLOPE``, a dorsal ridge rises out of the root over ``CREST_RISE`` R (round 6).
 """
 
 from __future__ import annotations
@@ -52,7 +56,12 @@ from . import junction as J
 
 H_REF = 16.76            # the height of the neutral body: the tail parameters are at this size
 STEM_R = 1.75            # the hidden stem (bone root) below the skin point, in base radii
-FLARE_LAMBDA = 0.9       # decay of the root flare along the axis, in base radii
+FLARE_LAMBDA = 0.9       # decay of the root flare along the axis, in base radii ...
+FLARE_SLOPE = 0.65       # ... or longer: the trumpet's wall leaves the skin at most this steep (radius per length; round 6)
+ROOT_CAP = 0.9           # the radius a pelvis carries at the root (units of the tail parameters, neutral body; round 6): the
+                         # flare saturates there (a base radius of 1.2 with its flare covered both buttocks, the cleft and
+                         # the thighs from behind, the round-5 critic); the kind's base_radius stops there too
+CREST_RISE, CREST_WIDTH = 2.5, 0.42   # the dorsal ridge rises out of the root over this many R; its half width (radians)
 ROOT_ASPECT = 1.08       # lateral : vertical semi-axis at the skin point
 MID_ASPECT = 0.92        # ... beyond 0.3 L (slightly taller than wide)
 STIFF_R = 2.5            # the stiff proximal part, in base radii
@@ -83,20 +92,38 @@ GROOVE_FILL = 0.0        # the skin fills the grooves between the bellies up to 
 BONE_FRAC = ((0.0, 0.25, 1.0), (0.30, 0.33, 0.33))
 VERTEBRA_LENGTHS = ((0.0, 0.29, 1.0), (0.55, 1.0, 0.35))   # relative length at the chain fraction
 TIP_CAP = (32.0, 62.0, 82.0)   # the rounded tip: rings on a quarter sphere (degrees)
-# the sacrum the chain grows from (round 4): the fused sacral vertebrae as a TILTED, CURVED wedge, base anterior-superior
-# (deep, up the back) and apex posterior-inferior (on the tail's axis, where Cd1 articulates). Walking from the apex to the
-# base its axis turns from ``apex_deg`` below the tail's axis (the sacrocaudal joint: Cd1 continues the sacrum within
-# that) to ``base_deg`` (the lumbosacral end, pointing down the lumbar column), the turn growing toward the base
-# (``bend_pow``): the lower sacrum is the straight continuation of the tail, the upper one bends into the spine. In
-# R_s units (a body's sacrum, not the tail's: the base radius clipped to ``SACRUM_R``): chord length, half widths
-# base / apex, half thicknesses base / apex. The human sacrum is inclined about 45-50 degrees and the apex is posterior to
-# the base (Gray97, wc_w3snb3r5); the cat's caudal column continues the sacral line within ~5 degrees
-# (cm_Anatomical_technology): docs/anatomy_tail.md section 10.
-SACRUM = dict(length=2.4, w_base=1.30, w_apex=0.42, thick_base=0.50, thick_apex=0.22,
-              apex_deg=6.0, base_deg=80.0, bend_pow=0.85)
+# the sacrum the chain grows from (round 6): a HUMAN sacrum, set in the BODY's sagittal plane (its horizontal is the body's,
+# not the tail's axis: the model's ``elevation`` converts), base anterior-superior and apex posterior-inferior, CONCAVE
+# ANTERIORLY: walking from the base to the apex its axis (base -> apex) steepens from ``base_deg`` to ``apex_deg`` below the
+# body's horizontal (pointing back), the turn growing toward the apex (``bend_pow``), so the chord leans ~57 degrees (Gray 111,
+# tail/cm_Gray_111_Vertebral_column_coloured: the chord S1 -> apex 60 - 62 degrees in the standing column, the pelvic face
+# concave; Gray97 for the wedge: the body and alae deep at the base, a narrow strip at the apex). The apex lies ``apex``
+# (forward, up; R_s) from the root's skin point: just above the top of the natal cleft, under the skin of the sacral
+# triangle. Round 4 laid the sacrum along the tail's line (a quadruped's, 33 degrees, reaching 73 % of the body's depth with
+# its curve reversed): the round-5 critic. In R_s units (a body's sacrum, not the tail's: the base radius clipped to
+# ``SACRUM_R``): length along its axis, half widths base / apex, half thicknesses base / apex.
+SACRUM = dict(length=2.3, w_base=1.25, w_apex=0.36, thick_base=0.62, thick_apex=0.17,
+              base_deg=42.0, peak_deg=74.0, peak_at=0.4, apex_deg=45.0, apex=(0.55, 0.80), upper=(0.15, 0.85))
+SACRUM_DORSAL = 0.5             # the section's dorsal half thickness over its ventral one (the bulk, S1's body and the alae, is
+                                 # in front; behind are the laminae and the median crest under 1 - 2 cm of tissue)
+SACRUM_CLEAR = 0.25              # the sacrum is seated at least this many R_s under the body's own skin (the cage's), along the
+                                 # body's front: ``PlacedTail.sacrum_shift`` (a shallow lower back: round 6's first sacrum put 7 - 18 %
+                                 # of it outside the female, short and slim bodies)
+SACRUM_SHIFT_MAX = 0.6           # ... by at most this many R_s (the bodies need 0.05 - 0.4; a tail placed off the midline, whose
+                                 # frame is not the body's sagittal plane, asked for 2.0 units and threw its sacrum out of the hip)
 SACRUM_R = (0.35, 0.50)          # R_s = the base radius clipped to this (units of the tail parameters, neutral body): a
                                  # thicker tail's sacrum and joint would reach the front of the pelvis (it is 4.2-4.5 R deep there)
-SACRUM_JOINT = 0.06              # the sacrocaudal joint's gap before Cd1, in R
+SACRUM_JOINT = 0.06              # the sacrocaudal joint's gap before Cd1, in R_s
+# the caudal column (round 6): Cd1 leaves the sacral apex turned ``CD1_TURN`` degrees from the apex's own axis toward the
+# tail (it continues the sacrum: TAKEAWAYS section 3, 0 - 20), then the first caudals bend back into the tail's own axis,
+# which they join ``CHAIN_JOIN`` x min(R, R_s) past the skin point (``TailModel.chain_join``; the path between turns its
+# direction from the one to the other by a smoothstep, ``_blend_path``): the bend of a raised lemur's tail at its sacrocaudal
+# joints (tail/cm_Lemur_catta_skelet_1782: ~100 degrees over four joints), here ~60 degrees over Cd1 - Cd3 at rest, because
+# a human sacrum points down and the tail leaves pointing back.
+CD1_TURN = 2.0
+CHAIN_JOIN = 2.5
+SLEEVE_UNDER = 0.3               # ... and lies at least this many R_s under the body's skin inside the body
+SLEEVE_ORIGIN = 0.6              # the muscle sleeve's buried end narrows to this share of its section at the sacral apex
 
 
 # the skin around the root (junction_spec): positions in base radii R in the local frame
@@ -112,6 +139,11 @@ SMOOTH = 5                    # rounds of smoothing of the tube displacement ove
 # it moved the junction-only join angle by -10 to +5 degrees (noise around 40 - 50) and, with the smoothing off, folded
 # the heavy body's skin when lifted (docs/anatomy_tail.md section 10). ``None``: off.
 CLIMB = None
+# how the tail's skin adds to a neighbour's where their masses overlap over the sacrum (``JunctionSpec.stack``, round 6):
+# "max": the tail raises the skin only by what the neighbour (extra legs' gluteal masses) has not already; summed, the two
+# passed the move cap over the sacrum and the validity pass sank the midline into a pit with crumpled edges (the round-5
+# integration critic, B-I1)
+STACK = "max"
 
 
 @dataclass(frozen=True)
@@ -177,19 +209,35 @@ GLUTEAL_REACH = 2.5           # no body-side mass of the tail reaches further th
 #   dorsal belly; half width and thickness up the sacrum / at the apex (R_j), plus the sacral mound's rise near the root;
 #   from ``fill[0]`` to ``fill[1]`` of its length its section turns to stand toward the skin and fills the room between the
 #   bone and the skin (the mound IS this muscle's bulk);
-DORSALIS = dict(upto=0.95, y=0.34, half_w=(0.24, 0.62), thick=(0.20, 0.70), rise=0.9, fill=(0.25, 0.7))
-# * gluteus maximus (coccygeal fibres) with the caudofemoralis: a band on the gluteal mass's footprint (``length`` and
-#   ``width`` of its half axes), from beside the root infero-laterally, ending thin inside GLUTEAL_REACH (beyond, it is the
-#   body's own buttock); thickness along its middle, plus the gluteal mound's rise; ``bundles`` parallel fibre bundles a
-#   ``ridge`` proud;
-GLUTEAL_SHEET = dict(length=1.0, width=1.0, thick=0.55, rise=1.0, bundles=5, ridge=0.06)
+DORSALIS = dict(upto=0.95, cover=0.45, medial=0.05, thick=(0.25, 0.6), rise=0.9, fill=0.85)
+# * the gluteus maximus (round 4 drew only a band of its coccygeal fibres on the gluteal mass's footprint, inside
+#   GLUTEAL_REACH; round 6:) the broad quadrilateral SHEET of the references (tail/wc_j42auhe2, wc_kpq8pswh; the round-5
+#   critic: the band was a leaf 1 R_j long), (x up the back, y lateral; R_j, the +y side): its ORIGIN along the lateral border
+#   of the sacrum from the iliac crest's level (``origin_top``) down past the root to the coccyx (``origin_bottom``), its
+#   INSERTION toward the femur, the iliotibial tract over the greater trochanter (``insertion_top``) down to the gluteal
+#   tuberosity (``insertion_bottom``): its fibres run infero-laterally (~40 degrees below the horizontal). Thick in its middle
+#   (``thick`` R_j, plus the gluteal mound's rise where the mound is), thinning to every border.
+GLUTEUS = dict(origin_top=(3.4, 1.15), origin_bottom=(-1.3, 0.65), insertion_top=(1.4, 3.7), insertion_bottom=(-2.0, 3.1),
+               thick=0.5, rise=1.0, bundles=7, ridge=0.05)
 # * sacrocaudalis ventralis: a strand each side, deep in the pelvis on the ventral face of the sacrum, into the tail's
 #   ventral belly (only a cut shows it): offset from the sacrum's ventral face, half width, half thickness (R_s).
 VENTRALIS = dict(offset=0.18, half_w=0.22, half_t=0.14)
 MUSCLE_RING = 12              # vertices around a strand
 DORSALIS_RINGS, VENTRALIS_RINGS, INTO_TAIL = 14, 10, (0.15, 0.55, 0.95, 1.35)   # body rings; rings in the tail (s, in R)
-SHEET_GRID = (15, 21)          # the gluteal sheet's grid: across the fibres (origin -> insertion) x along the origin
+SHEET_GRID = (19, 27)          # the gluteal sheet's grid: along the fibres (origin -> insertion) x along the origin (round 6: denser, the sheet is broad)
 ROOT_SKIN_REACH = 7.0         # the root skin patch: the cage within this many R_j of the root (the muscles lie within 4.5)
+
+
+def sacral_angle(u):
+    """The sacrum's axis (base -> apex) in degrees below the body's horizontal, pointing back, at ``u`` of its length from
+    the APEX (0) to the base (1): ``base_deg`` at the base, steepening to ``peak_deg`` at ``peak_at`` (the upper sacrum is
+    concave anteriorly), then turning back to ``apex_deg`` at the apex (the lowest segments extend into the tail)."""
+    S = SACRUM
+    u = np.asarray(u, dtype=np.float64)
+    m = S["peak_at"]
+    low = S["apex_deg"] + (S["peak_deg"] - S["apex_deg"]) * smoothstep(u / m)
+    high = S["peak_deg"] + (S["base_deg"] - S["peak_deg"]) * smoothstep((u - m) / (1.0 - m))
+    return np.where(u < m, low, high)
 
 
 def bump(u):
@@ -271,11 +319,13 @@ class TailModel:
     Everything derives from one :class:`TailParams`. The meshes are built on demand
     (:meth:`skin`, :meth:`muscle`, :meth:`bone`), the skin is the one that is printed."""
 
-    def __init__(self, params: TailParams, patch: "SkinPatch | None" = None):
+    def __init__(self, params: TailParams, patch: "SkinPatch | None" = None, sacrum_shift=0.0):
         self.p = params
         p = params
         self.R, self.L = float(p.base_radius), float(p.length)
         self._patch = patch               # a SkinPatch, a function that makes one (sampled on first use) or None (flat)
+        self._shift = sacrum_shift        # how far the body's sacrum is moved toward the front to lie under its skin (units),
+                                          # or a function that measures it (PlacedTail.sacrum_shift: on first use)
         self.tip = p.tip
         self.stem = p.stem
         self._path()
@@ -298,13 +348,35 @@ class TailModel:
         s = np.asarray(s, dtype=np.float64)
         t = np.clip(s / self.L, 0.0, 1.0)
         r = self.tip + (self.R - self.tip) * (1.0 - t) ** 0.85
-        return r * (1.0 + self.p.flare * np.exp(-np.maximum(s, 0.0) / (FLARE_LAMBDA * self.R)))
+        return r * (1.0 + self.flare * np.exp(-np.maximum(s, 0.0) / self.flare_length()))
 
     def aspect(self, s):
         """Lateral : vertical semi-axis ratio of the section at ``s``."""
         s = np.asarray(s, dtype=np.float64)
         knots_s = [0.0, self.R, 2.0 * self.R, max(0.3 * self.L, 3.0 * self.R)]
         return np.interp(s, knots_s, [ROOT_ASPECT, 1.0 + 0.6 * (ROOT_ASPECT - 1.0), 1.0, MID_ASPECT])
+
+    def crest_height(self, s):
+        """The dorsal ridge's height over the section at ``s`` (``crest`` base radii at most): it rises out of the root over
+        ``CREST_RISE`` base radii past the skin point (round 6: it stood at full height AT the skin point, where it cut
+        through the moulded back as a V tooth with a sawtooth side contour, the round-5 critic) and falls to nothing at
+        0.6 L; none inside the body."""
+        s = np.asarray(s, dtype=np.float64)
+        rise = smoothstep(s / (CREST_RISE * self.R))
+        fall = 1.0 - np.clip(s / (0.6 * self.L), 0.0, 1.0)
+        return self.p.crest * self.R * rise * fall
+
+    def flare_length(self) -> float:
+        """The root flare's decay length along the axis: ``FLARE_LAMBDA`` base radii, longer for a big flare so that the
+        trumpet's wall leaves the skin at most ``FLARE_SLOPE`` (radius per length; round 6: a flare of 2 eased out over 0.9 R
+        stood up as a plate, the critic's flange)."""
+        return self.R * max(FLARE_LAMBDA, self.flare / FLARE_SLOPE)
+
+    @property
+    def flare(self) -> float:
+        """The root flare that is built: the parameter's, but no more than takes the root to ``ROOT_CAP`` (a tail already
+        that thick has none)."""
+        return float(min(max(float(self.p.flare), 0.0), max(ROOT_CAP / self.R - 1.0, 0.0)))
 
     def skin_thickness(self, s):
         s = np.asarray(s, dtype=np.float64)
@@ -448,9 +520,7 @@ class TailModel:
         up, lat = fr[:, :, 0], fr[:, :, 1]
         crest = 0.0
         if self.p.crest > 0.0 and layer == "skin":
-            # a dorsal ridge: a narrow raised line on the dorsal midline, from the root to 0.6 L
-            ramp = (1.0 - np.clip(s / (0.6 * self.L), 0.0, 1.0))[:, None]
-            crest = (self.p.crest * self.R * ramp * np.exp(-(np.angle(np.exp(1j * th)) / 0.3) ** 2)[None, :])
+            crest = self.crest_height(s)[:, None] * np.exp(-(np.angle(np.exp(1j * th)) / CREST_WIDTH) ** 2)[None, :]
         x = (fb + crest) * np.cos(th)[None, :]
         y = fa * np.sin(th)[None, :]
         pts = (self.centre(s)[:, None, :] + x[:, :, None] * up[:, None, :]
@@ -488,8 +558,52 @@ class TailModel:
             s = s.copy()
             s[0] += 1.5 * float(self.skin_thickness(s[0]))
         ring = self.section(s, layer, n)
+        if layer == "muscle":
+            ring = self._sleeve_origin(s, ring)
         rings = [ring[i] for i in range(len(s))] + self._cap_rings(layer, n)
         return A._loft(rings)
+
+    def _sleeve_origin(self, s, ring):
+        """The buried part of the muscle sleeve (round 6): the caudal muscles wrap the first caudals and arise on the
+        sacrum, so inside the body the sleeve follows the caudal column (its rings turn to the column's frames and centre on
+        it) and narrows to ``SLEEVE_ORIGIN`` of its section at the sacral apex (their tendinous origins), instead of running
+        on along the tail's axis as a straight pipe to a flat end in front of the sacrum (the round-5 critic). The buried
+        stations are spread from the skin point back to the apex; the free tail is unchanged. Same rings, same vertex
+        count."""
+        buried = np.nonzero(s < 0.0)[0]
+        if not len(buried):
+            return ring
+        s_lo = float(self.bone_path()[0][0])
+        s_new = s_lo * s[buried] / s[buried[0]]                         # [s0, 0) -> [s_lo, 0)
+        out = ring.copy()
+        n = ring.shape[1]
+        th = 2.0 * np.pi * np.arange(n) / n
+        fr_skin = self.frames(s_new)
+        fr_bone = self.bone_frames(s_new)
+        c_skin, c_bone = self.centre(s_new), self.bone_centre(s_new)
+        b = smoothstep(s_new / s_lo)                                    # 0 at the skin point, 1 at the origin
+        sec = self.section(s_new, "muscle", n)
+        for k, i in enumerate(buried):
+            loc = sec[k] - c_skin[k]
+            x, y = loc @ fr_skin[k][:, 0], loc @ fr_skin[k][:, 1]      # the ring in its own frame
+            up = (1.0 - b[k]) * fr_skin[k][:, 0] + b[k] * fr_bone[k][:, 0]
+            lat = (1.0 - b[k]) * fr_skin[k][:, 1] + b[k] * fr_bone[k][:, 1]
+            up /= np.linalg.norm(up)
+            lat -= (lat @ up) * up
+            lat /= np.linalg.norm(lat)
+            scale = 1.0 - (1.0 - SLEEVE_ORIGIN) * b[k]
+            c = (1.0 - b[k]) * c_skin[k] + b[k] * c_bone[k]
+            out[i] = c[None, :] + scale * (x[:, None] * up[None, :] + y[:, None] * lat[None, :])
+        # inside the body the sleeve stays under the body's own skin (its height field over the root, sampled from the cage
+        # before any junction: what a document with the junction off has), less a skin thickness and a margin for the
+        # subdivided skin lying inside the cage on the convex back; the free tail is not touched
+        P = out[buried].reshape(-1, 3)
+        cap = self.patch.height(P[:, 0] / self.R, P[:, 1] / self.R) * self.R - SLEEVE_UNDER * self.Rs
+        w = (1.0 - smoothstep(-np.repeat(s_new, n) / (0.5 * self.R)))      # no clamp at the skin point, full from 0.5 R in
+        z = np.where((P[:, 2] > cap) & (P[:, 0] > 0.0), P[:, 2] + (1.0 - w) * (cap - P[:, 2]), P[:, 2])   # (up the back)
+        P[:, 2] = z
+        out[buried] = P.reshape(len(buried), n, 3)
+        return out
 
     def muscle_belly(self) -> np.ndarray:
         """Per vertex of :meth:`muscle`: how much of the sleeve there is muscle belly (1) rather than
@@ -557,7 +671,7 @@ class TailModel:
         t = float(self.skin_thickness(0.0))
         for c, nn, ll, w, h in zip(centres, normals, laterals, half_w, half_t):
             ring = c[None, :] + (w * np.cos(th))[:, None] * ll[None, :] + (h * np.sin(th))[:, None] * nn[None, :]
-            rings.append(skin.clip(ring, nn, t))
+            rings.append(skin.clip(ring, nn, t, rounds=8))           # (along the ring's own normal, not the skin's: more rounds)
         return A._loft(rings + list(tail_rings))
 
     def _into_sleeve(self, side: float, y_frac: float, x_frac: float, half_w: float, half_t: float):
@@ -580,63 +694,68 @@ class TailModel:
         return out
 
     def dorsalis(self, skin: "RootSkin", side: float) -> Mesh:
-        """Sacrocaudalis dorsalis of one side (``side`` +1: +y): a strand ALONG THE VERTEBRAE, on the dorsal face of the
-        sacrum beside the median crest, from the upper sacrum down to the apex and on into the tail's dorsal belly
-        (the kangaroo model: the bellies lie on the vertebrae and become long tendons). Thin up the sacrum, it thickens
-        toward the root until, at the root, it fills the room between the bone and the skin: the sacral wedge's rise
-        (the mound the junction raises the skin by) is this muscle's bulk. Every ring lies under every level of the
-        moulded skin."""
+        """Sacrocaudalis dorsalis of one side (``side`` +1: +y), with the caudal multifidus: a flat band LYING ON the dorsal
+        face of the sacrum beside the median crest, covering its side of the face (``cover`` of the sacrum's half width),
+        from the upper sacrum down to the apex and on into the tail's dorsal belly (the kangaroo model: the bellies lie on
+        the vertebrae and become long tendons). Its thickness grows toward the apex (``thick``, R_j) and fills at most
+        ``fill`` of the room between the bone and the skin above it: the sacral wedge's rise is this muscle's bulk near the
+        root. Round 6: round 4's strand was narrow and turned to stand toward the skin; on the steep human sacrum that stood
+        up as two blades (and two knobs at the root). Every ring lies under every level of the moulded skin."""
         D = DORSALIS
-        Rs, k = self.Rs, self.Rj
+        k = self.Rj
         n = DORSALIS_RINGS
         c, tang, nd, w_s, h_s = self.sacral_axis(n, upto=D["upto"])
         c, tang, nd, w_s, h_s = (a[::-1] for a in (c, tang, nd, w_s, h_s))      # from the upper sacrum down to the apex
         u = np.linspace(0.0, 1.0, n)                                          # 0 up the sacrum, 1 at the apex
         lat = np.broadcast_to(np.array([0.0, side, 0.0]), c.shape)
-        w = (D["half_w"][0] + (D["half_w"][1] - D["half_w"][0]) * u) * k * np.sqrt(np.clip(u / 0.12, 0.15, 1.0))
-        off = np.maximum(D["y"] * w_s, w + 0.04 * k)                          # beside the crest, never across the midline
-        bone = c + nd * (1.05 * h_s)[:, None] + lat * off[:, None]           # on the dorsal face
-        # the skin above it, as the masses alone would make it, and the room between
-        top, N, rise = self._designed(skin, bone[:, :2])
-        gap = np.maximum(((top - bone) * N).sum(axis=1), 0.0)
-        want = (D["thick"][0] + (D["thick"][1] - D["thick"][0]) * u ** 1.5) * k + D["rise"] * np.maximum(rise, 0.0) * u
-        h = 0.5 * np.clip(np.minimum(want, gap), 0.08 * k, None)
-        # toward the root the belly fills the room between the sacrum and the skin, across it (the muscles at the root of
-        # the cat's tail; the sacral wedge's bulge): its section turns from lying on the bone to standing toward the skin
-        b = smoothstep((u - D["fill"][0]) / (D["fill"][1] - D["fill"][0]))
+        w = D["cover"] * w_s                                                  # half width across the face
+        off = w + D["medial"] * k                                             # beside the crest, never across the midline
+        face = c + nd * (SACRUM_DORSAL * h_s)[:, None] + lat * off[:, None]   # on the dorsal face
+        top, N, rise = self._designed(skin, face[:, :2])                      # the skin over it, as the masses make it
+        gap = np.maximum(((top - face) * nd).sum(axis=1), 0.0)               # the room along the face's normal
         t = float(self.skin_thickness(0.0))
-        h = (1.0 - b) * h + b * 0.5 * np.maximum(gap - t, 0.08 * k)
-        ori = (1.0 - b)[:, None] * nd + b[:, None] * N
-        ori /= np.maximum(np.linalg.norm(ori, axis=1, keepdims=True), 1e-12)
-        centres = bone + ori * h[:, None]
+        want = (D["thick"][0] + (D["thick"][1] - D["thick"][0]) * u) * k + D["rise"] * np.maximum(rise, 0.0) * u
+        h = 0.5 * np.clip(np.minimum(want, D["fill"] * (gap - t)), 0.06 * k, None)
+        centres = face + nd * h[:, None]
         tail = self._into_sleeve(side, 0.40, 0.55, 0.26, 0.22)
-        return self._strand(skin, centres, ori, lat, w, h, tail)
+        return self._strand(skin, centres, nd, lat, w, h, tail)
 
     def gluteal(self, skin: "RootSkin", side: float) -> Mesh:
-        """The coccygeal fibres of gluteus maximus with the caudofemoralis, one side: a band of parallel fibres from the
-        first caudals beside the root infero-laterally toward the femur, ending inside ``GLUTEAL_REACH`` of the midline
-        (beyond, it is the body's own buttock). Its footprint is the gluteal mass's (``ROOT_MASSES``): the mound the
-        junction raises beside the root is this band's bulk. A lens of grid ``SHEET_GRID``: thick along its middle, thin
-        at its borders, rounded at both ends, with ``bundles`` fibre bundles a ``ridge`` proud; laid under the skin."""
-        G = GLUTEAL_SHEET
-        mass = ROOT_MASSES[1] if side > 0 else ROOT_MASSES[2]
+        """Gluteus maximus of one side (with its coccygeal fibres, round 6): a broad sheet of parallel fibres from the
+        lateral border of the sacrum and the coccyx beside the root, infero-laterally toward the femur (``GLUTEUS``): the
+        rump's mass beside and in front of the root (TAKEAWAYS section 3; tail/wc_j42auhe2). Where the junction's gluteal mass
+        raises the skin beside the root, its bulk is this sheet's. A lens of grid ``SHEET_GRID`` (along the fibres x along
+        the origin), thick in its middle, thin at its borders, with ``bundles`` fibre bundles a ``ridge`` proud; laid under
+        the skin. Round 4 drew only the medial leaf of it (1 R_j long, inside ``GLUTEAL_REACH``)."""
+        G = GLUTEUS
         k = self.Rj
         nu, nv = SHEET_GRID
-        u = np.linspace(-1.0, 1.0, nu)[:, None]              # along the fibres: -1 at the root, +1 at the lateral end
-        v = np.linspace(-1.0, 1.0, nv)[None, :]              # across them
-        ax = np.array(mass.axis[:2])
-        ac = np.array([-ax[1], ax[0]])
-        ha, hc = mass.half[0] * G["length"], mass.half[1] * G["width"]
-        # an ellipse's grid (its rows end on its rim) so the band's outline is round
-        rim = np.sqrt(1.0 - (0.96 * u) ** 2)
-        xy = (np.array(mass.center)[None, None, :] + (u * ha)[..., None] * ax[None, None, :]
-              + (v * rim * hc)[..., None] * ac[None, None, :])
+        a = np.linspace(0.0, 1.0, nu)[:, None, None]          # along the fibres: 0 at the origin, 1 at the insertion
+        b = np.linspace(0.0, 1.0, nv)[None, :, None]          # along the origin: 0 at its top, 1 at the coccyx
+        ot, ob = np.array(G["origin_top"]), np.array(G["origin_bottom"])
+        it, ib = np.array(G["insertion_top"]), np.array(G["insertion_bottom"])
+        xy = ((1 - a) * ((1 - b) * ot + b * ob) + a * ((1 - b) * it + b * ib))
+        xy = xy * np.array([1.0, side])
         flat = (xy * k).reshape(-1, 2)
         top, N, rise = self._designed(skin, flat)
-        across = np.sqrt(np.clip(1.0 - v ** 2, 0.0, 1.0))
-        prof = across ** 0.5 * (1.0 - u ** 2) ** 0.7 * (1.0 + G["ridge"] * np.cos(np.pi * G["bundles"] * v))   # a fusiform belly
+        u = 2.0 * a[..., 0] - 1.0
+        v = 2.0 * b[..., 0] - 1.0
+        prof = (np.clip(1.0 - v ** 2, 0.0, 1.0) ** 0.5 * np.clip(1.0 - u ** 2, 0.0, 1.0) ** 0.6
+                * (1.0 + G["ridge"] * np.cos(np.pi * G["bundles"] * v)))       # thick in the middle, thin at every border
         thick = (G["thick"] * k + G["rise"] * np.maximum(rise.reshape(nu, nv), 0.0)) * prof
         t = float(self.skin_thickness(0.0))
+        # the ceiling: how far each point must go down to lie a skin thickness under every level of the moulded skin,
+        # spread over its neighbours (a grown, then averaged excess: the sheet goes down as a smooth surface, not point by
+        # point into a jagged border), then the exact clip
+        over = np.maximum(skin.depth(top) + t, 0.0).reshape(nu, nv)
+        for _ in range(3):
+            pad = np.pad(over, 1, mode="edge")
+            grown = np.max([pad[i:i + nu, j:j + nv] for i in range(3) for j in range(3)], axis=0)
+            over = np.maximum(over, 0.5 * (grown + over))
+        for _ in range(4):
+            pad = np.pad(over, 1, mode="edge")
+            over = np.maximum(over, (pad[:-2, 1:-1] + pad[2:, 1:-1] + pad[1:-1, :-2] + pad[1:-1, 2:] + 4 * over) / 8.0)
+        top = top - over.reshape(-1)[:, None] * N
         top = skin.clip(top, N, t, each=True).reshape(nu, nv, 3)
         bottom = top - thick[..., None] * N.reshape(nu, nv, 3)
         return _lens_grid(top, bottom)
@@ -703,16 +822,80 @@ class TailModel:
     # bone ---------------------------------------------------------------------------------------
 
     def vertebra_edges(self) -> np.ndarray:
-        """The ``n + 1`` arc-length boundaries of the ``n`` caudal vertebrae (Cd1 first). Cd1
-        starts one base radius below the skin point (the research: "Cd1 is ~1.0 R deep"); the chain
-        ends just before the tip."""
+        """The ``n + 1`` boundaries of the ``n`` caudal vertebrae (Cd1 first), in the arc length of the caudal column's own
+        path (:meth:`bone_path`: equal to the skin path's ``s`` from where the column has joined the tail's axis, so the
+        column's start is negative: inside the body). Cd1 starts at the sacral apex (the sacrocaudal joint); the chain ends
+        just before the tip."""
         n = self.p.n_vertebrae()
         frac = (np.arange(n) + 0.5) / n
         w = np.interp(frac, *VERTEBRA_LENGTHS)
-        start = self.joint_s()                      # Cd1's rostral end: the sacral apex is before it
+        start = float(self.bone_path()[0][0])       # Cd1's rostral end, at the sacral apex
         end = self.L - 0.5 * self.tip
         edges = start + (end - start) * np.concatenate([[0.0], np.cumsum(w / w.sum())])
         return edges
+
+    # the caudal column's own path (round 6) ------------------------------------------------------------------
+
+    def body_vector(self, fwd, up) -> np.ndarray:
+        """A vector of the body's sagittal plane (``fwd``: toward the front, ``up``: the body's up) in the local frame: the
+        local axis ``z`` leaves the body pointing back, ``elevation`` degrees above the body's horizontal."""
+        e = math.radians(float(self.p.elevation))
+        return np.array([up * math.cos(e) + fwd * math.sin(e), 0.0, up * math.sin(e) - fwd * math.cos(e)])
+
+    def bone_path(self):
+        """``(s, centres, tangents)`` of the caudal column's centreline, from Cd1's rostral end at the sacral apex to the tip:
+        Cd1 leaves the apex ``CD1_TURN`` degrees off the sacrum's apical axis, toward the tail; a cubic (Hermite) carries the
+        first caudals from there into the tail's own axis, which they join ``CHAIN_JOIN`` x min(R, R_s) past the skin point
+        with its tangent; from there the column IS the skin's path. ``s`` is the arc length, offset so that it equals the
+        skin path's ``s`` past the join (negative at the apex). The sacrum does not move with the pose, the join does: a
+        lifted tail bends at the sacrocaudal and first caudal joints."""
+        bp = getattr(self, "_bp", None)
+        if bp is not None:
+            return bp
+        Rs = self.Rs
+        th = math.radians(float(sacral_angle(0.0)) + float(self.p.elevation) - CD1_TURN)
+        t0 = np.array([-math.sin(th), 0.0, math.cos(th)])
+        p0 = self.sacral_apex() + SACRUM_JOINT * Rs * t0
+        s_join = self.chain_join()
+        p1, t1 = self.centre(s_join), self.tangent(s_join)
+        H, dH = _blend_path(p0, t0, p1, t1)
+        arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(H, axis=0), axis=1))])
+        sel = self._sd > s_join + 1e-9
+        s = np.concatenate([s_join - arc[-1] + arc, self._sd[sel]])
+        self._bp = (s, np.vstack([H, self._pos[sel]]), np.vstack([dH, self._tang[sel]]))
+        self._bp_basis = np.stack([np.array([math.cos(th), 0.0, math.sin(th)]), np.array([0.0, 1.0, 0.0]), t0], axis=1)
+        return self._bp
+
+    def chain_join(self) -> float:
+        """Where the caudal column has joined the tail's own axis (``s``): ``CHAIN_JOIN`` x min(R, R_s) past the skin point,
+        shrunk by (R / R_s)^1.5 for a tail thinner than the body's sacrum (its column must be inside its narrow skin by the
+        skin point: the sacrum's apex is the body's, 0.8 R_s up, 3 R of a 0.1 tail)."""
+        Rs = self.Rs
+        return CHAIN_JOIN * min(self.R, Rs) * min(1.0, self.R / Rs) ** 1.5
+
+    def bone_centre(self, s):
+        sb, pos, _ = self.bone_path()
+        s = np.asarray(s, dtype=np.float64)
+        return np.stack([np.interp(s, sb, pos[:, c]) for c in range(3)], axis=-1)
+
+    def bone_tangent(self, s):
+        sb, _, tg = self.bone_path()
+        s = np.asarray(s, dtype=np.float64)
+        t = np.stack([np.interp(s, sb, tg[:, c]) for c in range(3)], axis=-1)
+        return t / np.linalg.norm(t, axis=-1, keepdims=True)
+
+    def bone_frames(self, s):
+        """Frames (up = dorsal, lateral, tangent) along the caudal column at the ascending ``s``: the apex's frame (its
+        dorsal normal up) carried by parallel transport."""
+        s = np.asarray(s, dtype=np.float64)
+        self.bone_path()
+        tang = self.bone_tangent(s)
+        out = np.empty((len(s), 3, 3))
+        b = self._bp_basis
+        out[0] = A._transport(b, b[:, 2], tang[0])
+        for i in range(1, len(s)):
+            out[i] = A._transport(out[i - 1], tang[i - 1], tang[i])
+        return out
 
     def bone(self) -> Mesh:
         """The whole bone layer: the caudal chain and the sacrum it grows from (one
@@ -735,10 +918,10 @@ class TailModel:
             samples.append(np.concatenate([s0 + gap + (s1 - s0 - 2 * gap) * prof, [0.5 * (s0 + s1)]]))
         allS = np.concatenate(samples)
         order = np.argsort(allS)
-        fr_sorted = self.frames(allS[order])
+        fr_sorted = self.bone_frames(allS[order])
         fr = np.empty_like(fr_sorted)
         fr[order] = fr_sorted
-        C = self.centre(allS)
+        C = self.bone_centre(allS)
         k = 0
         nv = 8
         for i in range(n):
@@ -780,34 +963,47 @@ class TailModel:
         return float(np.clip(self.R, *SACRUM_R))
 
     def sacral_apex(self) -> np.ndarray:
-        """The sacrum's apex (local frame): on the tail's axis, ``SACRUM_JOINT`` R before Cd1 (the REST stem is straight
-        along z: the sacrum belongs to the pelvis and does not move with the pose)."""
-        return np.array([0.0, 0.0, float(self.vertebra_edges()[0]) - SACRUM_JOINT * self.R])
+        """The sacrum's apex (local frame): ``SACRUM["apex"]`` (forward, up; R_s) from the root's skin point in the body's
+        sagittal plane, just above the top of the natal cleft and under the skin of the sacral triangle (round 4: on the
+        tail's axis 1 R deep). The sacrum belongs to the pelvis: no pose moves it."""
+        fwd, up = SACRUM["apex"]
+        return self.body_vector(fwd * self.Rs + self.sacrum_shift, up * self.Rs)
+
+    @property
+    def sacrum_shift(self) -> float:
+        if callable(self._shift):
+            self._shift = float(self._shift())
+        return float(self._shift)
 
     def sacral_axis(self, n: int = 12, upto: float = 1.0):
         """``(centres, tangents, dorsal normals, half widths, half thicknesses)`` of the sacrum at ``n`` stations from its
         apex over the first ``upto`` of its length (local frame, the rest pose). The tangent is the base -> apex
-        direction: ``apex_deg`` below the tail's axis at the apex, turning to ``base_deg`` at the base."""
+        direction: ``apex_deg`` below the BODY's horizontal (pointing back) at the apex, ``base_deg`` at the base: it
+        steepens toward the apex (concave anteriorly). In the local frame an angle below the body's horizontal is that
+        plus the tail axis' ``elevation`` below the tail's axis."""
         S, Rs = SACRUM, self.Rs
         L = S["length"] * Rs
+        e = float(self.p.elevation)
         fine = np.linspace(0.0, L, 401)
-        theta = np.radians(S["apex_deg"] + (S["base_deg"] - S["apex_deg"]) * (fine / L) ** S["bend_pow"])
+        theta = np.radians(e + sacral_angle(fine / L))
         d = np.stack([-np.sin(theta), np.zeros_like(theta), np.cos(theta)], axis=1)
         steps = 0.5 * (d[1:] + d[:-1]) * np.diff(fine)[:, None]
         P = self.sacral_apex()[None, :] - np.vstack([np.zeros((1, 3)), np.cumsum(steps, axis=0)])
         sig = np.linspace(0.0, upto * L, n)
         c = np.stack([np.interp(sig, fine, P[:, i]) for i in range(3)], axis=1)
-        th_ = np.radians(S["apex_deg"] + (S["base_deg"] - S["apex_deg"]) * (sig / L) ** S["bend_pow"])
+        th_ = np.radians(e + sacral_angle(sig / L))
         tang = np.stack([-np.sin(th_), np.zeros_like(th_), np.cos(th_)], axis=1)
         nd = np.stack([np.cos(th_), np.zeros_like(th_), np.sin(th_)], axis=1)
-        u = sig / L
-        w = (S["w_apex"] + (S["w_base"] - S["w_apex"]) * smoothstep(u)) * Rs
-        h = (S["thick_apex"] + (S["thick_base"] - S["thick_apex"]) * u) * Rs
+        # the upper sacrum (S1 - S2: the body, the alae and the auricular surfaces) is wide and deep, the lower half a narrow
+        # strip (Gray97): both grow from the apex over ``upper`` of the length
+        g = smoothstep((sig / L - S["upper"][0]) / (S["upper"][1] - S["upper"][0]))
+        w = (S["w_apex"] + (S["w_base"] - S["w_apex"]) * g) * Rs
+        h = (S["thick_apex"] + (S["thick_base"] - S["thick_apex"]) * g) * Rs
         return c, tang, nd, w, h
 
     def sacrum(self, n: int = 16, rings: int = 11) -> Mesh:
-        """The fused sacral vertebrae as a tilted, curved wedge (:data:`SACRUM`): narrow at the apex that carries Cd1 on
-        the tail's axis, wide (the alae) and thick at the base, which lies up the back and deep (anterior-superior). A
+        """The fused sacral vertebrae as a tilted, curved wedge (:data:`SACRUM`): narrow at the apex that carries Cd1,
+        wide (the alae) and thick at the base, which lies up the back and deep (anterior-superior); concave anteriorly. A
         flattened section with a dorsal median crest. Local frame, the rest pose; a closed solid."""
         c, _tang, nd, w, h = self.sacral_axis(rings)
         lat = np.array([0.0, 1.0, 0.0])
@@ -817,11 +1013,23 @@ class TailModel:
         sq_c = np.sign(cs) * np.abs(cs) ** 0.6                  # a flattened plate (a superellipse), not a tube
         sq_s = np.sign(sn) * np.abs(sn) ** 0.8
         crest = 1.0 + 0.30 * np.exp(-(np.angle(np.exp(1j * (ph - 0.5 * np.pi))) / 0.45) ** 2)   # the median sacral crest
+        side = np.where(sq_s > 0.0, SACRUM_DORSAL, 1.0)        # thin behind, deep in front
         for i in range(rings):
             ring = (c[i][None, :] + (w[i] * sq_c)[:, None] * lat[None, :]
-                    + (h[i] * sq_s * crest)[:, None] * nd[i][None, :])
+                    + (h[i] * sq_s * side * crest)[:, None] * nd[i][None, :])
             out.append(ring)
         return A._loft(out[::-1])
+
+    def sacrum_dorsum(self, n: int = 13) -> np.ndarray:
+        """Points of the sacrum's dorsal surface (local frame): the top of the median crest and the dorsal edges of the
+        alae, at ``n`` stations: what must stay under the body's skin."""
+        c, _t, nd, w, h = self.sacral_axis(n)
+        lat = np.array([0.0, 1.0, 0.0])
+        top = c + (1.30 * SACRUM_DORSAL * h)[:, None] * nd
+        out = [top]
+        for sgn in (1.0, -1.0):
+            out.append(c + sgn * (0.8 * w)[:, None] * lat + (0.8 * SACRUM_DORSAL * h)[:, None] * nd)
+        return np.vstack(out)
 
     # -- numbers -------------------------------------------------------------------------------------
 
@@ -865,6 +1073,33 @@ class TailModel:
         sel = np.ones(len(kappa), dtype=bool) if upto is None else sd[1:] <= upto
         k = float(kappa[sel].max()) if sel.any() else 0.0
         return float("inf") if k <= 1e-12 else 1.0 / k
+
+
+def _blend_path(p0, t0, p1, t1, n: int = 161):
+    """``(points, unit tangents)`` of a path from ``p0`` leaving along ``t0`` to ``p1`` arriving along ``t1``: its direction
+    turns from ``t0`` to ``t1`` by a smoothstep of the arc length (no turn at either end, the most in the middle), its length
+    the one that lands it closest to ``p1``, and what it misses by is taken up by a smoothstep shift (zero slope at both
+    ends, so both tangents hold). The caudal column's bend from the sacral apex into the tail (:meth:`TailModel.bone_path`)."""
+    t0 = np.asarray(t0, dtype=np.float64) / np.linalg.norm(t0)
+    t1 = np.asarray(t1, dtype=np.float64) / np.linalg.norm(t1)
+    om = math.acos(float(np.clip(t0 @ t1, -1.0, 1.0)))
+    u = np.linspace(0.0, 1.0, n)
+    g = smoothstep(u)
+    if om < 1e-6:
+        dirs = np.broadcast_to(t0, (n, 3)).copy()
+    else:
+        dirs = (np.sin((1.0 - g) * om)[:, None] * t0 + np.sin(g * om)[:, None] * t1) / math.sin(om)
+    steps = 0.5 * (dirs[1:] + dirs[:-1]) * (1.0 / (n - 1))
+    unit = np.vstack([np.zeros((1, 3)), np.cumsum(steps, axis=0)])        # the path of length 1
+    d = np.asarray(p1, dtype=np.float64) - np.asarray(p0, dtype=np.float64)
+    end = unit[-1]
+    length = max(float(d @ end) / max(float(end @ end), 1e-12), 0.25 * float(np.linalg.norm(d)))   # least squares
+    pts = np.asarray(p0, dtype=np.float64) + length * unit
+    pts = pts + smoothstep(u)[:, None] * (np.asarray(p1) - pts[-1])[None, :]
+    tg = np.gradient(pts, axis=0)
+    tg /= np.maximum(np.linalg.norm(tg, axis=1, keepdims=True), 1e-12)
+    tg[0], tg[-1] = t0, t1
+    return pts, tg
 
 
 def _ellipse(c, a, b, basis, n):
@@ -1145,8 +1380,37 @@ class PlacedTail:
             p = self.params
             m = self._models[key] = TailModel(p.with_(
                 curl=p.curl + c.get("curl", 0.0), droop=p.droop + c.get("droop", 0.0),
-                lift=c.get("lift", 0.0), sway=c.get("sway", 0.0)), self._patch_once)
+                lift=c.get("lift", 0.0), sway=c.get("sway", 0.0)), self._patch_once, self.sacrum_shift)
         return m
+
+    def sacrum_shift(self) -> float:
+        """How far (local units, toward the body's front) the body's sacrum must move so that its dorsal surface
+        (:meth:`TailModel.sacrum_dorsum`) lies at least ``SACRUM_CLEAR`` R_s under the body's own skin (the morphed cage, before
+        any junction: a document with the junction off has that skin). Measured once per placed tail, on the first use of
+        the bone or the body-side muscles; 0 without a body."""
+        if getattr(self, "_sacrum_shift", None) is None:
+            self._sacrum_shift = 0.0
+            if self.body is not None:
+                from . import collar as CO
+                base, verts, _spec = self.body
+                cv, cq = base.body_cage(verts)
+                m = TailModel(self.params)
+                F = self.frame
+                k = self.scale
+                tri = np.concatenate([cq[:, [0, 1, 2]], cq[:, [0, 2, 3]]])
+                centre = F[:3, :3] @ m.sacral_apex() + F[:3, 3]
+                near = np.linalg.norm(cv[tri].mean(axis=1) - centre, axis=1) < 4.0 * m.Rs * k + 1.5
+                skin = CO.SkinPatch(cv, tri[near], centre, np.inf)
+                fwd = m.body_vector(1.0, 0.0)
+                shift = 0.0
+                for _ in range(3):                   # the skin is not flat: settle in a few steps
+                    P = (m.sacrum_dorsum() + shift * fwd) @ F[:3, :3].T + F[:3, 3]
+                    over = float((skin.closest(P)[2] / k + SACRUM_CLEAR * m.Rs).max())
+                    if over <= 1e-4:
+                        break
+                    shift += over
+                self._sacrum_shift = min(shift, SACRUM_SHIFT_MAX * m.Rs)
+        return self._sacrum_shift
 
     def skin(self, controls=None) -> Mesh:
         return self.model(controls).skin().transform(self.frame)
@@ -1226,7 +1490,7 @@ def junction_spec(name: str, model: TailModel, frame, fillet: float, height: flo
         mounds.append(J.Mound((0.0, 0.0, 0.0), CLIMB[1] * Rj, CLIMB[0] * Rj, direction=(0.0, 0.0, 1.0)))
     spec = J.JunctionSpec(
         name, centres, radii * J.HUG, width=fillet, base_radius=Rj, height=height, owner=owner,
-        tight_gap=0.0, smooth=SMOOTH, max_move=MAX_MOVE_R * Rj, mounds=tuple(mounds), join_guard=False,
+        tight_gap=0.0, smooth=SMOOTH, max_move=MAX_MOVE_R * Rj, mounds=tuple(mounds), join_guard=False, stack=STACK,
         keep=tuple(J.Keep((x * Rj, 0.0, z * Rj), KEEP_RADIUS * Rj, fade=KEEP_FADE) for x, z in KEEP_BEADS))
     return spec.transformed(frame)
 

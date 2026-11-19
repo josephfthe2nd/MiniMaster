@@ -102,9 +102,9 @@ def test_the_spec_is_the_tails_root_anatomy(world):
 
 @assets
 def test_the_spec_and_the_muscles_are_built_from_the_same_masses(world):
-    """One description: each gluteal mound of the spec is the footprint and the bulk of the gluteal band of the muscle layer
-    (the band lies inside the mass's ellipse and spans most of its length), the sacral wedge's mound is the bulk of the
-    dorsalis near the root, and the mounds' sizes are the masses' numbers."""
+    """One description: each gluteal mound of the spec lies on the gluteus maximus sheet of the muscle layer and is part of
+    its bulk, the sacral wedge's mound is the bulk of the dorsalis near the root, and the mounds' sizes are the masses'
+    numbers."""
     c, v, (p,), shaped = _build(world, "neutral")
     spec = p.junction()
     R = _R(p)
@@ -113,14 +113,24 @@ def test_the_spec_and_the_muscles_are_built_from_the_same_masses(world):
         assert mound.radius == pytest.approx(mass.half[1] * R) and mound.height == pytest.approx(mass.height * R)
         assert mound.stretch == pytest.approx(mass.half[0] / mass.half[1])
     pieces = dict(model.body_muscles(p.model.root_skin()))
+    nu, nv = T.SHEET_GRID
     for mass, name in ((T.ROOT_MASSES[1], "gluteus_maximus_l"), (T.ROOT_MASSES[2], "gluteus_maximus_r")):
-        loc = pieces[name].vertices / p.params["base_radius"]
+        # round 6: the sheet is the whole gluteus maximus (tests/test_tail_anatomy.py), larger than the mound beside the root,
+        # which lies ON it: every point of the mass's ellipse within 0.8 of its rim is over the sheet's footprint, and the
+        # sheet is thicker where the mound raises the skin (its bulk is this muscle's)
+        top = pieces[name].vertices[:nu * nv].reshape(nu, nv, 3) / p.params["base_radius"]
+        corners = np.array([top[0, 0, :2], top[-1, 0, :2], top[-1, -1, :2], top[0, -1, :2]])
         ax = np.array(mass.axis[:2])
-        rel = loc[:, :2] - np.array(mass.center)
-        along, across = rel @ ax, rel @ np.array([-ax[1], ax[0]])
-        u = np.hypot(along / mass.half[0], across / mass.half[1])
-        assert np.percentile(u, 98) <= 1.05, (name, np.percentile(u, 98))         # inside the footprint (the clip moves a hair)
-        assert np.ptp(along) >= 1.6 * mass.half[0]                                # ... and as long as most of it
+        ang = np.linspace(0.0, 2.0 * np.pi, 48, endpoint=False)
+        ring = np.array(mass.center) + 0.8 * (np.outer(np.cos(ang) * mass.half[0], ax)
+                                              + np.outer(np.sin(ang) * mass.half[1], [-ax[1], ax[0]]))
+        e = np.roll(corners, -1, axis=0) - corners
+        rel = ring[:, None, :] - corners[None, :, :]
+        side = np.sign(e[None, :, 0] * rel[..., 1] - e[None, :, 1] * rel[..., 0])
+        on = (side == side[:, :1]).all(axis=1)                                   # inside the (convex) footprint
+        assert on.mean() >= 0.95, (name, on.mean())
+        m = model.gluteal(T.RootSkin.flat(model.R), 1.0 if name.endswith("l") else -1.0)
+        assert pieces[name].volume() > 1.05 * m.volume(), name                   # (on the flat skin there is no mound)
 
 
 
@@ -379,11 +389,13 @@ def _quality(base, v, p):
 
 @assets
 @pytest.mark.parametrize("name", ["neutral", "child"])
-@pytest.mark.parametrize("text", ["tail:base_radius=0.7", "tail:base_radius=0.85", "tail:base_radius=1.2",
-                                  "tail:base_radius=1.5,length=14", "tail:base_radius=2.0,length=14",
-                                  "tail:base_radius=1.0,flare=1.5"])
+@pytest.mark.parametrize("text", ["tail:base_radius=0.7", "tail:base_radius=0.85", "tail:base_radius=0.9",
+                                  "tail:base_radius=0.9,length=14", "tail:base_radius=0.9,flare=2",
+                                  "tail:base_radius=0.6,flare=2"])
 def test_a_thick_tails_cage_displacement_is_bounded_and_untorn(world, name, text):
-    """The UI allows a base radius up to 2.0 (4 times the default). The first version's sizes grew with R: at 0.85 the
+    """The UI allowed a base radius up to 2.0 (4 times the default; since round 6 it ends at 0.9, the root a pelvis carries:
+    tests/test_tail_ranges.py, so the cases above 0.9 are now 0.9 with the longest tail and the largest flare, and a flared
+    0.6). The first version's sizes grew with R: at 0.85 the
     lumbar skin tore in zipper-like creases (673 vertices moved, 125 backed off) and at 1.5 the junction moved
     3,167 vertices by 2.4 units into a belt at the waist. Every size is now in R_j = min(R, R_MAX): the number of
     vertices moved, the largest move and the reach are bounded in R_j whatever the radius, nothing flips and nothing new
@@ -421,8 +433,10 @@ def test_the_junctions_sizes_stop_growing_at_r_max():
     d = spec(0.31)
     assert d.mounds[0].height == pytest.approx(0.5 * a.mounds[0].height) and d.base_radius == pytest.approx(0.31)
     assert a.base_radius == pytest.approx(0.62) and a.max_move == pytest.approx(1.4 * 0.62)
-    # the tube keeps the tail's own radius (a fat tail is a fat tube; only what the skin does around it is capped)
-    assert c.radii[0] > 3.0 * a.radii[0] * 0.95
+    # the tube keeps the tail's own radius (a fat tail is a fat tube; only what the skin does around it is capped). Round 6:
+    # the root's flare saturates at tailrig.ROOT_CAP, so a 2.0 model's root is 2.0 (no flare), not 2.7: 2.4 times the 0.62
+    # one's, which keeps its flare (it was 3.2 times)
+    assert c.radii[0] > 2.2 * a.radii[0]
 
 
 # -- the poses ---------------------------------------------------------------------------------------------
@@ -538,3 +552,80 @@ def test_the_lumbar_line_runs_down_a_ramp_onto_the_tail_without_a_hump(world):
     # discriminates here: tests/test_tail_layers_in_skin.py::test_the_back_rises_onto_the_tail_with_its_crest_at_the_root
     # sees the hump on every body)
     assert _dorsal_bulge(world, "heavy") < 0.1
+
+
+# -- a neighbour's masses over the sacrum (round 6) ---------------------------------------------------------------------
+
+LEG_BODIES = {"neutral": BODIES["neutral"], "child": BODIES["child"], "tall": BODIES["tall"],
+              "slim_f": dict(gender=0.0, weight=0.0)}
+
+
+def _midline_rise_beside_legs(world, name, legs=True):
+    """The rise of the moulded skin over the skin the body had along the sacrum's midline (twice subdivided), at 0.75 - 2.5
+    R_j up the back from the root, for a tail beside ``harvest:preset=extra_legs`` (``legs=False``: the tail alone, on the
+    same body record), in R_j."""
+    base, lib, cat = world
+    c = Character()
+    c.macro.update(LEG_BODIES[name])
+    for t in ("tail", "harvest:preset=extra_legs") if legs else ("tail",):
+        c.appendages.append(K.add_from_text(t, c.appendages, base=base, lib=lib))
+    v = lib.apply(base.verts, c.effective_target_weights(cat))
+    placed = c.instantiate_appendages(base, v, lib)
+    shaped = c.shaped_body(base, v, placed)
+    p = [q for q in placed if q.kind.id == "tail"][0]
+    m = p.model.model()
+    skin = p.model.root_skin(None, shaped)
+    xs = np.linspace(0.75, 2.5, 8)
+    P, _ = skin.surface(np.stack([xs * m.Rj, np.zeros(len(xs))], axis=1))
+    q = J.junction_quality(base, v, shaped, J.junction_specs(placed), levels=(1,))
+    return -skin.moulded[2].closest(P)[2] / m.Rj, q
+
+
+@assets
+@pytest.mark.parametrize("name", sorted(LEG_BODIES))
+def test_a_tail_beside_extra_legs_keeps_its_crest_at_the_root_and_no_pit(world, name):
+    """The round-5 integration critic (B-I1): with ``tail;harvest:preset=extra_legs`` a sunken pit with crumpled edges sat on
+    the sacrum right above the tail's root, gone with the junction off. Measured: the legs' gluteal masses raise the whole
+    sacrum by 0.2 - 0.37 units, the tail's wedge was summed on top, the sum passed the move cap and the validity pass backed
+    the skin off at the root: along the midline the rise was LOWER just above the root (0.71 - 0.81 R_j) than 1.5 R_j up
+    (0.97 - 1.01): a hump with a pit below it. The tail's spec now stacks by max along its own direction
+    (``JunctionSpec.stack``): the rise is the largest at the root again, as with the tail alone (within 0.08 R_j: measured
+    0 on neutral, child and slim_f, 0.07 on the tall body, where the sum left 0.19 - 0.26), and no new visible
+    self-crossing (on the cage or once subdivided) appears. (The heavy body is left out: its tail ALONE rises up
+    the back between 0.75 and 2.5 R_j; its crest test runs further up, test_tail_layers_in_skin.)"""
+    r, q = _midline_rise_beside_legs(world, name)
+    assert r[0] >= r.max() - 0.08, (name, np.round(r, 2))
+    assert J.quality_violations(q) == [] and q["selfx_new_visible"] == 0 and q.get("L1_selfx_new_visible", 0) == 0, name
+
+
+@assets
+def test_summed_with_the_legs_the_tails_rise_sinks_into_a_pit(world, monkeypatch):
+    """Fail-first: the tail's spec summed with its neighbours (the round-5 behaviour) leaves the pit on the neutral, child
+    and tall bodies (the rise at the root 0.2 R_j or more below its largest value up the back)."""
+    monkeypatch.setattr(T, "STACK", "sum")
+    for name in ("neutral", "child", "tall"):
+        r, _q = _midline_rise_beside_legs(world, name)
+        assert r.max() - r[0] > 0.15, (name, np.round(r, 2))
+
+
+def test_a_max_stacked_spec_adds_only_what_its_neighbours_left_and_the_default_still_sums():
+    """``JunctionSpec.stack`` (an optional field of the core, used by the tail only): ``"sum"`` is the default and is not
+    serialised (every other spec's digest is what it was); a ``"max"`` spec adds its displacement where nothing else moves
+    the skin, nothing where a neighbour already moved it as far along its direction, and part of it in between; a
+    neighbour's move across its direction is not counted."""
+    s = J.JunctionSpec("a", ((0, 0, 0), (0, 0, 1)), (0.3, 0.3))
+    assert s.stack == "sum" and "stack" not in s.to_dict()
+    m = s.with_(stack="max")
+    assert m.to_dict()["stack"] == "max" and J.JunctionSpec.from_dict(m.to_dict()) == m and m.digest() != s.digest()
+    assert m.mirrored().stack == "max" and m.transformed(np.eye(4)).stack == "max"
+    with pytest.raises(ValueError):
+        s.with_(stack="mean")
+    d = np.array([[0.0, 0.0, 1.0]] * 4)
+    others = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0], [0.0, 0.0, 0.5], [3.0, 0.0, 0.0]])
+    add = J._stack_max(others, d)
+    assert np.allclose(add[0], d[0]) and np.allclose(add[3], d[3])          # nothing along it: all of it
+    assert np.linalg.norm(add[1]) == 0.0                                     # covered
+    assert np.linalg.norm(add[2]) == pytest.approx(0.5)                      # half covered: the other half (an exact max there)
+    r = np.linspace(0.0, 2.0, 401)
+    a = np.linalg.norm(J._stack_max(np.stack([np.zeros_like(r), np.zeros_like(r), r], 1), np.tile([0.0, 0.0, 1.0], (401, 1))), axis=1)
+    assert a[0] == 1.0 and np.abs(np.diff(a)).max() < 0.006 and (np.diff(a) <= 1e-12).all()   # continuous and monotone

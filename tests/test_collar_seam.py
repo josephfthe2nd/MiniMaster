@@ -40,13 +40,14 @@ BODIES6 = {"neutral": {"gender": 1.0, "muscle": 0.55}, "tall": {"gender": 1.0, "
 
 # every kind that has a collar, at rest and at the poses and parameters round 3 broke it at
 CASES = [("tail", {}), ("tail", {"lift": -60.0}), ("tail", {"lift": 60.0}), ("tail", {"lift": 90.0}),
-         ("tail:base_radius=0.85", {}), ("tail:base_radius=1.2", {}), ("tail:collar=2", {}),
+         ("tail:base_radius=0.85", {}), ("tail:base_radius=0.9", {}), ("tail:collar=2", {}),
          ("wing:style=membrane", {}), ("wing:style=membrane", {"swing": -45.0}), ("wing:style=membrane", {"raise_": 60.0}),
          ("wing:style=feathered", {}), ("wing:style=feathered", {"swing": -45.0}),
          ("horn", {}), ("horn:shape=ram", {}), ("horn:tilt=45", {}),
          ("horn:ring_verts=24", {}), ("horn:base_radius=0.6,collar=2", {})]
 # (the horn track's round 4: the ossicone has no cuff, its own foot is the fillet; tilt ends at 45 and ring_verts starts
-# at 24, hornrig.TILT_MAX / RING_VERTS_MIN: typing 60 or 6 is an error now)
+# at 24, hornrig.TILT_MAX / RING_VERTS_MIN: typing 60 or 6 is an error now; the tail track's round 6: a tail's base radius
+# ends at 0.9, kinds.TAIL_MAX_RADIUS, so the 1.2 case is 0.9 and a saved 2.0 is built at 0.9)
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +56,7 @@ def world():
     return base, lib, SliderCatalog(lib.names)
 
 
-def _shaped(world, text, body="neutral", controls=None):
+def _shaped(world, text, body="neutral", controls=None, params=None):
     base, lib, cat = world
     c = Character()
     c.macro.update(BODIES6[body])
@@ -64,6 +65,8 @@ def _shaped(world, text, body="neutral", controls=None):
         sp = K.add_from_text(text, c.appendages, base=base, lib=lib)
         if controls:
             sp.controls.update(controls)
+        if params:
+            sp.params.update(params)                     # as a saved document has it (not checked against the ranges)
         c.appendages.append(sp)
         verts = lib.apply(base.verts, c.effective_target_weights(cat))
         placed = c.instantiate_appendages(base, verts, lib)
@@ -259,7 +262,7 @@ def test_the_reach_stops_before_the_skin_turns_away_or_the_paths_converge(world)
     folds 6 columns; either way the guard then cuts gaps (kept 0.40-0.43 of the ring instead of 0.47-0.57)."""
     base = world[0]
     for text, body, ctl, lv in (("tail", "tall", {"lift": -60.0}, 1), ("tail", "tall", {"lift": -60.0}, 2),
-                                ("tail:base_radius=1.2", "neutral", {}, 1)):
+                                ("tail:base_radius=0.9", "neutral", {}, 1)):
         c, placed, shaped = _shaped(world, text, body, ctl)
         p = placed[0]
         prof = p.kind.collar_profile(p) or _tail_profile(p)
@@ -290,7 +293,10 @@ def test_a_collar_that_cannot_be_built_says_so(world, monkeypatch):
     """Round 3: a tail of base_radius 2 on the heavy body got no collar and no word. A kind that asks for a collar the
     construction cannot fit now gets an AppendageWarning with the reason."""
     base = world[0]
-    c, placed, shaped = _shaped(world, "tail:base_radius=2.0", "heavy")
+    # (the tail's range ends at 0.9 since round 6, where the collar fits; the old range's 2.0 is what cannot be built)
+    monkeypatch.setattr(K.TailKind, "params", tuple(type(q)(**{**q.__dict__, "hi": 2.0}) if q.key == "base_radius" else q
+                                                    for q in K.TailKind.params))
+    c, placed, shaped = _shaped(world, "tail", "heavy", params={"base_radius": 2.0})
     monkeypatch.setattr(K.TailKind, "collar_profile", lambda self, p: _tail_profile(p))
     d = {}
     pieces = CO.collar_pieces(base, shaped, placed[0], levels=1, skin=CO.shaped_skin(base, shaped, 1), diag=d)

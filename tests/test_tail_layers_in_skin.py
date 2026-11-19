@@ -101,7 +101,11 @@ CASES = ([(n, "tail", (0, 1, 2), None, True) for n in BODIES]
          + [(n, f"tail:base_radius={r}", (2,), None, True) for n in BODIES for r in (0.5, 0.62, 0.85)]
          + [("neutral", "tail", (1,), s, True) for s in (3, 11)]
          + [("neutral", "tail", (1,), None, False), ("tall", "tail@lift=60", (1,), None, True),
-            ("heavy", "tail@lift=-60", (1,), None, True)])
+            ("heavy", "tail@lift=-60", (1,), None, True)]
+         # round 6: the column bends out of a sacrum seated under each body's own skin; a thin tail's column joins its axis
+         # by the skin point; the range's new end; a lifted tail's column bends at the sacrocaudal joints
+         + [("neutral", "tail:base_radius=0.1", (1, 2), None, True), ("heavy", "tail:base_radius=0.9", (2,), None, True),
+            ("heavy", "tail@lift=90", (1,), None, True), ("child", "tail:base_radius=0.1@lift=60", (1,), None, True)])
 
 
 @assets
@@ -197,7 +201,23 @@ def test_a_lifted_tail_stands_off_the_back(world, name, lift):
     as a bolster (the critic), and at lift 90 7 % of the neutral body's tail and 44 % of the heavy body's lay INSIDE the
     back (measured: -0.18 R and -1.36 R). Now a share of the lift is taken at the sacrocaudal joint and the rest by the
     first free caudals outside the body: beyond 2.5 R from its skin point no vertex of the tail is inside the body, and
-    the tail keeps at least 0.3 R off the skin."""
+    the tail keeps at least 0.3 R off the skin.
+
+    Round 6: the round-5 critic's mutant M2 (the round-2b lift constants back: no share at the joint, the bend from 1.5 R
+    INSIDE the body) lay as the bolster in the FIRST 2.5 R, which the far bound does not look at (it passed 5 - 6 of the 6
+    cases). The bolster is measured where it lies: every ring vertex between one and 2.5 base radii past the skin point
+    (the free tail just past the root's own flare) is outside the body (subdivided once) and off its skin. Measured: none
+    inside, the closest 0.08 - 0.23 R off; M2: 21 - 38 % of those vertices inside the back, up to 0.36 R deep
+    (``test_the_round_2b_lift_lies_on_the_back_and_fails_the_near_bound``)."""
+    nin_near, gap_near, nin_far, gap_far = _lift_clearance(world, name, lift)
+    assert nin_near == 0 and gap_near >= 0.0, (name, lift, nin_near, gap_near)          # the first 2.5 R: no bolster
+    assert nin_far == 0 and gap_far >= 0.3, (name, lift, nin_far, gap_far)              # beyond: well off the back
+
+
+def _lift_clearance(world, name, lift):
+    """``(near vertices inside the body, the near ring vertices' smallest signed distance to the body's skin in R, far
+    vertices inside, the far ones' smallest distance in R)``: the tail's ring vertices between 1 R and 2.5 R past its skin
+    point (near) and beyond (far) against the body subdivided once."""
     base, _, _ = world
     c, v, (p,), shaped = _build(world, name, controls={"lift": lift})
     m = p.model.model(p.controls)
@@ -206,11 +226,26 @@ def test_a_lifted_tail_stands_off_the_back(world, name, lift):
     n = m.p.ring_verts
     s = np.concatenate([np.repeat(m.s, n), np.full(len(skin.vertices) - len(m.s) * n, -1.0)])   # the cap rings / poles: not looked at
     far = skin.vertices[s > 2.5 * m.R]
+    near = skin.vertices[(s > 1.0 * m.R) & (s <= 2.5 * m.R)]
     body = quads_to_mesh(*subdivide_quads(*base.body_cage(shaped), 1))
-    assert not inside_closed(far, body).any()
+    assert len(near) >= 2 * n and len(far) >= 2 * n
     patch = CO.SkinPatch(body.vertices, body.faces, p.anchor, 14.0 * R)
-    gap = np.abs(patch.closest(far)[2]) / R
-    assert gap.min() >= 0.3, (name, lift, gap.min())
+    return (int(inside_closed(near, body).sum()), float(patch.closest(near)[2].min() / R),
+            int(inside_closed(far, body).sum()), float(np.abs(patch.closest(far)[2]).min() / R))
+
+
+@assets
+def test_the_round_2b_lift_lies_on_the_back_and_fails_the_near_bound(world, monkeypatch):
+    """Fail-first for the near bound above (the round-5 critic's M2): the round-2b lift (no share at the sacrocaudal joint,
+    the free bend from 1.5 R inside the body over 4 R) lays the first 2.5 R of a tail lifted 60 or 90 on the back: ring
+    vertices there are inside the body, on every body tested."""
+    monkeypatch.setattr(T, "LIFT_SHARE", 0.0)
+    monkeypatch.setattr(T, "LIFT_FROM", -1.5)
+    monkeypatch.setattr(T, "LIFT_LEN", 4.0)
+    for name in ("neutral", "heavy", "child"):
+        for lift in (60.0, 90.0):
+            nin, gap, _nf, _gf = _lift_clearance(world, name, lift)
+            assert nin > 0 and gap < 0.0, (name, lift, nin, gap)
 
 
 @assets

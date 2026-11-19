@@ -328,6 +328,12 @@ class JunctionSpec:
     skin where it is, because the spec holds the cleft itself with a ``keep``; ``smooth=0``: the
     tube displacement is not diffused over the cage). The spec that knows its own anatomy may
     use them, the generic ones do not.
+
+    ``stack`` (round 6): how this spec's displacement adds to the other specs' where they overlap. ``"sum"`` (the
+    default, and what every spec did before): added. ``"max"``: along its own direction at each vertex it adds only what
+    the others (summed, applied first) have not already moved the skin by, so where a neighbour's mass already raises the
+    skin, this one's does not stack on it (a tail's sacral rise beside extra legs' gluteal masses: summed, they passed the
+    move cap over the sacrum and the validity pass backed the midline off into a pit).
     """
 
     name: str
@@ -351,6 +357,7 @@ class JunctionSpec:
     conform: bool = True
     join_guard: bool = True
     shell: object = field(default=None, compare=False, repr=False)
+    stack: str = "sum"
 
     def __post_init__(self):
         pts = tuple(_vec(p) for p in self.points)
@@ -390,6 +397,8 @@ class JunctionSpec:
                 isinstance(self.silhouette, numbers.Real) and not isinstance(self.silhouette, bool)
                 and math.isfinite(self.silhouette) and self.silhouette >= 0):
             raise ValueError(f"silhouette must be None or a finite number >= 0, got {self.silhouette!r}")
+        if self.stack not in ("sum", "max"):
+            raise ValueError(f"stack must be 'sum' or 'max', got {self.stack!r}")
         if self.sharpness < 1.0:
             raise ValueError("sharpness must be >= 1")
         if self.pull > 1.0:
@@ -478,6 +487,8 @@ class JunctionSpec:
             d["join_guard"] = False
         if self.silhouette is not None:
             d["silhouette"] = self.silhouette
+        if self.stack != "sum":
+            d["stack"] = self.stack
         return d
 
     @classmethod
@@ -490,7 +501,7 @@ class JunctionSpec:
                    tuple(Keep.from_dict(k) for k in d.get("keep", ())), d.get("max_move"),
                    d.get("lead", DEFAULT_LEAD), d.get("owner"), d.get("tight_gap"), d.get("smooth"),
                    d.get("ownership", True), d.get("silhouette"), d.get("conform", True),
-                   d.get("join_guard", True))
+                   d.get("join_guard", True), stack=d.get("stack", "sum"))
 
     def digest(self) -> str:
         """A content hash (a cache key): equal specs have equal digests."""
@@ -1131,6 +1142,24 @@ def diffuse_displacement(cage_v, quads, disp, pinned=None, iterations=DIFFUSE_IT
 # the public function
 
 
+STACK_SOFT = 0.25           # the smoothing of a ``stack="max"`` spec's max, as a share of its own move at the vertex
+
+
+def _stack_max(others, d):
+    """What a ``stack="max"`` spec's displacement ``d`` adds to ``others`` (the displacement already there at the same
+    vertices): along ``d``'s own direction only what ``others`` has not covered, ``d`` scaled by
+    ``max(|d| - max(others . d/|d|, 0), 0) / |d|``, the max smoothed over ``STACK_SOFT`` of its own move about where the two
+    are equal (a hard max kinks the field there and the validity pass backs the skin off). Where ``others`` is 0, or moves
+    the skin across ``d`` only, that is ``d`` itself; it falls continuously to 0 as ``others`` covers it."""
+    mag = np.linalg.norm(d, axis=1)
+    safe = np.maximum(mag, _EPS)
+    r = np.maximum((others * d).sum(axis=1) / safe, 0.0) / safe      # how much of it the others cover, 0 .. (1 = all)
+    w = STACK_SOFT
+    # a soft clamp of r to [0, 1]: r itself up to 1 - w, a quadratic into 1 over [1 - w, 1 + w], 1 beyond (C1: no kink)
+    covered = np.where(r <= 1.0 - w, r, np.where(r >= 1.0 + w, 1.0, r - (r - (1.0 - w)) ** 2 / (4.0 * w)))
+    return d * (1.0 - covered)[:, None]
+
+
 def apply_junctions(base, verts, specs, info: dict | None = None, *,
                     min_area_ratio=MIN_AREA_RATIO, min_normal_dot=MIN_NORMAL_DOT,
                     max_area_growth=MAX_AREA_GROWTH, max_edge_growth=MAX_EDGE_GROWTH,
@@ -1229,8 +1258,12 @@ def apply_junctions(base, verts, specs, info: dict | None = None, *,
         total = np.zeros_like(cage_v)
         limit = 0.0
         for spec, idx, d, _join, _k in chosen:
-            total[idx] += d
+            if spec.stack == "sum":
+                total[idx] += d
             limit = max(limit, spec.move_limit())
+        for spec, idx, d, _join, _k in chosen:
+            if spec.stack == "max":
+                total[idx] += _stack_max(total[idx], d)
         mag = np.linalg.norm(total, axis=1)
         if limit > 0:
             over = mag > limit

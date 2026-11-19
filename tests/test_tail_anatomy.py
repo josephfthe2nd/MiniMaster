@@ -192,21 +192,46 @@ def test_the_body_side_muscles_are_closed_solids_with_their_own_shapes():
     body = vl[vl[:, 2] < m.sacral_apex()[2]]
     j = np.argmin(np.linalg.norm(body[:, None, :] - c[None], axis=2), axis=1)
     assert len(body) > 30 and (((body - c[j]) * nd[j]).sum(axis=1) < 0.0).mean() > 0.95
-    # the gluteal band: medial, oblique (its long axis points down and out), inside the reach
+    # the gluteus maximus (round 6: a broad sheet, not the round-4 leaf): lateral of the sacrum's border, its fibres running
+    # infero-laterally (insertion edge below and outside the origin edge), broad (its footprint 8 R_j^2 or more; the leaf was
+    # 2.1) and reaching toward the femur (3 R_j or more out), with a muscle's thickness, not a slab (``gluteal_thickness``)
     g = pieces["gluteus_maximus_l"].vertices
     k = m.Rj
-    assert np.abs(g[:, 1]).max() <= T.GLUTEAL_REACH * k + 1e-9 and g[:, 1].min() > 0.0
-    xy = g[:, :2] - g[:, :2].mean(axis=0)
-    axis = np.linalg.svd(xy, full_matrices=False)[2][0]
-    axis = axis if axis[1] > 0 else -axis
-    assert axis[0] < -0.4 and axis[1] > 0.4                                      # infero-lateral: down (-x) and out (+y)
-    ext = xy @ axis
-    assert np.ptp(ext) > 1.6 * np.ptp(xy @ np.array([-axis[1], axis[0]]))     # a band, longer than it is wide (not a ball)
+    nu, nv = T.SHEET_GRID
+    top = g[:nu * nv].reshape(nu, nv, 3)
+    fibre = (top[-1] - top[0]).mean(axis=0)
+    assert fibre[0] < -0.3 * np.linalg.norm(fibre) and fibre[1] > 0.6 * np.linalg.norm(fibre)     # down and out
+    assert g[:, 1].min() > 0.5 * k and g[:, 1].max() >= 3.0 * k
+    area = 0.0
+    for i in range(nu - 1):
+        for j in range(nv - 1):
+            e1, e2 = top[i + 1, j, :2] - top[i, j, :2], top[i, j + 1, :2] - top[i, j, :2]
+            area += abs(e1[0] * e2[1] - e1[1] * e2[0])                         # (the cell's footprint, a parallelogram)
+    assert area >= 8.0 * k * k, area / k ** 2
+    assert gluteal_thickness(m, pieces["gluteus_maximus_l"]) <= 0.75 * k
     # on the body side (z < 0: not in the tail) nothing is above the skin plane less one skin thickness (the flat skin)
     t = float(m.skin_thickness(0.0))
     for name, mesh in pieces.items():
         v = mesh.vertices
         assert v[v[:, 2] <= 0.0][:, 2].max() <= -t + 1e-6, name
+
+
+def gluteal_thickness(m, mesh):
+    """The gluteus sheet's largest thickness (its top grid to its bottom grid), on a flat skin (no mound rise): a muscle's
+    (measured 0.5 R_j), not a slab (the round-5 critic's M4, three times as thick, passed every test of round 4)."""
+    nu, nv = T.SHEET_GRID
+    v = mesh.vertices
+    top = v[:nu * nv].reshape(nu, nv, 3)
+    bottom = top.copy()
+    bottom[1:-1, 1:-1] = v[nu * nv:].reshape(nu - 2, nv - 2, 3)
+    return float(np.linalg.norm(top - bottom, axis=2).max())
+
+
+def test_a_slab_three_times_as_thick_is_not_a_gluteus(monkeypatch):
+    """Fail-first for the thickness bound (the round-5 critic's M4: the sheet three times as thick passed every muscle test)."""
+    monkeypatch.setattr(T, "GLUTEUS", dict(T.GLUTEUS, thick=3.0 * T.GLUTEUS["thick"]))
+    m = T.TailModel(T.TailParams())
+    assert gluteal_thickness(m, m.gluteal(T.RootSkin.flat(m.R), 1.0)) > 0.75 * m.Rj
 
 
 def test_a_lifted_tail_takes_the_wedge_back_in_the_muscle_as_in_the_mound():
@@ -238,63 +263,10 @@ def test_the_muscle_layer_is_the_sleeve_and_the_body_side_muscles_and_its_colour
     assert mesh.volume() > m.muscle().volume() + 0.9 * sum(p.volume() for p in pieces) - 1e-9
 
 
-def _axis(points):
-    """The unit principal axis of a point set."""
-    P = np.asarray(points) - np.mean(points, axis=0)
-    return np.linalg.svd(P, full_matrices=False)[2][0]
-
-
-def sacrocaudal_angles(m, n_sacrum_rings=11, ring=16):
-    """``(sacrocaudal, chord, intercaudal)`` measured on the MESHES: the angle (degrees) between the axis of the sacrum's
-    distal fifth (its last three ring centroids) and the centrum of Cd1, the angle of the sacrum's chord (base -> apex) below the
-    tail's axis, and the angles between consecutive centra of the first seven caudals."""
-    from minimaster.character import junction_checks as JC
-    sac = m.sacrum().vertices[:n_sacrum_rings * ring].reshape(n_sacrum_rings, ring, 3).mean(axis=1)   # base ... apex
-    d_sac = sac[-1] - sac[-3]
-    d_sac /= np.linalg.norm(d_sac)
-    chain = m.bone_chain()
-    comp = JC.face_components(chain.faces, len(chain.vertices))
-    pieces = [np.unique(chain.faces[comp == lab]) for lab in np.unique(comp)]
-    big = max(len(v) for v in pieces)
-    centra = sorted((v for v in pieces if len(v) == big),
-                    key=lambda v: float(np.linalg.norm(chain.vertices[v].mean(axis=0) - sac[-1])))
-    axes = []
-    for v in centra[:7]:
-        a = _axis(chain.vertices[v])
-        axes.append(a if a @ (chain.vertices[v].mean(axis=0) - sac[-1]) > 0 else -a)
-
-    def ang(a, b):
-        return float(np.degrees(np.arccos(np.clip(a @ b, -1.0, 1.0))))
-    chord = sac[-1] - sac[0]
-    chord_deg = float(np.degrees(np.arctan2(-chord[0], chord[2])))
-    return ang(d_sac, axes[0]), chord_deg, [ang(axes[i], axes[i + 1]) for i in range(len(axes) - 1)]
-
-
-@pytest.mark.parametrize("lift", [0.0, 60.0, 90.0, -60.0])
-def test_the_sacrum_is_a_tilted_curved_wedge_that_cd1_continues(lift):
-    """Round 3 built the sacrum as a vertical slab up the back under the skin (its axis 88 degrees below horizontal) with the
-    first caudal leaving its lower end at 104 degrees: a branch, not the continuation of the spine. The references say the
-    caudal column continues the sacral curve (the cat plate within ~5 degrees, Gray97's coccyx continues the sacrum;
-    TAKEAWAYS section 3: 0 - 20 degrees). Measured on the meshes: the sacrum is a curved wedge whose base lies UP the back and
-    DEEP (anterior-superior) and whose apex carries Cd1 on the tail's axis; Cd1's centrum continues the axis of the
-    sacrum's distal fifth within 20 degrees at rest; when the tail lifts, the sacrocaudal joint takes a share bounded by
-    its range and no joint of the first caudals bends more than 30 degrees (the sacrum itself does not move)."""
-    m = model(lift=lift)
-    sac = m.sacrum()
-    assert sac.is_watertight and sac.volume() > 0
-    sc, chord, inter = sacrocaudal_angles(m)
-    if lift == 0.0:
-        assert 2.0 <= sc <= 20.0, sc
-    else:
-        assert sc <= T.SACRUM["apex_deg"] + max(abs(x) for x in T.LIFT_JOINT) + 3.0, (lift, sc)
-    assert 30.0 <= chord <= 65.0, chord                       # the chord leans: neither a vertical slab (90) nor the tail's line
-    assert max(inter) <= 30.0, (lift, inter)                  # (the raised lemur: ~100 degrees over the first four joints)
-    v = sac.vertices[:11 * 16].reshape(11, 16, 3).mean(axis=1)
-    base, apex = v[0], v[-1]
-    Rs = m.Rs
-    assert base[0] > apex[0] + 1.0 * Rs and base[2] < apex[2] - 1.0 * Rs        # base up the back and deep
-    assert np.allclose(model().sacrum().vertices, sac.vertices)                  # the pose does not move it
-    assert np.linalg.norm(apex - np.array([0.0, 0.0, m.joint_s()])) < 0.25 * m.R   # the apex is at the sacrocaudal joint
+# (round 6: the round-4 sacrum test, ``test_the_sacrum_is_a_tilted_curved_wedge_that_cd1_continues``, bounded the sacrum only
+# against the TAIL's axis and is superseded by tests/test_tail_bone.py, which bounds it against the body: tilt from the
+# body's horizontal, anterior extent as a share of the body's depth, sign of the curve, inside the body; Cd1 against the
+# apex at rest and lifted)
 
 
 def test_a_mass_is_the_mound_it_makes_in_the_spec_and_mirrors():
@@ -615,3 +587,58 @@ def test_the_tail_prints_it_is_welded_and_its_tip_is_above_the_floor():
         line = next(l for l in text.splitlines() if "tail-1" in l and "buried" in l)
         buried = float(line.split("% buried")[0].split()[-1])
         assert 25.0 <= buried <= 65.0, line
+
+
+def sleeve_origin(m):
+    """``(the buried end ring's distance from Cd1's root, its mean radius over the sleeve's ring at the skin point)`` of
+    the muscle sleeve (``m.muscle()``: ring-major, the buried end first)."""
+    n = m.p.ring_verts
+    V = m.muscle().vertices
+    first = V[:n]
+    at_skin = int(np.argmin(np.abs(m.s)))
+    ring0 = V[at_skin * n:(at_skin + 1) * n]
+    r_first = np.linalg.norm(first - first.mean(axis=0), axis=1).mean()
+    r_skin = np.linalg.norm(ring0 - ring0.mean(axis=0), axis=1).mean()
+    root = m.bone_centre(m.bone_path()[0][0])
+    return float(np.linalg.norm(first.mean(axis=0) - root) / m.R), float(r_first / r_skin)
+
+
+@pytest.mark.parametrize("kw", [{}, dict(elevation=12.0), dict(elevation=12.0, lift=60.0), dict(base_radius=0.7)])
+def test_the_sleeve_arises_on_the_sacral_apex_not_as_a_pipe_end(kw):
+    """The round-5 critic: the caudal muscle sleeve ended inside the body as a flat, squared-off pipe end in front of the
+    sacrum. Round 6: inside the body it follows the caudal column and narrows to its origin at the sacral apex: the buried
+    end ring is centred within 0.3 R of Cd1's root (round 5: on the tail's axis 1.75 R deep, ~1 R from it) and is at most
+    0.7 of the sleeve's section at the skin point (round 5: all of it)."""
+    m = model(**kw)
+    dist, ratio = sleeve_origin(m)
+    assert dist <= 0.3 and ratio <= 0.7, (kw, dist, ratio)
+
+
+def test_a_sleeve_without_its_origin_is_a_pipe_and_fails(monkeypatch):
+    """Fail-first: the sleeve's buried part left along the tail's axis (no ``_sleeve_origin``)."""
+    monkeypatch.setattr(T.TailModel, "_sleeve_origin", lambda self, s, ring: ring)
+    dist, ratio = sleeve_origin(model(elevation=12.0))
+    assert dist > 0.3 or ratio > 0.7, (dist, ratio)
+
+
+@pytest.mark.parametrize("kw", [dict(base_radius=0.1, elevation=12.0), dict(base_radius=0.15, elevation=12.0, lift=40.0),
+                                dict(base_radius=0.2, elevation=5.0), dict(base_radius=0.1, elevation=18.0, lift=-30.0)])
+def test_a_thin_tails_column_is_inside_its_skin_past_the_root(kw):
+    """The sacrum is the body's (0.8 R_s above the root's skin point: 3 R of a tail of 0.1), so a thin tail's caudal column
+    must have joined its axis by the skin point (``chain_join`` shrinks with R / R_s): past the skin point every vertex of
+    the column is inside the thin tail's skin. (Joined 2.5 R_s out like a thick tail's, 0.7 - 1.3 % of them stood out of
+    it: ``test_a_thin_tails_column_joined_late_stands_out``.) Inside the body the body's skin is the envelope
+    (tests/test_tail_layers_in_skin.py)."""
+    m = model(**kw)
+    bone = m.bone_chain().vertices
+    free = bone[:, 2] >= 0.0
+    assert free.sum() > 100 and inside(bone[free], m.skin()).all(), kw
+
+
+def test_a_thin_tails_column_joined_late_stands_out(monkeypatch):
+    """Fail-first: the join at 2.5 x min(R, R_s) whatever the tail's thinness."""
+    monkeypatch.setattr(T.TailModel, "chain_join", lambda self: T.CHAIN_JOIN * min(self.R, self.Rs))
+    m = model(base_radius=0.1, elevation=12.0)
+    bone = m.bone_chain().vertices
+    free = bone[:, 2] >= 0.0
+    assert not inside(bone[free], m.skin()).all()

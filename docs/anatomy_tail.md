@@ -591,3 +591,218 @@ Every saved tail document still loads; none is rewritten. What renders different
 * unchanged: the tail at rest, its size, its anchor, the junction's tube and fillet, the collar's profile, the migration of the
   first tails' records and of `left` / `right` / `both` side records (one midline tail with a warning:
   `test_an_old_document_with_a_tail_pair_loads_builds_one_midline_tail_and_saves_unchanged`).
+
+## 11. Round 6: a human sacrum the tail grows from, the gluteus as a sheet, ranges that hold, a neighbour's masses
+
+The round-5 critic (verdict "revise": bone 3, muscle 4, skin 6) measured the round-4 bone as **a quadruped's horizontal sacrum
+driven through a human pelvis**: its axis 28 - 40 degrees above the horizontal (a standing human's is about 55 - 60), its
+anterior end at 73 % of the body's depth from the back (through the pelvic cavity at the height of the pubis), and its curve
+reversed (concave dorsally). Round 4 had bought the 16-degree sacrocaudal continuity by laying the sacrum along the tail.
+The critic also found the "gluteus maximus" to be a leaf 1 R_j long, the dorsalis strands two knobs at the root, the sleeve
+ending in a flat pipe end, the UI maxima making monsters (base radius 1.2 - 2.0 a cone over the buttocks, flare 2 a plate,
+crest 0.5 - 1.5 a V tooth), a lift test that could not fail, and (the integration critic, B-I1) a pit above the root with extra
+legs. The seam itself (collar, level 0, the bare root) is the weld track's and is not in this section.
+
+Code: `tailrig.py` (`SACRUM`, `sacral_angle`, `TailModel.sacral_axis` / `sacral_apex` / `body_vector` / `bone_path` /
+`chain_join` / `bone_frames` / `sacrum_dorsum` / `_sleeve_origin` / `crest_height` / `flare_length` / `flare`, `_blend_path`,
+`PlacedTail.sacrum_shift`, `DORSALIS`, `GLUTEUS`, `STACK`), `kinds.TAIL_MAX_RADIUS` (the `base_radius` range), one optional
+field of the core (`JunctionSpec.stack`, `junction._stack_max`). Tests: `tests/test_tail_bone.py` and
+`tests/test_tail_ranges.py` (new), `test_tail_layers_in_skin.py`, `test_tail_anatomy.py`, `test_tail_junction.py`.
+
+### The bone: a human sacrum, its lowest segments turning into the tail
+
+![Gray 111 and Gray97 (front to the left) beside the bone layer, cut, side: round 5, round 6, round 6 lifted 90](images/tail_r6_bone_refs.png)
+
+* **The sacrum is set in the BODY's sagittal plane**, not along the tail: `sacral_angle(u)` gives its axis (base -> apex) in
+  degrees below the body's horizontal, pointing back: 42 at the base, steepening to 74 at 40 % of the length from the apex
+  (the upper sacrum, concave anteriorly), then turning back to 45 at the apex. The local frame's horizontal is the body's
+  rotated by the tail axis' own elevation (`body_vector`; the kind hands the model the elevation for a midline tail). The apex
+  lies (0.55, 0.80) R_s forward and up from the root's skin point: just above the top of the natal cleft, under the skin of
+  the sacral triangle. Length 2.3 R_s (~11 cm on the neutral body), half widths 0.36 -> 1.25 R_s and half depths 0.17 -> 0.62
+  R_s growing over the upper sacrum (`upper`: the body, the alae and the auricular surfaces are deep, the lower half a narrow
+  strip, Gray97), the dorsal side half as deep as the ventral one (`SACRUM_DORSAL`: the bulk is in front; behind are the
+  laminae and the median crest under 1 - 2 cm of tissue).
+* **Seated under the body's own skin** (`PlacedTail.sacrum_shift`): measured once per placed tail on the morphed cage (before
+  any junction: a document with the junction off has that skin), the sacrum moves toward the front until its dorsal surface
+  (`sacrum_dorsum`: the crest and the alae's dorsal edges) lies `SACRUM_CLEAR` = 0.25 R_s under it: 0.02 (neutral) to 0.18
+  units (female), 12 - 19 ms. Without it the first round-6 sacrum put 7 - 18 % of its vertices outside the female, short and
+  slim bodies.
+* **The caudal column has its own path** (`bone_path`): Cd1 leaves the sacral apex along the apex's axis (turned
+  `CD1_TURN` = 2 degrees toward the tail), and the first caudals bend from there into the tail's own axis, which they join
+  `CHAIN_JOIN` = 2.5 x min(R, R_s) past the skin point (`chain_join`; less on a tail thinner than the body's sacrum, whose
+  column must be inside its narrow skin by the skin point). The seating moves the sacrum at most `SACRUM_SHIFT_MAX` = 0.6 R_s.
+Between the two ends the direction turns by a smoothstep of the
+  arc length (`_blend_path`: no turn at either end, the most in the middle), its length the one that lands closest, the
+  remainder taken up by a smooth shift. From the join on the column IS the skin's path; the pose moves the join, never the
+  sacrum or Cd1's root, so a lifted tail bends at the sacrocaudal and first caudal joints (the raised lemur,
+  tail/cm_Lemur_catta_skelet_1782: ~100 degrees there).
+
+Measured on the meshes (`tests/test_tail_bone.py`; the critic's numbers for round 5 in brackets):
+
+| | round 6 | round 5 |
+| --- | --- | --- |
+| chord below the body's horizontal (7 bodies) | 57 degrees | 33 (principal axis 28 - 40) |
+| anterior end, share of the body's depth from the back (the unmoulded body, at that height) | 38 - 45 % (tall 45) | 68 - 73 % |
+| dorsal sagitta of the upper sacrum / ventral of the whole (in sacral lengths) | +0.045 / 0.024 (concave anteriorly) | 0 / 0.16 (reversed) |
+| inside the body (true ray parity, all 7 bodies) | 100 % | (100 %, through the pelvic cavity) |
+| Cd1 against the axis of the sacrum's distal fifth (elevations 5 / 11.7 / 18, lift 0 / 60 / 90 / -60) | 14 - 19.5 degrees | 16 (with the sacrum laid flat) |
+| largest joint of the first seven caudals: rest / lifted 60 - 90 | 19 - 27 / up to 51 | |
+
+By the round-5 critic's own script (`r5_out/tail/sac.py`: the first principal axis of all sacrum vertices; depth from a
+|x| < 0.25 slab of the SHAPED body, whose back includes the skin the junction draws up the tail's root): principal axis
+**61 degrees** on neutral, heavy, child and slim_f (round 5: 33 / 28 / 37 / 40), anterior tip at **52 - 59 %** of that depth
+from the back (round 5: 72 - 73 %). The table's 38 - 45 % uses the body's own depth at that height.
+
+References, side by side above: **Gray 111** (`tail/cm_Gray_111_Vertebral_column_coloured`; I measured the chord S1 -> apex on
+the coloured column at 60 - 62 degrees, the pelvic face concave), **Gray97** (`tail/cm_Gray97`: the wedge, deep upper body and
+alae, narrow lower strip), TAKEAWAYS section 3 ("start the tail axis within about 0 - 20 deg of the local sacral tangent";
+"do not leave at the quadruped's horizontal lumbar line"), the lemur plate for the bend.
+
+Honest: **the apex turning back is a design inference.** The human coccyx turns forward (57 degrees, Gray97); a tail must
+leave pointing back from an apex that points down. The geometry decides where the bend can go: an apex 0.3 units above the
+tail's axis that leaves 70 - 80 degrees below the horizontal must finish an 80-degree turn within ~0.4 units, one or two
+vertebrae (the first tries: Cd1 45 - 56 degrees off the apex). So the lowest sacral segments extend (the S), the column
+leaves at 45 degrees and the turn is spread over Cd1 - Cd4. A thin tail (R 0.1 - 0.2) joins its axis by the skin point and
+bends more sharply inside the body (up to 66 degrees at one joint at R 0.1). The column is not exactly on the tail's
+centreline for its first 2.5 R past the skin point (up to 0.3 R above it): inside the muscle sleeve, not visible. **A tail
+placed off the midline** (`anchor.midline: false`, or clicked onto the side of the body) has no body-frame sacrum: its
+frame is not the body's sagittal plane (it points mostly sideways), so the sacrum laid out in it lies beside the hip; with
+the seating capped its layers expose 25 (neutral) and 68 (heavy) bone vertices and 48 / 203 muscle vertices outside the
+skin, against 12 / 39 and 0 / 78 in round 5. The printed skin is not affected; the midline tail (every preset) is.
+
+### The muscles: the gluteus maximus as a sheet, the dorsal band, the sleeve's origin
+
+![references (gluteus maximus dissections wc_j42auhe2, wc_kpq8pswh; the kangaroo tail model) above the bone and muscle layers without the body: round 5, round 6](images/tail_r6_muscles.png)
+
+* **Gluteus maximus** (`GLUTEUS`): a broad quadrilateral sheet (`tail/wc_j42auhe2`, `wc_kpq8pswh`), its origin along the
+  lateral border of the sacrum from the iliac crest's level (3.4, 1.15 R_j) down past the root to the coccyx (-1.3, 0.65), its
+  insertion toward the femur, the iliotibial tract over the greater trochanter (1.4, 3.7) down to the gluteal tuberosity
+  (-2.0, 3.1): fibres infero-lateral at ~40 degrees, 0.5 R_j thick in the middle (plus the gluteal mound's rise where the
+  mound is: the mound lies on the sheet and is its bulk), thinning to every border, seven fibre bundles. Grid 19 x 27. The
+  ceiling (one skin thickness under every level of the moulded skin) is spread over the grid before the exact clip, so the
+  sheet goes down as a surface, not point by point into a jagged border. Footprint 8 R_j^2 or more (the round-4 leaf: 2.1),
+  thickness at most 0.75 R_j (the critic's M4, three times as thick, now fails).
+* **Sacrocaudalis dorsalis with the caudal multifidus** (`DORSALIS`): a flat band lying ON the dorsal face of the sacrum,
+  covering its side (0.45 of the sacrum's half width each side of the crest), thickening toward the apex (0.25 -> 0.6 R_j plus
+  the sacral wedge's rise there, at most 0.85 of the room to the skin), then into the tail's dorsal belly. From behind the two
+  bands make the triangle over the sacrum; round 4's strands turned to stand toward the skin and, on the steep sacrum, stood
+  up as two blades.
+* **The sleeve's buried end** (`_sleeve_origin`): inside the body the caudal muscle sleeve follows the caudal column (its rings
+  turn to the column's frames) and narrows to 0.6 of its section at the sacral apex (`SLEEVE_ORIGIN`), kept 0.3 R_s under the
+  body's skin height field up the back (`SLEEVE_UNDER`), instead of running on as a straight pipe to a flat end in front of
+  the sacrum. Same rings, same vertex count. In the free tail bone lies in muscle lies in skin as before
+  (`test_every_layer_is_inside_the_next_one`); inside the body the body's skin is the envelope (the true signed-distance test,
+  now with the junction off as well: 0 exposed vertices).
+* Honest: seen from the side the dorsal band is a thin plate standing on the steep sacrum (it is thin where the sacrum is
+  seated only 0.25 R_s under the skin; a real multifidus is 2 - 3 cm thick there, which would push the sacrum 0.1 - 0.2 units
+  forward); the sheet's lower medial corner curls slightly near the cleft seen from below; no caudofemoralis (a femur-bound
+  band deep to the gluteus) is drawn.
+
+### Ranges that make no monsters
+
+![round 5 against round 6 at the UI maxima, no collar, flat-shaded: crest 1.5, flare 2, the thickest tail](images/tail_r6_ranges.png)
+
+* **Crest** (0 - 1.5): the ridge rises out of the root over `CREST_RISE` = 2.5 R (`crest_height`) instead of standing at full
+  height at the skin point, where it cut through the moulded back as a V tooth with a sawtooth side contour; it is 0 inside
+  the body, at most 0.10 of its height within 0.5 R of the skin point (round 5: all of it), 0.7 of it at its highest, and
+  rounder across (`CREST_WIDTH` 0.42 radians: three vertices of a 24-ring, not one).
+* **Flare** (0 - 2): the trumpet's decay length grows with the flare (`flare_length`: at least `FLARE_LAMBDA` 0.9 R, longer so
+  that its own wall falls at most `FLARE_SLOPE` 0.65; the skin's at most 0.8 with the taper), and the radius at the skin point
+  saturates at `ROOT_CAP` = 0.9 (neutral-body units: `flare`). Round 5's flare 2 fell 2.2 radii per length, a plate. The
+  default tail (0.45, 0.35) is unchanged: 1.35 R at the skin, easing over 0.9 R.
+* **Base radius** (0.1 - **0.9**, was 2.0): the range ends at `ROOT_CAP` (`kinds.TAIL_MAX_RADIUS`). A saved document with a
+  larger value is built at 0.9 with a note in the build report (`Kind.clean`); typing a larger value is an error. At the UI
+  maximum (0.9 and flare 2) the root reaches 0.85 - 0.89 of the way to the hip joints (the MakeHuman `joint-l/r-upper-leg`)
+  on neutral, heavy, child and female (the default 0.58 - 0.61); round 5's 1.2 reached 1.56 of it and its 2.0 2.6: a cone
+  over both buttocks. With the root under the cap the junction now moulds it (round 5's 1.2 was too thick for the part and was
+  left as a rimmed cone).
+
+### A lifted tail stands off the back: the test that could not fail
+
+`test_a_lifted_tail_stands_off_the_back` looked only beyond 2.5 R of the skin point; the round-2b lift (the critic's M2: no share
+at the joint, the bend from 1.5 R inside the body) lays the first 2.5 R on the back as a bolster and passed 5 - 6 of its 6
+cases. Now every ring vertex between 1 R and 2.5 R past the skin point must be outside the body (subdivided once) and off its
+skin (measured: none inside, the closest 0.08 - 0.23 R off), beyond as before. M2: 21 - 38 % of those vertices inside the
+back, up to 0.36 R deep: all 6 cases fail (`test_the_round_2b_lift_lies_on_the_back_and_fails_the_near_bound`).
+
+### A neighbour's masses over the sacrum: no pit
+
+![tail with extra legs, level 1, no collar: round 5 (the pit above the root) and round 6; smooth and flat-shaded](images/tail_r6_legs.png)
+
+With `harvest:preset=extra_legs` the legs' gluteal masses raise the whole sacrum by 0.2 - 0.37 units; the tail's wedge was
+summed on top, the sum passed the move cap over the sacrum and the validity pass backed the skin off at the root: along the
+midline the rise was lower just above the root (0.71 - 0.81 R_j) than 1.5 R_j up (0.97 - 1.01): a hump with a pit under it,
+crumpled at the edges. The tail's spec now asks the core to stack it by **max** along its own direction
+(`JunctionSpec.stack = "max"`, `tailrig.STACK`; a new optional field, default `"sum"` and not serialised, so every other spec
+and its digest are unchanged; a soft clamp, so the field has no kink): the tail adds only what the legs have not already
+raised. The midline rise is the largest at the root again on neutral, child and slim_f (as with the tail alone) and 0.07 R_j
+under its largest on the tall body (summed: 0.19 - 0.26); no new visible self-crossing; the validity pass backs off fewer
+vertices (neutral 12 against 16 summed, tall 35 against 42). **Not on the heavy body**: there the legs' domes dominate the
+picture either way (a V valley between them above the root, flat-shaded the same with sum and max), and max backs off MORE
+(46 vertices against 37, 17 validity rounds against 10). The integration critic's count of
+new crossings on the cage (`r5_out/integration/xloc.py`, all crossings including those hidden in the shells): 9 / 13 / 7 / 9
+-> 6 / 10 / 7 / 6 on neutral / child / slim_f / tall (round 3: 6 / 6 / 0 / 6: child and slim_f are not back to it). The
+heavy body's tail alone already rises up the back between 0.75 and 2.5 R_j, so the pit test leaves it out.
+
+### Tests and mutants (round 6)
+
+New: `tests/test_tail_bone.py` (the sacrum against the body on 7 bodies, the round-4 sacrum failing it, Cd1 and the joints at 3
+elevations x 4 lifts, a column leaving along the tail failing it), `tests/test_tail_ranges.py` (crest x 3 and its round-5
+form failing, flare x 12 and its round-5 form failing, the thickest root on 4 bodies, the saved-document clamp, the uncapped
+root failing), the near bound of the lifted tail and M2, the pit with extra legs x 4 and its summed form failing, the
+stacking field itself, the gluteus' thickness and M4. Each new behaviour was checked against the code without it (the
+monkeypatched fail-first tests run in the suite).
+
+Existing assertions changed (each states why in its docstring or comment):
+
+* `test_the_sacrum_is_a_tilted_curved_wedge_that_cd1_continues` (removed): it bounded the sacrum only against the tail's axis
+  (chord 30 - 65 degrees from it, base deeper than the apex) and asserted the apex ON the tail's axis at the joint, which is
+  what round 6 changes on purpose; superseded by the body-referenced tests above, which are stricter about the sacrum. ONE
+  bound is weaker: it allowed no joint of the first seven caudals more than 30 degrees at any lift; the new test allows 30 at
+  rest and 55 lifted 60 - 90 (measured up to 51 on the steepest root), because the column now really bends out of a sacrum
+  that points down (round 5's column was straight because its sacrum lay along the tail).
+* `test_the_body_side_muscles_are_closed_solids_with_their_own_shapes`: the gluteal band was asserted inside
+  `GLUTEAL_REACH` (2.5 R_j) with its principal axis infero-lateral; the sheet reaches toward the femur on purpose, so it is
+  asserted broad (>= 8 R_j^2), reaching >= 3 R_j out, its fibres (origin -> insertion) down and out, and no thicker than
+  0.75 R_j.
+* `test_the_spec_and_the_muscles_are_built_from_the_same_masses`: "the band lies inside the mass's ellipse" became "the mass's
+  ellipse lies on the sheet, and the sheet is thicker where the mound is" (the sheet is the whole muscle, the mound its part
+  beside the root).
+* `test_the_junctions_sizes_stop_growing_at_r_max`: a 2.0 model's tube root was 3.2 x the 0.62 one's; the flare now saturates
+  at `ROOT_CAP`, so it is 2.4 x (asserted > 2.2: the tube still keeps the tail's own radius).
+* `test_a_thick_tails_cage_displacement_is_bounded_and_untorn`: the cases 1.2 / 1.5 / 2.0 / 1.0 + flare 1.5 are now 0.9 / 0.9 at
+  length 14 / 0.9 + flare 2 / 0.6 + flare 2 (the range ends at 0.9; a larger record is built at 0.9).
+* `test_a_lifted_tail_stands_off_the_back`: stricter (the near bound added).
+* `tests/test_collar_seam.py` (the collar track's file; 11 lines added, 5 removed): its two `tail:base_radius=1.2` cases are
+  0.9, since typing more than 0.9 is an error now; `_shaped` takes record `params` (as a saved document has them); the
+  "a collar that cannot be built says so" test re-widens the range to the old 2.0 by monkeypatch, since a 0.9 tail's collar
+  is built and the test would only skip.
+
+### Document changes (round 6)
+
+Every saved tail document still loads; none is rewritten. What renders differently:
+
+* the bone and muscle layers (`--layers`, the ecorche): the new sacrum, column, gluteus sheet, dorsal band and sleeve origin;
+* `base_radius` above 0.9 (only reachable by an old document or a hand-edited one): built at 0.9 with a note. Between the old
+  default flare's cap (`ROOT_CAP / R - 1`) and the record's flare, the flare saturates: a tail of base radius above 0.67 with
+  the default flare, or a flare above 1 on the default radius, has a narrower root than before (at most 0.9 at the skin);
+* `flare` above 0.58 eases out over a longer trumpet (`FLARE_SLOPE`);
+* `crest` > 0: the ridge rises out of the root instead of standing at full height on the back, is rounder across (three
+  vertices of a 24-ring, not one) and lower: at its highest 0.70 of the record's value (round 5: all of it, at the skin
+  point);
+* a tail beside another appendage whose junction raises the sacrum: the skin over the sacrum is the larger of the two
+  rises, not their sum. Measured against e7e16b8 (fresh process per figure, the body cage): extra legs up to 0.31 - 0.38 units
+  on 98 - 112 vertices (intended); a wing (membrane or feathered) or the full creature up to 0.004 - 0.008 units on 12 - 76
+  vertices; lower or upper arms unchanged;
+* unchanged: the default tail's printed skin and the body moulded around it, measured against e7e16b8 on neutral, heavy and
+  child, at rest and lifted 60 (identical to 1e-15; on the child 2 vertices by 1.5e-5 units, floating-point noise through
+  the validity pass), its anchor, pose and junction tube; base radius 0.62 likewise.
+
+### Timings (this shared 4-core machine)
+
+Best of 3 - 7 runs on the neutral body, round 6 against e7e16b8 (the machine was shared with other builders, load 5 - 9):
+instantiating the tail and building its skin are the same code path (10 vs 5 ms by the clock, 0.20 vs 0.37 s for 20 under
+the profiler: noise); the junction 31 vs 23 ms; a new pose's bone 22 vs 34 ms; the first `layers()` of a placed tail (the
+seating shift, the root skin, the muscles, the bone: what the ecorche asks for, never the print or the lab's final render)
+1.38 vs 0.95 s (the broader gluteus' 19 x 27 grid with its smoothed ceiling, the strands' eight clip rounds). The seating
+shift alone: 12 - 19 ms once per placed tail. The stacking field: one dot product per vertex the tail moves.

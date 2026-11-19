@@ -210,6 +210,7 @@ HARVEST_NECK = 0.5       # the cut end keeps this much of the limb's width (limb
 # and so has the horn (its root collar meets the sheath tangentially and a 16-gon's corners poked through it).
 TAIL_RING_VERTS = 24
 TAIL_COLLAR = dict(width=1.8, height=0.7, falloff=3.0)    # the tail's root collar (collar.CollarProfile): see TailKind.collar_profile
+TAIL_MAX_RADIUS = 0.9                       # the base radius's range stops here (round 6; it was 2.0): tailrig.ROOT_CAP
 TAIL_COLLAR_MAX_R = 1.2                     # ... none on a tail thicker than this (neutral-body units: wider than the sacrum)
 # round 6: the weld of a tail's root (weld.WeldProfile): the full reach on the back, a crease underneath (the natal
 # cleft stays open: at the full reach underneath the two cheeks were pulled up onto the tail and crossed)
@@ -890,8 +891,9 @@ class TailKind(_LoftKind):
     params = (
         ParamSpec("length", "Length", "float", 6.0, 1.0, 20.0, 0.1,
                   help="on the neutral body; scaled with the body's height"),
-        ParamSpec("base_radius", "Base radius", "float", 0.45, 0.1, 2.0, 0.01,
-                  help="on the neutral body; scaled with the body's height"),
+        ParamSpec("base_radius", "Base radius", "float", 0.45, 0.1, TAIL_MAX_RADIUS, 0.01,
+                  help="on the neutral body; scaled with the body's height. At most 0.9: a thicker root covers "
+                       "both buttocks and the cleft (a saved larger value is built at 0.9, with a note)"),
         ParamSpec("segments", "Segments", "int", 12, 4, 40, 1),
         ParamSpec("ring_verts", "Ring vertices", "int", TAIL_RING_VERTS, 6, 24, 1),
         ParamSpec("curl", "Curl", "float", 0.55, -2.0, 2.0, 0.01,
@@ -903,7 +905,8 @@ class TailKind(_LoftKind):
                        "the skin allows (0.03 units)"),
         ParamSpec("flare", "Root flare", "float", TAIL_FLARE, 0.0, 2.0, 0.05,
                   help="the trumpet where the caudal muscles spread onto the sacrum: the radius at the "
-                       "skin is 1 + flare times the base radius, easing out over about two radii "
+                       "skin is 1 + flare times the base radius (no more than 0.9 on the neutral body: what a "
+                       "pelvis carries), easing out over about two radii, longer for a big flare "
                        "(0 = a straight tube)"),
         fillet_param(TAIL_FILLET),
         ParamSpec("collar", "Root collar", "float", 1.0, 0.0, 2.0, 0.05,
