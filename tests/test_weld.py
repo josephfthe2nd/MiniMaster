@@ -18,6 +18,7 @@ e7e16b8 and a welded skin alike):
 """
 
 import json
+import math
 import subprocess
 import sys
 import time
@@ -807,3 +808,66 @@ def test_the_fillet_is_at_least_as_wide_as_the_mesh_can_draw(sphere):
         warnings.simplefilter("error")
         assert np.array_equal(W.weld_vertices(V, F, [far]), V)
 
+
+
+# --------------------------------------------------------------------------
+# round 7: a wall that lies on the skin
+
+
+def _dome(sphere_radius=6.0, rho=2.0, degrees=70.0):
+    """A ball of radius ``rho`` rising out of the sphere ``degrees`` steep all round its edge (the angle between the
+    two surfaces where they meet): the wall, the centre of its foot, the foot's radius, the ball's height."""
+    zc = math.sqrt(sphere_radius ** 2 + rho ** 2 - 2.0 * sphere_radius * rho * math.cos(math.radians(degrees)))
+    v, f = _sphere(levels=4, radius=rho)
+    wall = CO.outward(Mesh(v + np.array([0.0, 0.0, zc]), f))
+    h = (sphere_radius ** 2 - rho ** 2 + zc ** 2) / (2.0 * zc)
+    return wall, np.array([0.0, 0.0, sphere_radius]), math.sqrt(max(sphere_radius ** 2 - h * h, 0.0)), zc
+
+
+def test_a_wall_lying_on_the_skin_is_not_welded(sphere):
+    """For a kind that says its wall lies on the skin somewhere (``WeldProfile.lid``; the fan arms' is ``LID_COS``,
+    21 degrees: the skirt of their dome on the shoulder): where it does, the two surfaces are tangent already.  Welded all the same, the skin there -- a hair over the wall here, a hair
+    under it there -- made crossing slivers, the guard cut them and their surroundings out, and the root was left
+    bare: every fan arm that would not weld folded where its dome lies on the shoulder.  A dome that stands 70 degrees
+    off the skin is welded all round; one that lies on it at 15 is left alone, without a warning."""
+    V, F = sphere
+    lidded = W.WeldProfile(lid=W.LID_COS)
+    wall, centre, radius, zc = _dome(degrees=70.0)
+    axis = np.array([[0.0, 0.0, 5.0], [0.0, 0.0, zc + 1.0]])
+    d: dict = {}
+    W.weld_skin(V, F, wall, centre, radius, lidded, axis=axis, diag=d)
+    assert d["applied"] and d["lid"] == 0.0 and d["kept"] > 0.95, {k: d.get(k) for k in ("applied", "lid", "kept")}
+    wall, centre, radius, zc = _dome(degrees=15.0)
+    axis = np.array([[0.0, 0.0, 5.0], [0.0, 0.0, zc + 1.0]])
+    t = W.WeldTarget("a", wall, centre, radius, lidded, axis)
+    diags: list = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = W.weld_vertices(V, F, [t], diags=diags)
+    d = diags[0]
+    assert not d["applied"] and d["flat"] and not d.get("coarse") and d["lid"] > 0.5, d.get("lid")   # (0.62)
+    assert np.array_equal(out, V)
+    # a kind that does not say so is welded all round as before: the same dome is worked on (and given up after
+    # four guard rounds); a tail that leaves the back this flat is welded, that is its ramp
+    d = {}
+    W.weld_skin(V, F, wall, centre, radius, W.WeldProfile(), axis=axis, diag=d)
+    assert d["lid"] == 0.0 and not d.get("flat") and (d["guard"] > 0 or d["applied"])
+    assert W.WeldProfile().lid is None and K.TAIL_WELD.get("lid") is None and K.GIRDLE_WELD["fan"]["lid"] == W.LID_COS
+    with pytest.raises(ValueError):
+        W.WeldProfile(lid=0.0)
+
+
+@assets
+@pytest.mark.parametrize("body", ["neutral", "heavy", "child", "tall"])
+def test_the_fan_arms_are_welded_where_their_dome_stands_off_the_shoulder(world, body):
+    """The fan pair's dome lies on the shoulder along its upper front (9-31 % of the skin beside its wall: ``lid``).
+    Left alone there, the rest of the root is welded: the child's pair was bare (kept 0.64), the heavy body's held by
+    a hair (0.79, and round 7's lifted ring tipped it into being refused), the neutral one arrived at 21 degrees."""
+    reps = _reports(_figure(world, "harvest:preset=upper_arms", body))
+    assert len(reps) == 2
+    for t, d, before, after in reps:
+        assert d["applied"] and d["kept"] >= 0.8 and d["lid"] > 0.05, (t.name, d.get("kept"), d.get("lid"))
+        assert after["open_p50"] < 22.0 and after["open_p50"] < before["open_p50"] - 25.0, (after["open_p50"], before["open_p50"])
+        assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
+    (tl, dl, bl, al), (tr, dr, br_, ar) = reps
+    assert abs(dl["kept"] - dr["kept"]) < 0.06 and abs(al["open_p50"] - ar["open_p50"]) < 4.0

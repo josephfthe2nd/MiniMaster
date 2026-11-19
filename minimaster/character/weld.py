@@ -75,6 +75,10 @@ CAP1_ON = 0.7         # the cap's first ring: this many edges on past the last r
 CAP1_BACK = 0.1       # ... and this share of the way back to where it was, under the wall (distinct points)
 CAP1_FULL = 1.5       # the cap's first ring is moved in full where the reach is at least this many edges
 TOP_LIFT = 0.1        # the last ring stands this many edges off the wall (see _solve)
+LID_COS = 0.93        # a kind whose wall lies ON the skin somewhere (``WeldProfile.lid``: their normals within 21
+LID_NEAR = 0.35       # degrees, within LID_NEAR reaches of the wall: the skirt of a fan arm's dome laid on the shoulder)
+#                       is not welded there (see weld_skin).  Not a rule for every kind: a tail leaves the back that
+#                       flat on some bodies, and there the weld IS its ramp
 WIDTH_EDGES = 3.2     # the fillet is at least this many of the skin's (longer) edges wide: the last ring, a ring of
 #                       sleeve and the rim, and the reach fades over the outer part of that width.  With less the
 #                       mesh has no ring to draw it with and the root was left bare
@@ -109,7 +113,9 @@ class WeldProfile:
     the skin is welded to; ``inset``: units the cap's first ring lies under the wall; ``grade``: >1 packs the
     rings toward the wall; ``guard``: re-solves with a smaller reach where a face folded; ``kept_min``: the
     least share of the root's ring that must end up welded, or the root is left bare (a kind whose weld is a
-    horseshoe by design, a tail's, takes less)."""
+    horseshoe by design, a tail's, takes less); ``lid``: for a kind whose wall lies ON the skin along part of its
+    edge (a fan arm's dome on the shoulder), the cosine between the wall's normal and the skin's above which the skin
+    beside the wall is not welded (``LID_COS``; ``None``: welded all round)."""
 
     reach: float = 0.9
     reach_max: float = 0.75
@@ -127,6 +133,7 @@ class WeldProfile:
     relax: int = 2
     guard: int = 3
     kept_min: float = KEPT_MIN
+    lid: float | None = None
 
     def __post_init__(self):
         for key in ("reach", "reach_max", "reach_min", "region", "strength", "open", "ventral", "acute", "valley",
@@ -136,6 +143,8 @@ class WeldProfile:
                 raise ValueError(f"WeldProfile.{key} must be a finite number >= 0, got {v!r}")
         if self.region <= 0.2 or self.grade <= 0.0:
             raise ValueError("WeldProfile.region must exceed 0.2 and grade 0")
+        if self.lid is not None and not (isinstance(self.lid, (int, float)) and 0.0 < self.lid <= 1.0):
+            raise ValueError(f"WeldProfile.lid must be a cosine in (0, 1] or None, got {self.lid!r}")
         if self.up is not None:
             u = np.asarray(self.up, dtype=np.float64)
             if u.shape != (3,) or not np.all(np.isfinite(u)) or np.linalg.norm(u) < 1e-9:
@@ -428,9 +437,11 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
 
     def coarse():
         # skin at the root and not enough of it within the weld's reach to draw a ring with: the mesh is too
-        # coarse for this root (said aloud by weld_vertices: it used to be left bare without a word)
+        # coarse for this root (said aloud by weld_vertices: it used to be left bare without a word).  Not so a root
+        # that lies ON the skin all round (``lid``): there was nothing to weld
         if diag is not None:
-            diag.update(info, coarse=True, seconds=time.perf_counter() - t0)
+            flat = info.get("lid", 0.0) > 0.5
+            diag.update(info, coarse=not flat, flat=flat, seconds=time.perf_counter() - t0)
         return out
     topo = topo if topo is not None else Topology.of(F, len(V))
     # the fillet is at least as wide as this mesh can draw one (a horn's tight cuff, 1.6 reaches of 0.14, is a
@@ -484,6 +495,19 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     # only the wall near the root counts: skin whose closest wall point is farther out (a drooping tail beside the
     # thigh, an arm lying along the back) is not welded to it
     kv = np.where(np.linalg.norm(wq - centre, axis=1) < clip_r, kv, 0.0)
+    # where the wall lies ON the skin there is no wall to climb and nothing to weld: the two surfaces are tangent
+    # already, and the skin beside it lies a hair over the wall here and a hair under it there.  Welded, that patchwork
+    # of "under the wall" and "last ring" made slivers that crossed each other (the plug's first ring through the
+    # visible strip), the guard took the patch and its surroundings out, and the root ended under ``kept_min``: every
+    # fan arm that was left bare, on every body, folded at the same place, where its dome lies on the shoulder.  The
+    # reach is 0 there and fades in around it at the bounded slope.
+    # (A kind says so, ``WeldProfile.lid``: on the slim female body a tail leaves the back within 21 degrees, and
+    # there the weld is the ramp the tail needs.)
+    near_wall = np.abs(b0) < LID_NEAR * k0
+    lid = ((na0 * nb0).sum(axis=1) > pr.lid) & near_wall if pr.lid is not None else np.zeros(len(near), bool)
+    if lid.any():
+        kv = _envelope_on(topo, V, near, np.where(lid, 0.0, kv), REACH_SLOPE)
+    info["lid"] = float(lid.sum()) / max(int(near_wall.sum()), 1)
     openn = pr.openness(V[near], centre)
     if locked is not None and np.any(locked):
         kv, keep = _away_from(V, near, b0, kv, locked, pr)
@@ -508,6 +532,8 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     # the faces whose crossings decide (the region's and, around it, every earlier root's weld)
     ball_faces = topo.faces_of(near[np.asarray(locked, dtype=bool)[near]]) if locked is not None and np.any(locked) \
         else np.zeros(0, dtype=np.int64)
+    if lid.any():                               # ... and the skin left alone beside the wall: the weld moves next to it
+        ball_faces = np.union1d(ball_faces, topo.faces_of(near[lid]))
     t_setup = time.perf_counter() - t0
     best = None
     rounds = 0

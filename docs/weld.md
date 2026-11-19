@@ -144,14 +144,65 @@ guard could keep:
 Welded with part of the ring left out: upper (fan) arms on the heavy body (0.79), a 0.85-radius tail (0.55, its
 back and flanks; arrival 9 degrees on the open side).
 
+## Round 7 (the session alone, no critic yet)
+
+* **A clean line where the root is another colour.** The last ring stood exactly on the wall; the skin arrives nearly
+  flat and the wall is faceted, so the wall came through the last strip between the ring's vertices: a sawtooth line
+  round every horn and wing arm. The ring stands `TOP_LIFT` (0.1) edges off the wall now, and the strip from it to
+  the plug goes into the wall steeply. A welded horn's base is drawn in the skin's colour to just past the welded
+  skin and blends to keratin above it (`kinds.HORN_TINT_*`, a `TintedMesh`, as the wing arm's base already was).
+* **The measure changed with it.** `arrival_report` measures the skin's first strip OUTSIDE the wall (the strip that
+  crosses the wall is steep by design now), and it queries only the skin inside the wall's own box (a horn's report
+  took 18 s, the whole face; now about 1.5 s). The table below is re-measured with it; the round-6 table above was
+  measured on the triangles that reach the wall, so its numbers are not comparable line by line.
+* **The fillet is as wide as the mesh can draw** (`WIDTH_EDGES`): at least 3.2 of the skin's longer edges, at most
+  `WIDTH_ASPECT` (3) reaches. A cuff narrower than that held a ring of skin between the wall and the rim only by
+  luck, and without one the root was left bare (horns of radius 0.13 and 0.15 between welded ones of 0.11 and 0.17).
+  A profile can give a least reach (`reach_min`; a horn's is one level-1 edge, 0.14). A root the mesh still cannot
+  draw a ring round is left bare with a warning and a lab note (`diag["coarse"]`): a tail of radius 0.10 at level 1.
+* **A wall lying on the skin is not welded, for a kind that says so** (`WeldProfile.lid`; the fan arms: `LID_COS`,
+  21 degrees, within `LID_NEAR` reaches of the wall). Where the fan arm's dome lies on the shoulder the two surfaces
+  are tangent already; the skin there lies a hair over the wall here and a hair under it there, and welding that
+  patchwork made slivers that crossed (the plug's first ring through the visible strip). The guard cut them and their
+  surroundings out and the root ended under `kept_min`: every fan arm that was left bare folded at that same place.
+  The reach is 0 there and fades in beside it, and the guard's crossing count takes in the skin left alone. The share
+  of the skin beside the wall this touches (`diag["lid"]`): 9-31 % on the fan arms. It is not a rule for every kind:
+  as one it took the back's ramp off a tail on the slim female body (a tail leaves the back that flat there, and the
+  weld is what makes the ramp) and let a thick tail's weld cross skin the guard did not look at.
+
+Re-measured (level 1 unless said; open side p50 / p90 in degrees; the neutral body unless named):
+
+| root | bare | welded |
+| --- | --- | --- |
+| tail | 37 | 7 / 34 (level 2: 10 / 24) |
+| tail, heavy / child / slim_f / tall / short | | 8 / 10 / 7 / 8 / 12 |
+| wing (membrane) | 46 | 18 / 34 (level 2: 14 / 29) |
+| wing, heavy / child / slim_f; feathered; dragon | | 18 / 13 / 13; 12; 18 |
+| horn / ram / spiral | 49 | 28 / 25 / 28 (level 2: 13 / 9) |
+| horn of radius 0.05 / 0.09 / 0.13 | 68 / 64 / 50 | 48 / 28 / 29 (0.05 at level 2: 26) |
+| lower arms | 80 | 10 / 21 (level 2: 9 / 16) |
+| lower arms, heavy / child / slim_f | | 9 / 8 / 8 |
+| upper (fan) arms, neutral / heavy / child / tall / short | 56 / 54 / 58 | 14 / 17 / 17 / 14 / 19 |
+| extra legs, neutral / child / slim_f | 54-60 | 12 / 15 / 13-15 |
+
+Fan arms before this round: neutral 21 degrees, heavy kept 0.79 of its ring (and the lifted ring alone tipped it into
+being refused), child bare. They are still the weakest root: close up the welded skin wrinkles on the medial side of
+the neutral body's dome, and the slim body's pair is still left bare (kept 0.59). The cause is the girdle's shape (a
+cup laid on the shoulder), not the weld: the round-5 critic's finding on the fan pair stays open.
+
+Tried and dropped: a ring lift that follows the wall's facets and curvature (it did not make the heavy fan arm any
+safer), a wider tangent threshold for the fan arms with a reach that comes down as the wall lies down (no notch, but
+the weld all but switched off: 32-36 degrees), and moving the last ring only in proportion to its reach where the
+reach runs out (it left the sleeve standing over a half-carried ring: folds on the heavy body's lower arms).
+
 ## Not done (round 6)
 
 * Cost: 0.15-1.7 s per root at level 1 for most roots (0.5-0.7 s for the default tail, wing and lower arms), 2-6 s
   at level 2, and 10 s for a 0.85-radius tail at level 1 (four guard rounds over a large region); the full
   creature (wings, tail, horns, lower arms) takes about 4 s to weld at level 1 in the final render. The plan's budget
   was 0.15 / 0.5 s. The closest-point queries dominate; every guard round is a whole new construction.
-* Roots left bare (the table above): the fan arms on the slim and child bodies and beside feathered wings, the
-  extra legs on the heavy body and beside a tail. Their girdles (the fan pair's cup, the legs' cushion: round 5's
+* Roots left bare (the table above; since round 7 the child's fan arms weld): the fan arms on the slim body and
+  beside feathered wings, the extra legs on the heavy body and beside a tail. Their girdles (the fan pair's cup, the legs' cushion: round 5's
   limb findings) are untouched; the weld cannot blend what is not shaped to be blended.
 * A tail beside extra legs: the tail's open-side arrival is 22 degrees against 9 alone (the legs' masses crowd the
   root).

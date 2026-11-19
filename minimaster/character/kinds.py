@@ -231,8 +231,10 @@ HORN_WELD = dict(reach=1.0, region=1.6, reach_min=HORN_WELD_MIN)
 HORN_TINT_HOLD, HORN_TINT_BLEND = 1.5, 0.35
 # ... of a wing's arm: wide where the arm comes from, a crease on the side it leans over
 WING_WELD = dict(open=1.0, ventral=0.7)
-# ... of a girdle limb, per girdle: the lower pair's opens upward, the fan pair's and the hip's all round
-GIRDLE_WELD = {"lower": dict(up=(0.0, 1.0, 0.0), open=1.0, ventral=0.5), "fan": dict(), "leg": dict()}
+# ... of a girdle limb, per girdle: the lower pair's opens upward, the fan pair's and the hip's all round.  The fan
+# pair's dome lies ON the shoulder along its upper front (a tenth to a third of the skin beside its wall is within 21
+# degrees of it): nothing is welded there (``WeldProfile.lid`` = weld.LID_COS)
+GIRDLE_WELD = {"lower": dict(up=(0.0, 1.0, 0.0), open=1.0, ventral=0.5), "fan": dict(lid=0.93), "leg": dict()}
 HORN_RING_VERTS = 24
 TAIL_FILLET, TAIL_FLARE, TAIL_FILLET_HEIGHT = 1.5, 0.35, 0.5
 HORN_FILLET, HORN_FLARE, HORN_FILLET_HEIGHT = 1.0, 0.0, 0.6
