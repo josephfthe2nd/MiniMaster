@@ -2069,8 +2069,8 @@ class Lab:
     def final_levels(self, character: Character | None = None) -> int:
         """The subdivision the final render and the export mesh the body at: ``levels`` when it was given,
         else :func:`weld.default_levels` (the one decision the command line takes too: 1 for a character with
-        a welded root, 0 for one without).  The draft (orbit, drags) always draws the 4k-triangle proxy and
-        says the weld is the final's."""
+        a welded root or a foot fitted to the drawn skin, the ossicone's; 0 for one without).  The draft (orbit,
+        drags) always draws the 4k-triangle proxy and says the weld is the final's."""
         if self.levels is not None:
             return int(self.levels)
         from . import weld as W

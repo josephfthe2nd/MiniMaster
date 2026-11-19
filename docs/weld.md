@@ -89,7 +89,8 @@ The weld also runs on the level-0 cage's own mesh (coarser, but cheap and better
   the bare root.
 * `weld.default_levels(character)` decides the default subdivision from the RECORDS (nothing built) for the command
   line, the lab's final render and its export (they disagreed before: the command line asked the built appendages
-  through `collar.default_levels(placed)`, the lab the records): 1 when a root is welded, else 0.
+  through `collar.default_levels(placed)`, the lab the records): 1 when a root is welded or (round 7) a foot is
+  fitted to the drawn skin (the ossicone, `Kind.fitted_level`), else 0.
 * What is welded: a tail (its base radius stops at 0.9 since round 6; an old document's thicker one is built at
   0.9 and welded), a keratin horn, a wing's arm (ramping in as the arm rises off the back; the folded preset has
   none: the arm lies along the back in a crease), a girdle limb (lower arms, upper arms, extra legs). Not: an
@@ -136,7 +137,7 @@ guard could keep:
 
 | root | kept share of the ring |
 | --- | --- |
-| upper (fan) arms, slim_f / child | 0.50 / 0.64 |
+| upper (fan) arms, slim_f / child (round 7: the child's welds, the slim body's is at 0.59) | 0.50 / 0.64 |
 | upper arms beside feathered wings, neutral | 0.72 |
 | extra legs, heavy | 0.59 / 0.58 |
 | extra legs beside a tail, neutral | 0.73 |
