@@ -194,6 +194,15 @@ Tried and dropped: a ring lift that follows the wall's facets and curvature (it 
 safer), a wider tangent threshold for the fan arms with a reach that comes down as the wall lies down (no notch, but
 the weld all but switched off: 32-36 degrees), and moving the last ring only in proportion to its reach where the
 reach runs out (it left the sleeve standing over a half-carried ring: folds on the heavy body's lower arms).
+The folded wing was tried again with the weld forced on, with and without the tangent rule: refused on the neutral
+and the heavy body (0.69 of the ring), so it stays without one; its bare arrival is 54-61 degrees.
+
+On the final round-7 tree: the full suite 2705 passed, 30 skipped; the Tk tests (panel and lab) 183 passed.
+
+Still to do after round 7: the fan pair's and the extra legs' girdle shapes (the slim body's fan arms, the heavy
+body's extra legs, legs beside a tail and fan arms beside feathered wings are left bare; welded fan arms still
+wrinkle close up), the folded wing, the coarse starry cuff of a thin root at level 1 (a tail under about 0.3, a horn
+of 0.05), the facets of the last strip in flat shading at level 1, the cost, and a review by an independent critic.
 
 ## Not done (round 6)
 
