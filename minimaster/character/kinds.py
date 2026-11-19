@@ -214,7 +214,7 @@ TAIL_MAX_RADIUS = 0.9                       # the base radius's range stops here
 TAIL_COLLAR_MAX_R = 1.2                     # ... none on a tail thicker than this (neutral-body units: wider than the sacrum)
 # round 6: the weld of a tail's root (weld.WeldProfile): the full reach on the back, a crease underneath (the natal
 # cleft stays open: at the full reach underneath the two cheeks were pulled up onto the tail and crossed)
-TAIL_WELD = dict(open=1.0, ventral=0.35)
+TAIL_WELD = dict(open=1.0, ventral=0.35, kept_min=0.5)    # (a horseshoe by design: the crease under it is not welded)
 TAIL_WELD_MAX_R = 1.0                       # ... none on a tail BUILT thicker than this.  Since the base radius stops at
                                             # TAIL_MAX_RADIUS (0.9) every tail is welded; the gate stays for a kind that
                                             # raises the range again (a 1.2 tail's weld folded on the cheeks)

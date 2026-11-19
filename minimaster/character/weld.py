@@ -77,9 +77,9 @@ CAP1_FULL = 1.5       # the cap's first ring is moved in full where the reach is
 MIN_AREA = 1e-10      # a welded triangle smaller than this is degenerate (Mesh.degenerate_faces: 1e-12): refused
 LAND_MAX = 1.5        # a fillet lands at most this many times its nominal distance (``region`` reaches) out
 GUARD_SHRINK = 0.45    # the reach where a fold was found is cut by this share per guard round
-GUARD_HARD = 3         # ... and after the profile's soft rounds, this many rounds that take the patch out of the weld
+GUARD_HARD = 5         # ... and after the profile's soft rounds, this many rounds that take the patch out of the weld
 KEPT_REACH = 0.5       # a ring vertex counts as welded with a reach of at least this many edges ...
-KEPT_WARN = 0.5        # ... and a root welded round less than this share of its ring is reported (a warning, a note)
+KEPT_MIN = 0.75        # ... and a root that would be welded round less than this share of its ring is not welded
 _H = np.linspace(0.0, 1.0, 513)
 TRACE = None            # a list to receive (stage, region ids, values) from the construction (tools, debugging)
 
@@ -101,7 +101,9 @@ class WeldProfile:
     ``k`` where the wall leans over the skin (a fold, not a web); ``valley``: ``k`` is at most this many concave
     radii of the skin; ``wall_clip``: the wall within the root radius + this many ``k`` of the root is the one
     the skin is welded to; ``inset``: units the cap's first ring lies under the wall; ``grade``: >1 packs the
-    rings toward the wall; ``guard``: re-solves with a smaller reach where a face folded."""
+    rings toward the wall; ``guard``: re-solves with a smaller reach where a face folded; ``kept_min``: the
+    least share of the root's ring that must end up welded, or the root is left bare (a kind whose weld is a
+    horseshoe by design, a tail's, takes less)."""
 
     reach: float = 0.9
     reach_max: float = 0.75
@@ -117,6 +119,7 @@ class WeldProfile:
     grade: float = 1.5
     relax: int = 2
     guard: int = 3
+    kept_min: float = KEPT_MIN
 
     def __post_init__(self):
         for key in ("reach", "reach_max", "region", "strength", "open", "ventral", "acute", "valley",
@@ -394,7 +397,8 @@ def _components(tab, has, mask) -> np.ndarray:
 
 
 def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *, axis=None,
-              topo: Topology | None = None, locked=None, others=(), diag: dict | None = None) -> np.ndarray:
+              topo: Topology | None = None, locked=None, others=(), half: float | None = None,
+              diag: dict | None = None) -> np.ndarray:
     """A copy of the skin's vertices ``V`` (triangles ``F``) welded onto ``wall`` (a closed Mesh, wound outward)
     around ``centre``; ``radius`` is the root's radius.  Vertices outside the weld's region are returned
     untouched (bit for bit), and so are the ``locked`` ones (a bool mask: an earlier root's weld).  ``axis`` is the
@@ -464,6 +468,13 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         kv, keep = _away_from(V, near, b0, kv, locked, pr)
     else:
         keep = np.ones(len(near), bool)
+    if half is not None:
+        # one of a mirrored pair: its weld keeps to its own side of the body's midline (x = 0) and its reach ends
+        # before it, as it does before an earlier root's weld.  Without this the side welded first took the skin
+        # between a pair of legs and its mirror image got what was left (welded on the left, bare on the right).
+        xs = V[near, 0] * (1.0 if half > 0 else -1.0)
+        keep &= xs > 0.0
+        kv = np.minimum(kv, 0.8 * (np.maximum(b0, 0.0) + np.maximum(xs, 0.0)) / pr.region)
     for ow in others or ():
         if ow is None or not len(ow.faces):
             continue
@@ -479,6 +490,8 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     t_setup = time.perf_counter() - t0
     best = None
     rounds = 0
+    kv_start = kv.copy()                        # the reach before the guard touched it
+    taken = np.zeros(len(near), bool)           # the patches the hard rounds took out of the weld
     ring0 = None                                # the last ring of the first construction: what the root could weld
     last = pr.guard + (GUARD_HARD if pr.guard > 0 else 0)
     for rounds in range(last + 1):
@@ -528,6 +541,7 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         pos[near] = np.arange(len(near))
         bp = pos[bad_v]
         w[bp[bp >= 0]] = 1.0
+        flagged = w > 0.0
         w = np.clip(_smooth_on(topo, near, w, 3) * 4.0, 0.0, 1.0)
         if rounds < pr.guard:
             kv = np.maximum(kv * (1.0 - GUARD_SHRINK * w), 1e-4)
@@ -535,10 +549,13 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
             # the soft rounds did not clear it: no weld at all on that patch (reach 0: its vertices stay where the
             # junction left them, the reach around it fades in at its bounded slope), the rest of the root keeps
             # its weld.  Round 6's first pass gave the whole root up for two crossing triangles.
-            w = np.clip(_smooth_on(topo, near, (w > 0.0).astype(np.float64), 2) * 4.0, 0.0, 1.0)
+            # The patch is the fold itself and one ring round it, and everywhere else the reach is the one the root
+            # started with, not what the soft rounds left of it (a patch grown by five rings on a reach already cut
+            # to a sixth left a quarter of the fan arms' ring welded); a fold that persists grows the patch.
+            taken |= _smooth_on(topo, near, flagged.astype(np.float64), 1) > 0.0
             # (through the skin under the wall too: the patch's own plug goes with it.  The reach here is the raw
             # one, before the probe's cuts: nothing under the wall drags the ring down as it did inside _solve.)
-            kv = _envelope_on(topo, V, near, np.where(w > 0.5, 0.0, kv * (1.0 - w)), REACH_SLOPE)
+            kv = _envelope_on(topo, V, near, np.where(taken, 0.0, kv_start), REACH_SLOPE)
     if best is None:
         if diag is not None:
             diag.update(info, seconds=time.perf_counter() - t0)
@@ -553,9 +570,15 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     on_ring[best["ids"]["top"]] = True
     kept = float(np.mean(on_ring[ring0] & (kvmap[ring0] >= KEPT_REACH * best["edge"]))) if ring0 is not None and len(ring0) \
         else 0.0
+    # a root welded round less than KEPT_MIN of its ring is left as the junction made it: close up, a weld that
+    # stops part of the way round reads no better than the bare crease and adds a ragged fringe where it stops (the
+    # fan arms on the slim body at 0.23 of the ring, the extra legs on the heavy one at 0.3-0.4)
+    refused = applied and kept < pr.kept_min
+    applied = applied and not refused
     if applied:
         out = best["trial"]
-    info.update(applied=applied, guard=rounds, kept=kept if applied else 0.0, crossings=best["crossings"],
+    info.update(applied=applied, guard=rounds, kept=kept if (applied or refused) else 0.0, refused=refused,
+                crossings=best["crossings"],
                 folded=int(len(best["folded"])),
                 crossings_before=best.get("crossings_before", 0),
                 centre=centre,
@@ -1138,12 +1161,17 @@ def weld_vertices(V, F, targets, *, diags: list | None = None) -> np.ndarray:
     topo = Topology.of(F, len(V))
     locked = np.zeros(len(V), bool)
     out = V
-    for t in targets:
+    stems = [t.name[:-2] if t.name.endswith((".l", ".r")) else None for t in targets]
+    for t, stem in zip(targets, stems):
         d: dict = {}
         try:
             others = [o.wall for o in targets if o is not t]
+            # a mirrored pair (NAME.l / NAME.r, each on its own side of the midline): each keeps to its half
+            half = None
+            if stem is not None and stems.count(stem) == 2 and abs(float(t.centre[0])) > 0.25 * float(t.radius):
+                half = float(np.sign(t.centre[0]))
             new = weld_skin(out, F, t.wall, t.centre, t.radius, t.profile, axis=t.axis, topo=topo, locked=locked,
-                            others=others, diag=d)
+                            others=others, half=half, diag=d)
         except (ValueError, IndexError, FloatingPointError, np.linalg.LinAlgError) as exc:
             new, d = out, {"applied": False, "error": str(exc)}
         d["name"] = t.name
@@ -1155,11 +1183,11 @@ def weld_vertices(V, F, targets, *, diags: list | None = None) -> np.ndarray:
             if "ids" in d:
                 locked[d["ids"]["region"]] = True
             out = new
-            if d.get("kept", 1.0) < KEPT_WARN:
-                from .kinds import AppendageWarning
-                warnings.warn(f"appendage {t.name!r}: the skin is welded onto only {100.0 * d.get('kept', 0.0):.0f}% of "
-                              "the root's ring (the rest would fold the skin and meets the root as the junction left "
-                              "it)", AppendageWarning, stacklevel=2)
+        elif d.get("refused"):
+            from .kinds import AppendageWarning
+            warnings.warn(f"appendage {t.name!r}: the skin is not welded onto the root here (only "
+                          f"{100.0 * d.get('kept', 0.0):.0f}% of its ring could be welded without folding the skin); it "
+                          "meets the root as the junction left it", AppendageWarning, stacklevel=2)
         elif d.get("crossings", 0) or d.get("error"):
             from .kinds import AppendageWarning
             warnings.warn(f"appendage {t.name!r}: the skin is not welded onto the root here (the weld would "

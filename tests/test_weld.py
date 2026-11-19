@@ -592,21 +592,90 @@ def test_the_tail_is_welded_at_level_two_without_a_guard_round(world):
     assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
 
 
+def _fold_near(monkeypatch, V, point, radius):
+    """Make the exact crossing test report a fold wherever a welded triangle has moved within ``radius`` of ``point``
+    (a synthetic fold that shrinking the reach cannot clear: only taking that patch out of the weld does)."""
+    real = CO.crossing_pairs
+    point = np.asarray(point, dtype=np.float64)
+
+    def fake(verts, faces):
+        if np.array_equal(verts, V):
+            return np.zeros((0, 2), dtype=np.int64)
+        moved = np.any(verts[faces] != V[faces], axis=2).any(axis=1)
+        bad = np.nonzero(moved & (np.linalg.norm(V[faces].mean(axis=1) - point, axis=1) < radius))[0]
+        return np.stack([bad[:-1], bad[1:]], axis=1) if len(bad) > 1 else np.zeros((0, 2), dtype=np.int64)
+
+    monkeypatch.setattr(W.CO, "crossing_pairs", fake)
+    return real
+
+
+def test_a_patch_that_would_fold_is_left_out_and_the_rest_of_the_root_stays_welded(sphere, monkeypatch):
+    """The guard's hard rounds (``GUARD_HARD``): a fold beside a tube that shrinking the reach does not clear takes
+    that patch out of the weld; the rest of the ring stays welded at its own reach, and the weld says how much of the
+    ring it kept.  The first pass gave the whole root up (``GUARD_HARD = 0`` brings that back)."""
+    V, F = sphere
+    spot = np.array([0.8, 0.0, 5.95])
+    real = _fold_near(monkeypatch, V, spot, 0.3)
+    monkeypatch.setattr(W, "KEPT_MIN", 0.5)       # (the mechanism, apart from the policy: on this small ring -- 24
+    d: dict = {}                                  # vertices -- one patch is 0.29 of it, under the shipped 0.75)
+    out, wall, centre = _weld_tube(sphere, diag=d)
+    monkeypatch.setattr(W.CO, "crossing_pairs", real)
+    assert d["applied"] and d["guard"] > W.WeldProfile().guard, d              # the hard rounds ran
+    assert 0.6 <= d["kept"] < 0.98, d["kept"]                                  # most of the ring, not all of it (0.71)
+    moved = np.any(out != V, axis=1)
+    assert moved[V[:, 0] < -0.3].sum() > 50                                    # the far side is welded ...
+    assert not moved[np.linalg.norm(V - spot, axis=1) < 0.25].any()            # ... the patch is not
+    assert len(real(out, F[W.Topology.of(F, len(V)).faces_of(d["ids"]["region"])])) == 0
+
+
+def test_a_root_that_could_only_be_welded_part_of_the_way_round_is_left_bare_with_a_warning(sphere, monkeypatch):
+    """Under ``KEPT_MIN`` of the ring the weld steps aside: close up, a weld that stops part of the way round reads
+    no better than the bare crease and leaves a ragged fringe where it stops (the fan arms on the slim body kept half
+    of their ring, the extra legs on the heavy one 0.5-0.7)."""
+    V, F = sphere
+    real = _fold_near(monkeypatch, V, np.array([0.8, 0.0, 5.95]), 1.0)             # half the root "folds"
+    t = W.WeldTarget("a", _tube(), np.array([0.0, 0.0, 6.0]), 0.6, W.WeldProfile(), np.array([[0, 0, 5.0], [0, 0, 9.0]]))
+    diags: list = []
+    with pytest.warns(K.AppendageWarning, match="of its ring could be welded"):
+        out = W.weld_vertices(V, F, [t], diags=diags)
+    monkeypatch.setattr(W.CO, "crossing_pairs", real)
+    d = diags[0]
+    assert not d["applied"] and d["refused"] and 0.0 < d["kept"] < W.KEPT_MIN, d
+    assert np.array_equal(out, V)
+
+
 @assets
-def test_a_patch_that_would_fold_is_left_out_and_the_rest_of_the_root_stays_welded(world):
-    """The fan pair on the slim body: the soft guard rounds do not clear it, so the hard rounds take the patch out of
-    the weld (``GUARD_HARD``); what is left is welded, nothing crosses, and the weld says how much of the ring it kept
-    (0.23) with a warning.  The first pass gave the whole root up."""
+def test_the_fan_arms_on_the_slim_body_are_left_bare_and_the_lab_says_so(world):
+    """A real root the weld cannot take most of the way round (kept 0.5): bare, with the warning, and the lab's
+    final render carries the note.  (When the fan pair's girdle is rebuilt this case should start to weld: move it to
+    the welded lists then.)"""
     c, placed, V0, F, targets, V1, diags = _figure(world, "harvest:preset=upper_arms", "slim_f")
     for t, d in zip(targets, diags):
-        assert d["applied"] and d["guard"] > t.profile.guard, d["guard"]     # the hard rounds ran
-        assert 0.05 < d["kept"] < W.KEPT_WARN, d["kept"]                     # partly welded, and it says so
-        after = W.arrival_report(V1, F, t.wall, d.get("centre", t.centre), t.radius, V0=V0)
-        assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
-        near = np.linalg.norm(V0 - np.asarray(d.get("centre", t.centre)), axis=1) < t.radius + 1.5
-        assert np.any(V1[near] != V0[near])                                  # the rest of the ring is welded
-    with pytest.warns(K.AppendageWarning, match="welded onto only"):
-        W.weld_vertices(V0, F, targets)
+        assert not d["applied"] and d["refused"] and d["kept"] < W.KEPT_MIN, d
+    assert np.array_equal(V1, V0)
+    from minimaster.character import lab as L
+    doc = L.LabDocument(L.Resources.shared())
+    doc.character.macro.update(BODIES6["slim_f"])
+    doc.add_appendage("harvest", preset="upper_arms")
+    final = doc.engine.final_scene(doc.character, levels=1)
+    assert any("could not be welded onto the root" in n for n in final.notes), final.notes
+
+
+@assets
+@pytest.mark.parametrize("body", ["neutral", "child"])
+def test_a_mirrored_pair_is_welded_alike_on_both_sides(world, body):
+    """Each side of a pair keeps to its own half of the body (``half``): without it the side welded first took the
+    skin between a pair of legs, and its mirror image got what was left (neutral: 7 against 21 degrees and 1.0
+    against 0.86 of the ring; child: welded on the left, bare on the right)."""
+    reps = _reports(_figure(world, "harvest:preset=extra_legs", body))
+    (tl, dl, bl, al), (tr, dr, br_, ar) = reps
+    assert dl["applied"] and dr["applied"], (dl["kept"], dr["kept"])
+    assert abs(dl["kept"] - dr["kept"]) < 0.06, (dl["kept"], dr["kept"])
+    assert abs(al["open_p50"] - ar["open_p50"]) < 4.0, (al["open_p50"], ar["open_p50"])
+    c, placed, V0, F, targets, V1, diags = _figure(world, "harvest:preset=extra_legs", body)
+    for t, d in zip(targets, diags):                                  # nothing welded across the midline
+        moved = d["ids"]["region"][np.any(V1[d["ids"]["region"]] != V0[d["ids"]["region"]], axis=1)]
+        assert np.all(V0[moved, 0] * np.sign(t.centre[0]) > 0.0)
 
 
 def test_a_cut_to_the_reach_fades_at_a_bounded_slope_and_never_crosses_the_wall(sphere):

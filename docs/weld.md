@@ -65,12 +65,17 @@ The weld also runs on the level-0 cage's own mesh (coarser, but cheap and better
   every earlier root's weld) is compared with the bare skin's, and faces turned over (normal against the blend's
   gradient by more than about 107 degrees, `FLIP_COS`: an edge-on sliver is not a fold) are found; the reach is
   cut there by `GUARD_SHRINK` and the root solved again (`guard` soft rounds), then, if that did not clear it,
-  `GUARD_HARD` rounds take the offending patch out of the weld (reach 0 there, fading in around it) and keep the
-  rest of the root welded. If the skin would still cross itself more than the junction left it, or a triangle would
+  `GUARD_HARD` rounds take the offending patch out of the weld (the fold and one ring round it: reach 0 there,
+  fading in around it, everywhere else the reach the root started with) and keep the rest of the root welded. If the skin would still cross itself more than the junction left it, or a triangle would
   be degenerate, the root is left as the junction made it and a warning says so: torn skin never ships.
 * `diag["kept"]`: the share of the root's ring that is welded in the end (of the first construction's last ring,
-  the vertices still on the ring with a reach of at least `KEPT_REACH` edges). Under `KEPT_WARN` (0.5) the command
-  line warns and the lab notes that the root is welded only part of the way round.
+  the vertices still on the ring with a reach of at least `KEPT_REACH` edges). Under the profile's `kept_min`
+  (`KEPT_MIN`, 0.75; a tail's weld is a horseshoe by design and takes 0.5) the root is not welded at all: close up, a
+  weld that stops part of the way round reads no better than the bare crease and leaves a ragged fringe where it
+  stops. The command line warns and the lab notes it (`diag["refused"]`).
+* A mirrored pair (`NAME.l` / `NAME.r`): each side's weld keeps to its own half of the body and its reach ends
+  before the midline (`half`). Without it the side welded first took the skin between a pair of legs and its mirror
+  image got what was left.
 * Several roots: a later root never moves an earlier root's weld (its region is locked and the reach ends before
   it) and never moves skin that lies inside another root's wall (that root's plug).
 
@@ -111,7 +116,7 @@ the round-6 measurement on the shared 4-core box:
 | tail, neutral | 2 | 70 / 79 | 12 / 18 | 14 / 39 | 0 | 3.7 |
 | tail, heavy / child / slim_f / tall / short | 1 | 63 / 58 / 51 | 11 / 19 / 7 / 9 / 9 | 20 / 27 / 24 / 22 / 28 | 1 / 1 / 0 / 0 / 0 | 0.5-1.1 |
 | tail, lift 40 / -40 / 60 | 1 | 65-73 | 17 / 7 / 9 | 21 / 22 / 19 | 0 | 0.6-0.8 |
-| tail, base radius 0.85 | 1 | 45 | 9 / 18 | 18 / 53 | 4 | 8.5 |
+| tail, base radius 0.85 | 1 | 45 | 9 / 18 | 16 / 47 | 4 | 10 |
 | wing (membrane), neutral | 1 / 2 | 70 / 73 | 14 / 9 | 16 / 10 | 0 | 0.4 / 1.9 |
 | wing, heavy / child / slim_f | 1 | 58 / 74 / 88 | 17 / 10 / 10 | 22 / 13 / 15 | 0 | 0.3-0.5 |
 | half-folded / dragon / feathered, neutral | 1 | 62 / 71 / 47 | 13 / 15 / 13 | 21 / 15 / 18 | 0 / 0 / 1 | 0.4-0.5 |
@@ -119,29 +124,37 @@ the round-6 measurement on the shared 4-core box:
 | horn / ram, neutral | 2 | 49 / 56 | 13 / 8 | 13 / 8 | 0 | 0.6 / 5.6 |
 | lower arms, neutral | 1 / 2 | 76 / 75 | 5 / 5 | 13 / 6 | 0 | 0.5 / 2.5 |
 | lower arms, heavy / child / slim_f | 1 | 76-78 / 75 / 76 | 6 / 6 / 7 | 12 / 13 / 13 | 0 | 0.3-1.7 |
-| upper (fan) arms, neutral / heavy | 1 | 56 / 52 | 21 / 17-19 | 21 / 17-19 | 3 | 1.9 / 4 |
-| extra legs, neutral (l / r) | 1 | 54 / 56 | 7 / 21 | 8 / 26 | 1 / 0 | 0.6-1.3 |
+| upper (fan) arms, neutral / heavy | 1 | 56 / 52 | 21 / 15 | 21 / 15 | 3 | 2 / 4 |
+| extra legs, neutral / child / slim_f (both sides alike) | 1 | 54-60 | 12 / 15-16 / 10-11 | 13 / 16 / 11-13 | 1 / 0 / 1 | 0.8-1.2 |
 | tail / wing / lower arms, neutral | 0 | 75 / 66 / 71 | 13 / 14 / 8 | 40 / 27 / 21 | 0 | 0.2 |
 
 No welded root crosses itself more than the bare skin did and no plug vertex leaves its wall (exact counts over
 this matrix). Measured on the tree with the round-6 tail and wing anatomy merged, on the shared 4-core box.
 
-Welded only part of the way round (the guard's hard rounds took the rest out; `kept`, with the warning):
+Left bare (the weld could cover less than `kept_min` of the ring; the warning says so). The share is what the
+guard could keep:
 
-| root | kept share of the ring | arrival where welded (open side p50) |
-| --- | --- | --- |
-| upper (fan) arms, heavy | 0.8 | 17-19 |
-| upper (fan) arms, slim_f / child | 0.23 / 0.25 | 35 / 44 |
-| upper arms beside feathered wings, neutral | 0.34 | 58 |
-| extra legs, heavy (l / r) | 0.28 / 0.42 | 50-62 |
+| root | kept share of the ring |
+| --- | --- |
+| upper (fan) arms, slim_f / child | 0.50 / 0.64 |
+| upper arms beside feathered wings, neutral | 0.72 |
+| extra legs, heavy | 0.59 / 0.58 |
+| extra legs beside a tail, neutral | 0.73 |
+
+Welded with part of the ring left out: upper (fan) arms on the heavy body (0.79), a 0.85-radius tail (0.55, its
+back and flanks; arrival 9 degrees on the open side).
 
 ## Not done (round 6)
 
 * Cost: 0.15-1.7 s per root at level 1 for most roots (0.5-0.7 s for the default tail, wing and lower arms), 2-6 s
-  at level 2, and 8.5 s for a 0.85-radius tail at level 1 (four guard rounds over a large region). The plan's budget
+  at level 2, and 10 s for a 0.85-radius tail at level 1 (four guard rounds over a large region); the full
+  creature (wings, tail, horns, lower arms) takes about 4 s to weld at level 1 in the final render. The plan's budget
   was 0.15 / 0.5 s. The closest-point queries dominate; every guard round is a whole new construction.
-* Partly welded roots (the table above): the fan arms on the slim and child bodies and beside feathered wings, the
-  extra legs on the heavy body. They are mostly the bare junction, and say so.
+* Roots left bare (the table above): the fan arms on the slim and child bodies and beside feathered wings, the
+  extra legs on the heavy body and beside a tail. Their girdles (the fan pair's cup, the legs' cushion: round 5's
+  limb findings) are untouched; the weld cannot blend what is not shaped to be blended.
+* A tail beside extra legs: the tail's open-side arrival is 22 degrees against 9 alone (the legs' masses crowd the
+  root).
 * By design, no weld: the folded wing (the arm lies along the back; forcing the weld on gave a reach of 0.1 after
   six guard rounds and no visible gain), an ossicone, a first-version limb.
 * In flat shading at level 1 the last strip shows a row of small facets ("teeth") round a root where the reach is
