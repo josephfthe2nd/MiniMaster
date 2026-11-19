@@ -215,8 +215,9 @@ TAIL_COLLAR_MAX_R = 1.2                     # ... none on a tail thicker than th
 # round 6: the weld of a tail's root (weld.WeldProfile): the full reach on the back, a crease underneath (the natal
 # cleft stays open: at the full reach underneath the two cheeks were pulled up onto the tail and crossed)
 TAIL_WELD = dict(open=1.0, ventral=0.35)
-TAIL_WELD_MAX_R = 1.0                       # ... none on a tail thicker than this (a 1.2 tail's weld folded on the cheeks and
-                                            # took 10 s; its root is most of the rump: docs/weld.md, not done)
+TAIL_WELD_MAX_R = 1.0                       # ... none on a tail BUILT thicker than this.  Since the base radius stops at
+                                            # TAIL_MAX_RADIUS (0.9) every tail is welded; the gate stays for a kind that
+                                            # raises the range again (a 1.2 tail's weld folded on the cheeks)
 # ... of a horn: a tight cuff (the reach is at least HORN_WELD_MIN units: a 0.14-radius horn's 0.13 is one level-1 edge)
 HORN_WELD = dict(reach=1.0, region=1.6)
 # ... of a wing's arm: wide where the arm comes from, a crease on the side it leans over
@@ -1080,14 +1081,15 @@ class TailKind(_LoftKind):
         k = float(placed.params.get("collar", 1.0))
         if k <= 0.0 or placed.model is None:
             return None
-        if float(placed.params.get("base_radius", 0.45)) > TAIL_WELD_MAX_R:
+        if min(float(placed.params.get("base_radius", 0.45)), TAIL_MAX_RADIUS) > TAIL_WELD_MAX_R:
             return None
         from . import weld as W
         return W.WeldProfile(strength=k, up=(0.0, 1.0, 0.0), **TAIL_WELD)
 
     def welds(self, params, record=None):
         try:
-            return Kind.welds(self, params) and float(params.get("base_radius", 0.45)) <= TAIL_WELD_MAX_R
+            # (the radius a tail is BUILT with: an old document's thicker one is built at the range's end)
+            return Kind.welds(self, params) and min(float(params.get("base_radius", 0.45)), TAIL_MAX_RADIUS) <= TAIL_WELD_MAX_R
         except (TypeError, ValueError):
             return False
 

@@ -35,26 +35,42 @@ The weld also runs on the level-0 cage's own mesh (coarser, but cheap and better
   `h` in 0..1, tangent to the wall at `h = 0` and to the skin at `h = 1`.
 * `k` per vertex (`_reach`): the kind's shape (`WeldProfile.up / open / ventral`), cut where the wall leans over the
   skin (`acute`), at most the skin's concave radius (`valley`) and the room over the skin (a probe up the normal
-  that comes near another part of the skin: the facing cheek across the natal cleft, `CLEAR_*`), smoothed without
-  ever rising, fading with the distance from the root's exit point, zero where the closest wall point is beyond the
-  root (`wall_clip`: a drooping tail is not welded to the thighs).
+  that comes near another part of the skin: the facing cheek across the natal cleft, `CLEAR_*`; on the kind's tight
+  side in full, not on its open side, where a probe from the floor of the spinal furrow over a heavy body's tail
+  found the furrow's own walls), fading with the distance from the root's exit point, zero where the closest wall
+  point is beyond the root (`wall_clip`: a drooping tail is not welded to the thighs).
+* A cut to the reach stays as deep as it is and fades out at a bounded slope (`REACH_SLOPE` per unit of length over
+  the skin outside the wall, `RING_SLOPE` along the last ring; `envelope`). The first pass smoothed by repeated
+  min-averaging, which carried the crease under a tail round to its back, and let the hidden vertices under the root
+  drag the last ring's reach down.
 * The sets: the cap (under the wall; holes filled), the last ring (`top`, thinned so no triangle has three
   corners on it), the rim (fixed), the sleeve.
 * The last ring climbs the wall along the root's generator (its axis laid on the wall) to height `k`, at most
-  `CLIMB_MAX * k` of travel: where the wall runs along the skin the height it reaches is its reach (a crease), and
-  the sleeve next to it takes that reach.
-* Every sleeve vertex gets a share `u` of the way from the last ring to the rim (graph distances, smoothed,
-  `grade` 1.5 packs the rings toward the wall) and lands where its own path meets the rim (each vertex its own
-  aspect `R`); it is placed analytically on its profile, laid onto the zero set by Newton steps, its `h` restored
-  along the surface, and evened along its own ring only.
+  `CLIMB_MAX * k` (2 reaches) of travel: on an oblique wall (the back above a tail) one reach of travel gains only
+  three quarters of the height; where the wall runs along the skin the height it reaches is its reach (a crease),
+  and the sleeve next to it takes that reach.
+* The sleeve follows the last ring as a membrane does (`PLACEMENT = "harmonic"`): the DISPLACEMENT is harmonic over
+  the sleeve between the ring (on the wall) and the rim (fixed), so the skin's own relief rides along and the
+  vertices keep their order and spacing round the root; it is then laid onto the zero set by Newton steps, evened
+  along the fillet, and its rings are packed toward the wall (`grade`, in full only where the reach is healthy).
+  The first pass sent every vertex to a preset place on its own profile (`"profile"`): where the reach changes
+  round the ring (a tail's shoulders) that left rays of sliver triangles, and the guard cut the reach of the whole
+  back for them (0.52 to 0.23 on the neutral tail).
+* The cap's first ring moves in proportion to the local reach (`CAP1_FULL`): pushed on by a fixed step it crossed
+  its mirror image in the cleft under a tail at level 2.
 * The cap's first ring sits just under its neighbours on the last ring; the rest of the cap is a harmonic membrane
   spanning it (conjugate gradients); the whole plug is pushed under the wall (signed distance, then ray parity
   against the wall's shells).
 * The guard: after every construction the exact triangle-crossing count of the faces around the root (and around
   every earlier root's weld) is compared with the bare skin's, and faces turned over (normal against the blend's
-  gradient) are found; the reach is cut there by `GUARD_SHRINK` and the root solved again (`guard` rounds). If the
-  skin would still cross itself more than the junction left it, or a triangle would be degenerate, the root is left
-  as the junction made it and a warning says so: torn skin never ships.
+  gradient by more than about 107 degrees, `FLIP_COS`: an edge-on sliver is not a fold) are found; the reach is
+  cut there by `GUARD_SHRINK` and the root solved again (`guard` soft rounds), then, if that did not clear it,
+  `GUARD_HARD` rounds take the offending patch out of the weld (reach 0 there, fading in around it) and keep the
+  rest of the root welded. If the skin would still cross itself more than the junction left it, or a triangle would
+  be degenerate, the root is left as the junction made it and a warning says so: torn skin never ships.
+* `diag["kept"]`: the share of the root's ring that is welded in the end (of the first construction's last ring,
+  the vertices still on the ring with a reach of at least `KEPT_REACH` edges). Under `KEPT_WARN` (0.5) the command
+  line warns and the lab notes that the root is welded only part of the way round.
 * Several roots: a later root never moves an earlier root's weld (its region is locked and the reach ends before
   it) and never moves skin that lies inside another root's wall (that root's plug).
 
@@ -69,10 +85,10 @@ The weld also runs on the level-0 cage's own mesh (coarser, but cheap and better
 * `weld.default_levels(character)` decides the default subdivision from the RECORDS (nothing built) for the command
   line, the lab's final render and its export (they disagreed before: the command line asked the built appendages
   through `collar.default_levels(placed)`, the lab the records): 1 when a root is welded, else 0.
-* What is welded: a tail of base radius up to `TAIL_WELD_MAX_R` (1.0), a keratin horn, a wing's arm (ramping in as
-  the arm rises off the back; the folded preset has none: the arm lies along the back in a crease), a girdle limb
-  (lower arms, upper arms, extra legs). Not: an ossicone (its foot is the skin's own fillet), a first-version limb, a
-  tail thicker than 1.0.
+* What is welded: a tail (its base radius stops at 0.9 since round 6; an old document's thicker one is built at
+  0.9 and welded), a keratin horn, a wing's arm (ramping in as the arm rises off the back; the folded preset has
+  none: the arm lies along the back in a crease), a girdle limb (lower arms, upper arms, extra legs). Not: an
+  ossicone (its foot is the skin's own fillet), a first-version limb.
 
 ## Where it runs
 
@@ -89,34 +105,46 @@ the root before and after; plug vertices that left the wall (ray parity against 
 junction's skin without the weld (what e7e16b8 draws under its collar and at level 0); p50 / p90 of the open side,
 the round-6 measurement on the shared 4-core box:
 
-| kind | level | bare (all) | welded (open side) | welded (all) | s / root |
-| --- | --- | --- | --- | --- | --- |
-| tail, neutral | 1 | 70 / 82 | 20 / 46 | 33 / 64 | 1.9 |
-| tail, neutral | 2 | 70 / 79 | 19 / 66 | 33 / 72 | 7.2 |
-| tail, heavy / child / slim_f | 1 | 63 / 59 / 51 | 26 / 19 / 20 | 39 / 30 / 29 | 1-2 |
-| wing (membrane), neutral | 1 / 2 | 70 / 73 | 14 / 13 | 18 / 15 | 0.6 / 6 |
-| wing, heavy / child / slim_f | 1 | 58 / 74 / 88 | 37 / 20 / 16 | 38 / 18 / 21 | 0.5-1.5 |
-| dragon / feathered, neutral | 1 | 71 / 47 | 17 / 24 | 19 / 27 | 0.3-1.4 |
-| horn / ram, neutral | 1 | 50 / 49 | 31 / 34 | 31 / 34 | 0.2 / 1.7 |
-| horn / ram, neutral | 2 | 49 / 56 | 20 / 15 | 20 / 16 | 1 / 10 |
-| lower arms, neutral | 1 / 2 | 76 / 75 | 7 / 7 | 13 / 7 | 0.9 / 4 |
-| lower arms, heavy / child / slim_f | 1 | 76-78 / 75 / 76 | 12 / 8 / 8 | 20-25 / 17 / 16 | 0.4-3 |
-| extra legs, neutral | 1 | 54-56 | 8 / 25 | 9 / 28 | 1.4-2.6 |
-| tail / wing / lower arms / extra legs, neutral | 0 | 75 / 66 / 71 / 56 | 27 / 25 / 23 / 14-25 | 46 / 33 / 35 / 16-30 | 0.1-0.3 |
+| kind | level | bare (all) | welded (open side) | welded (all) | guard rounds | s / root |
+| --- | --- | --- | --- | --- | --- | --- |
+| tail, neutral | 1 | 70 / 82 | 9 / 32 | 22 / 60 | 0 | 0.7 |
+| tail, neutral | 2 | 70 / 79 | 12 / 18 | 14 / 39 | 0 | 3.7 |
+| tail, heavy / child / slim_f / tall / short | 1 | 63 / 58 / 51 | 11 / 19 / 7 / 9 / 9 | 20 / 27 / 24 / 22 / 28 | 1 / 1 / 0 / 0 / 0 | 0.5-1.1 |
+| tail, lift 40 / -40 / 60 | 1 | 65-73 | 17 / 7 / 9 | 21 / 22 / 19 | 0 | 0.6-0.8 |
+| tail, base radius 0.85 | 1 | 45 | 9 / 18 | 18 / 53 | 4 | 8.5 |
+| wing (membrane), neutral | 1 / 2 | 70 / 73 | 14 / 9 | 16 / 10 | 0 | 0.4 / 1.9 |
+| wing, heavy / child / slim_f | 1 | 58 / 74 / 88 | 17 / 10 / 10 | 22 / 13 / 15 | 0 | 0.3-0.5 |
+| half-folded / dragon / feathered, neutral | 1 | 62 / 71 / 47 | 13 / 15 / 13 | 21 / 15 / 18 | 0 / 0 / 1 | 0.4-0.5 |
+| horn / ram / spiral, neutral | 1 | 50 / 49 | 28 / 26 / 32 | 28 / 26 / 32 | 0 | 0.15 / 1.2 / 0.2 |
+| horn / ram, neutral | 2 | 49 / 56 | 13 / 8 | 13 / 8 | 0 | 0.6 / 5.6 |
+| lower arms, neutral | 1 / 2 | 76 / 75 | 5 / 5 | 13 / 6 | 0 | 0.5 / 2.5 |
+| lower arms, heavy / child / slim_f | 1 | 76-78 / 75 / 76 | 6 / 6 / 7 | 12 / 13 / 13 | 0 | 0.3-1.7 |
+| upper (fan) arms, neutral / heavy | 1 | 56 / 52 | 21 / 17-19 | 21 / 17-19 | 3 | 1.9 / 4 |
+| extra legs, neutral (l / r) | 1 | 54 / 56 | 7 / 21 | 8 / 26 | 1 / 0 | 0.6-1.3 |
+| tail / wing / lower arms, neutral | 0 | 75 / 66 / 71 | 13 / 14 / 8 | 40 / 27 / 21 | 0 | 0.2 |
 
-No welded root crosses itself more than the bare skin did and no plug vertex leaves its wall (exact counts, in the
-round-6 report).
+No welded root crosses itself more than the bare skin did and no plug vertex leaves its wall (exact counts over
+this matrix). Measured on the tree with the round-6 tail and wing anatomy merged, on the shared 4-core box.
+
+Welded only part of the way round (the guard's hard rounds took the rest out; `kept`, with the warning):
+
+| root | kept share of the ring | arrival where welded (open side p50) |
+| --- | --- | --- |
+| upper (fan) arms, heavy | 0.8 | 17-19 |
+| upper (fan) arms, slim_f / child | 0.23 / 0.25 | 35 / 44 |
+| upper arms beside feathered wings, neutral | 0.34 | 58 |
+| extra legs, heavy (l / r) | 0.28 / 0.42 | 50-62 |
 
 ## Not done (round 6)
 
-* The plan's targets are NOT all met: the tail's open-side p50 is ~19-26 degrees at level 1 (target 12) and ~19 at
-  level 2 (target 8); the lower arms meet them (7-12 at level 1, 7 at level 2).
-* Cost: 0.2-3 s per root at level 1 and 1-11 s at level 2 on the shared box (the plan's budget: 0.15 / 0.5 s). The
-  closest-point queries and the guard's re-solves dominate (most roots need 1-3 guard rounds).
-* The guard leaves these roots unwelded (the bare junction, with a warning in the command line and a note in the
-  lab): the upper (fan) arms on the neutral, heavy and child bodies (welded on slim_f); the extra legs on the heavy
-  and child bodies at level 1 and on the neutral body at level 2; the 0.85-radius tail; the half-folded wing on the
-  child; horns at level 0. By design, none: the folded wing, an ossicone, a tail thicker than 1.0.
-* The tail's lower flanks (4 and 8 o'clock, where the reach falls from the back's to the crease's) show thin facet
-  slivers in flat shading at level 1, and pleats on the upper flank at level 2; small horns show a radial fan of
-  facets round the root in flat shading; a horn's cuff is about one level-1 edge wide.
+* Cost: 0.15-1.7 s per root at level 1 for most roots (0.5-0.7 s for the default tail, wing and lower arms), 2-6 s
+  at level 2, and 8.5 s for a 0.85-radius tail at level 1 (four guard rounds over a large region). The plan's budget
+  was 0.15 / 0.5 s. The closest-point queries dominate; every guard round is a whole new construction.
+* Partly welded roots (the table above): the fan arms on the slim and child bodies and beside feathered wings, the
+  extra legs on the heavy body. They are mostly the bare junction, and say so.
+* By design, no weld: the folded wing (the arm lies along the back; forcing the weld on gave a reach of 0.1 after
+  six guard rounds and no visible gain), an ossicone, a first-version limb.
+* In flat shading at level 1 the last strip shows a row of small facets ("teeth") round a root where the reach is
+  small (under a tail, under a wing's arm); level 2 is clean. Small horns have a cuff about one level-1 edge wide.
+* The second pass (the membrane placement, the bounded-slope cuts, the guard's hard rounds) was written and judged
+  by the session alone, on one-colour, flat-shaded and real-colour renders; no independent critic has reviewed it.

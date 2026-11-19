@@ -78,6 +78,8 @@ MIN_AREA = 1e-10      # a welded triangle smaller than this is degenerate (Mesh.
 LAND_MAX = 1.5        # a fillet lands at most this many times its nominal distance (``region`` reaches) out
 GUARD_SHRINK = 0.45    # the reach where a fold was found is cut by this share per guard round
 GUARD_HARD = 3         # ... and after the profile's soft rounds, this many rounds that take the patch out of the weld
+KEPT_REACH = 0.5       # a ring vertex counts as welded with a reach of at least this many edges ...
+KEPT_WARN = 0.5        # ... and a root welded round less than this share of its ring is reported (a warning, a note)
 _H = np.linspace(0.0, 1.0, 513)
 TRACE = None            # a list to receive (stage, region ids, values) from the construction (tools, debugging)
 
@@ -477,12 +479,15 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     t_setup = time.perf_counter() - t0
     best = None
     rounds = 0
+    ring0 = None                                # the last ring of the first construction: what the root could weld
     last = pr.guard + (GUARD_HARD if pr.guard > 0 else 0)
     for rounds in range(last + 1):
         res = _solve(V, F, topo, near, keep, b0, nb0, na0, ga, gb, kv, skin, wp, pr, k0, ax_pts, solid, openn)
         if res is None:
             break
         region, P = res["region"], res["P"]
+        if ring0 is None:
+            ring0 = res["ids"]["top"]
         # the ground truth: the welded skin around the root must not cross itself where it did not before
         fi = np.union1d(topo.faces_of(region), ball_faces)
         trial = V.copy()
@@ -531,6 +536,8 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
             # junction left them, the reach around it fades in at its bounded slope), the rest of the root keeps
             # its weld.  Round 6's first pass gave the whole root up for two crossing triangles.
             w = np.clip(_smooth_on(topo, near, (w > 0.0).astype(np.float64), 2) * 4.0, 0.0, 1.0)
+            # (through the skin under the wall too: the patch's own plug goes with it.  The reach here is the raw
+            # one, before the probe's cuts: nothing under the wall drags the ring down as it did inside _solve.)
             kv = _envelope_on(topo, V, near, np.where(w > 0.5, 0.0, kv * (1.0 - w)), REACH_SLOPE)
     if best is None:
         if diag is not None:
@@ -538,9 +545,18 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         return out
     region = best["region"]
     applied = best["crossings"] == 0
+    # how much of the root's ring is welded in the end (the guard's hard rounds take patches out): the share of the
+    # first ring's vertices that are still on the last ring with a reach the mesh can draw
+    kvmap = np.zeros(topo.n)
+    kvmap[region] = best["kv"]
+    on_ring = np.zeros(topo.n, bool)
+    on_ring[best["ids"]["top"]] = True
+    kept = float(np.mean(on_ring[ring0] & (kvmap[ring0] >= KEPT_REACH * best["edge"]))) if ring0 is not None and len(ring0) \
+        else 0.0
     if applied:
         out = best["trial"]
-    info.update(applied=applied, guard=rounds, crossings=best["crossings"], folded=int(len(best["folded"])),
+    info.update(applied=applied, guard=rounds, kept=kept if applied else 0.0, crossings=best["crossings"],
+                folded=int(len(best["folded"])),
                 crossings_before=best.get("crossings_before", 0),
                 centre=centre,
                 region=int(len(region)), seconds=time.perf_counter() - t0, setup=t_setup,
@@ -653,7 +669,7 @@ def _smooth_on(topo, ids, w, rounds):
     return w
 
 
-def _envelope_on(topo, V, ids, x, slope, rounds: int = 96):
+def _envelope_on(topo, V, ids, x, slope, among=None, rounds: int = 96):
     """The largest field under ``x`` (over the vertices ``ids``) that changes by at most ``slope`` per unit of
     length along the mesh: a patch taken out of the weld (0) lets the reach around it fade in instead of step."""
     tab = topo.table(ids)
@@ -663,6 +679,9 @@ def _envelope_on(topo, V, ids, x, slope, rounds: int = 96):
     lt = np.where(has, loc[np.where(has, tab, 0)], -1)
     inn = lt >= 0
     safe = np.where(inn, lt, 0)
+    if among is not None:                        # only along edges between these (the skin outside the wall)
+        among = np.asarray(among, dtype=bool)
+        inn = inn & among[safe] & among[:, None]
     P = V[ids]
     step = np.where(inn, slope * np.linalg.norm(P[safe] - P[:, None, :], axis=2), np.inf)
     x = np.asarray(x, dtype=np.float64).copy()
@@ -1136,6 +1155,11 @@ def weld_vertices(V, F, targets, *, diags: list | None = None) -> np.ndarray:
             if "ids" in d:
                 locked[d["ids"]["region"]] = True
             out = new
+            if d.get("kept", 1.0) < KEPT_WARN:
+                from .kinds import AppendageWarning
+                warnings.warn(f"appendage {t.name!r}: the skin is welded onto only {100.0 * d.get('kept', 0.0):.0f}% of "
+                              "the root's ring (the rest would fold the skin and meets the root as the junction left "
+                              "it)", AppendageWarning, stacklevel=2)
         elif d.get("crossings", 0) or d.get("error"):
             from .kinds import AppendageWarning
             warnings.warn(f"appendage {t.name!r}: the skin is not welded onto the root here (the weld would "

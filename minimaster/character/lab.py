@@ -1238,13 +1238,18 @@ class Engine:
                 warnings.simplefilter("ignore")
                 mesh = W.weld_mesh(body_mesh, targets, diags=diags)
             skipped = [d["name"] for d in diags if not d.get("applied") and (d.get("crossings") or d.get("error"))]
-            return mesh, skipped
+            partial = [(d["name"], float(d.get("kept", 0.0))) for d in diags
+                       if d.get("applied") and d.get("kept", 1.0) < W.KEPT_WARN]
+            return mesh, (skipped, partial)
 
-        mesh, skipped = self._welded.get_or_build(key, build)
+        mesh, (skipped, partial) = self._welded.get_or_build(key, build)
         if notes is not None:
             for name in skipped:
                 notes.append(f"{name}: the skin could not be welded onto the root here (it would fold); the "
                              "root meets the skin as the junction left it")
+            for name, kept in partial:
+                notes.append(f"{name}: the skin is welded onto only {100.0 * kept:.0f}% of the root's ring (the rest "
+                             "would fold); there the root meets the skin as the junction left it")
         return mesh
 
     def collars(self, character: Character, shaped: BodyState, builts, levels: int, skin_mesh,

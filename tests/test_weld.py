@@ -252,8 +252,9 @@ def test_every_kind_s_root_is_welded_at_level_one(world, text):
         assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
 
 
-# tail and lower arms on six bodies (level 1): the open side's p50 (measured 19-35 tail, 7-10 arms)
-SIX_BOUND = {"tail": 36.0, "harvest:preset=lower_arms": 20.0}
+# tail and lower arms on six bodies (level 1): the open side's p50 (measured 7-19 tail, 5-8 arms; the first pass of
+# round 6: 19-35 and 7-10)
+SIX_BOUND = {"tail": 22.0, "harvest:preset=lower_arms": 14.0}
 
 
 @assets
@@ -267,7 +268,7 @@ def test_the_tail_and_the_lower_arms_are_welded_on_six_bodies(world, text, body)
 
 
 @assets
-@pytest.mark.parametrize("text,bound", [("tail", 25.0), ("harvest:preset=lower_arms", 14.0)])
+@pytest.mark.parametrize("text,bound", [("tail", 16.0), ("harvest:preset=lower_arms", 10.0)])     # measured 11.8, 4.7
 def test_level_two_arrives_flatter_than_level_one(world, text, bound):
     for t, d, before, after in _reports(_figure(world, text, levels=2)):
         assert d["applied"], (text, t.name, d)
@@ -276,8 +277,8 @@ def test_level_two_arrives_flatter_than_level_one(world, text, bound):
 
 
 HARD = [("wing", ()), ("wing:style=dragon", ()), ("tail", ("tail-1:lift=40",)), ("tail", ("tail-1:lift=-40",)), ("tail", ("tail-1:lift=60",)),
-        ("tail", ("tail-1:lift=-60",)), ("tail:base_radius=0.85", ()), ("tail:base_radius=1.2", ()),
-        ("tail:base_radius=2.0,length=14", ()), ("wing", ("wing-1:preset=half_fold",)),
+        ("tail", ("tail-1:lift=-60",)), ("tail:base_radius=0.85", ()), ("tail:base_radius=0.9,length=14", ()),
+        ("wing", ("wing-1:preset=half_fold",)),
         ("wing", ("wing-1:preset=folded",)), ("harvest:preset=upper_arms", ()), ("harvest:preset=extra_legs", ()),
         ("tail;harvest:preset=extra_legs", ()), ("wing:style=feathered;harvest:preset=upper_arms", ())]
 
@@ -434,7 +435,9 @@ def test_one_function_decides_the_default_level_from_the_records():
     assert W.default_levels(doc("tail", collar=False)) == 0
     assert W.default_levels(doc("tail", junction=False)) == 0
     assert W.default_levels(doc("tail", collar="shell")) == CO.default_levels(doc("tail").appendages)
-    assert W.default_levels(doc("tail:base_radius=2.0")) == 0             # no weld on a tail that is the rump
+    old = doc("tail")                                                    # an old document's thick tail: built at the
+    old.appendages[0].params["base_radius"] = 2.0                         # range's end (0.9), so it is welded like any
+    assert W.default_levels(old) == 1
 
 
 @assets
@@ -545,3 +548,82 @@ def test_the_layers_stay_inside_the_welded_skin(world):
         out = ~inside_closed(pts, body) & ~inside_closed(pts, tail)
         assert out.mean() < 0.01, (name, out.mean())
     del pp
+
+
+# --------------------------------------------------------------------------
+# round 6, second pass: the sleeve follows the last ring as a membrane, cuts to the reach fade at a bounded slope, the
+# guard takes a patch out instead of the whole root.  Each fails on the first pass (f90a61f) or with the named switch.
+
+
+def _back_reach(fig):
+    """The share of the nominal reach that the last ring keeps on the root's open side (median)."""
+    c, placed, V0, F, targets, V1, diags = fig
+    t, d = targets[0], diags[0]
+    top = d["ids"]["top"]
+    kv = dict(zip(d["ids"]["region"].tolist(), d["kv"].tolist()))
+    side = CO._unit(V0[top] - np.asarray(d.get("centre", t.centre))) @ np.asarray(t.profile.up)
+    return float(np.median([kv[int(v)] for v in top[side > 0.6]])) / d["k0"]
+
+
+@assets
+@pytest.mark.parametrize("body", sorted(BODIES6))
+def test_the_tail_keeps_its_reach_on_the_back(world, body):
+    """The skin climbs the tail's back by (nearly) the whole reach on every body, with at most one guard round, and the
+    weld runs round (nearly) the whole ring.  The first pass cut the back's reach to 0.4 of it for two sliver triangles
+    (``PLACEMENT = "profile"`` brings that back); the heavy body lost it to a probe from the floor of the spinal furrow
+    (the open-side gate: ``openn``), measured 0.61 there and 0.99-1.0 on the others."""
+    fig = _figure(world, "tail", body)
+    t, d, before, after = _reports(fig)[0]
+    assert d["applied"] and d["guard"] <= 1, (body, d["guard"])
+    assert d["kept"] > 0.8, (body, d["kept"])                                # measured 0.85-0.94
+    # (the last ring may climb an oblique wall by two reaches, ``CLIMB_MAX``: with one it reached 0.75 of its height)
+    assert _back_reach(fig) > (0.55 if body == "heavy" else 0.9), (body, _back_reach(fig))
+    assert after["open_p50"] <= 22.0, (body, after["open_p50"])            # measured 7.4-18.8
+
+
+@assets
+def test_the_tail_is_welded_at_level_two_without_a_guard_round(world):
+    """Level 2: the first ring of the plug moves in proportion to the local reach (``CAP1_FULL``); pushed on by a fixed
+    step it crossed its mirror image in the cleft under the root and the whole weld was refused."""
+    fig = _figure(world, "tail", levels=2)
+    t, d, before, after = _reports(fig)[0]
+    assert d["applied"] and d["guard"] == 0 and d["kept"] > 0.8, d
+    assert _back_reach(fig) > 0.9                                            # measured 1.0
+    assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
+
+
+@assets
+def test_a_patch_that_would_fold_is_left_out_and_the_rest_of_the_root_stays_welded(world):
+    """The fan pair on the slim body: the soft guard rounds do not clear it, so the hard rounds take the patch out of
+    the weld (``GUARD_HARD``); what is left is welded, nothing crosses, and the weld says how much of the ring it kept
+    (0.23) with a warning.  The first pass gave the whole root up."""
+    c, placed, V0, F, targets, V1, diags = _figure(world, "harvest:preset=upper_arms", "slim_f")
+    for t, d in zip(targets, diags):
+        assert d["applied"] and d["guard"] > t.profile.guard, d["guard"]     # the hard rounds ran
+        assert 0.05 < d["kept"] < W.KEPT_WARN, d["kept"]                     # partly welded, and it says so
+        after = W.arrival_report(V1, F, t.wall, d.get("centre", t.centre), t.radius, V0=V0)
+        assert after["crossings"] <= after["crossings_before"] and after["plug_outside"] == 0
+        near = np.linalg.norm(V0 - np.asarray(d.get("centre", t.centre)), axis=1) < t.radius + 1.5
+        assert np.any(V1[near] != V0[near])                                  # the rest of the ring is welded
+    with pytest.warns(K.AppendageWarning, match="welded onto only"):
+        W.weld_vertices(V0, F, targets)
+
+
+def test_a_cut_to_the_reach_fades_at_a_bounded_slope_and_never_crosses_the_wall(sphere):
+    """``_envelope_on``: a vertex whose reach is cut to 0 lowers its neighbours' by at most the slope times the
+    distance, leaves the far side alone, and with ``among`` does not act through vertices outside the set."""
+    V, F = sphere
+    topo = W.Topology.of(F, len(V))
+    ids = np.nonzero(V[:, 2] > 5.0)[0]
+    x = np.full(len(ids), 1.0)
+    seed = int(np.argmax(V[ids, 2]))
+    x[seed] = 0.0
+    y = W._envelope_on(topo, V, ids, x, 0.5)
+    dist = np.linalg.norm(V[ids] - V[ids[seed]], axis=1)
+    assert y[seed] == 0.0 and np.all(y <= x + 1e-12)
+    assert np.all(y >= np.minimum(1.0, 0.5 * dist) - 1e-9)                   # never below slope * straight distance
+    assert np.all(y[dist > 2.4] == 1.0)                                      # the far side keeps its reach
+    assert y[(dist > 0) & (dist < 0.5)].max() < 0.5                          # ... and the near one fades
+    among = np.ones(len(ids), bool)
+    among[seed] = False
+    assert np.all(W._envelope_on(topo, V, ids, x, 0.5, among=among)[among] == 1.0)
