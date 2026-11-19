@@ -77,8 +77,9 @@ def _quads_to_tris(quads) -> np.ndarray:
     return np.vstack([q[:, [0, 1, 2]], q[:, [0, 2, 3]]])
 
 
-def _tube(points, radii, sides: int = 8) -> Mesh:
-    """A closed tapered tube through ``points``, capped with fans at both ends."""
+def _tube(points, radii, sides: int = 8, start_back: float = 0.0) -> Mesh:
+    """A closed tapered tube through ``points``, capped with fans at both ends; ``start_back``: the first fan's
+    centre set back that far behind the first point (along the tube), a cone instead of a flat disc."""
     pts = np.asarray(points, dtype=np.float64)
     rad = np.asarray(radii, dtype=np.float64)
     n = len(pts)
@@ -116,7 +117,7 @@ def _tube(points, radii, sides: int = 8) -> Mesh:
 
     # fan caps: one centre vertex per end
     c0 = len(verts)
-    verts = np.vstack([verts, pts[0][None, :], pts[-1][None, :]])
+    verts = np.vstack([verts, (pts[0] - start_back * tangents[0])[None, :], pts[-1][None, :]])
     c1 = c0 + 1
     last = (n - 1) * sides
     for k in range(sides):
@@ -1266,6 +1267,10 @@ class Sleeve:
 
     gain: float = 1.0
     sides: int = 32          # 14 drew the facets of the sleeve as a zigzag at the root collar's top edge (the collar follows the round wall)
+    # the buried end: its pole set back behind the joint by this share of the first ring's radius (0: a flat-cut
+    # disc on the joint, the folded wing's "fin" where it stood on the back; 0.7: a blunt cone, which also buries
+    # more of the arm for the print). Rings are not added: the arm's rings still start on the joint (wingroot)
+    cap: float = 0.0
 
     def fraction(self, t):
         t = np.clip(np.asarray(t, dtype=np.float64), 0.0, 1.0)
@@ -1370,7 +1375,8 @@ def _membrane_bones(sk: WingSkeleton, thickness: float, spike: float,
         r_arm[:mid_i + 1] = np.maximum(r_elbow + sleeve.extra(t_h, l_h), floor)
     u_f = (ts[mid_i:] - ts[mid_i]) / (1.0 - ts[mid_i])
     r_arm[mid_i:] = r_elbow + (R(0.034) - r_elbow) * u_f
-    out.append(Piece("arm", _tube(pp, r_arm, ARM_SIDES if sleeve is None else sleeve.sides),
+    out.append(Piece("arm", _tube(pp, r_arm, ARM_SIDES if sleeve is None else sleeve.sides,
+                                  start_back=0.0 if sleeve is None else sleeve.cap * r_arm[0]),
                      chain=("elbow", "wrist")))
     out.append(Piece("wrist_knob", _ball(J["wrist"] + up, 1.12 * R(0.034), 8, 14), bone="wrist"))
     out.append(Piece("elbow_knob", _ball(J["elbow"] + up, 1.12 * R(0.042), 8, 14), bone="elbow"))
@@ -1998,7 +2004,8 @@ def _feather_bones(sk, height, s, sleeve: Sleeve | None = None) -> list[Piece]:
         if blunt:           # the first end rounds off instead of showing a flat-cut rod
             u = np.clip(t / blunt, 0.0, 1.0)
             r = r * (0.35 + 0.65 * u * u * (3.0 - 2.0 * u))
-        return _tube(pts, r, ARM_SIDES if sleeve is None else sleeve.sides)
+        return _tube(pts, r, ARM_SIDES if sleeve is None else sleeve.sides,
+                     start_back=0.0 if sleeve is None else sleeve.cap * r[0])
 
     # the arm is the core of the leading edge: thick enough that the marginal rows
     # wrap a solid nose instead of a bare rod, and raised to the middle of the stack

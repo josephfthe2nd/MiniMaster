@@ -21,6 +21,11 @@ skin 4) found five things round 4 answers here:
 * **Honest numbers**: the join angle the docs quoted was measured inside the arm; the join is now measured where it is seen
   (section 5), plus the stowed heavy wing, the collar's on/off threshold and the sliders' extremes.
 
+**Round 6 (track S8, after the round-5 review: location 6, bone 5.5, muscle 6, skin 4, silhouette 5, robustness 4,
+pose 3, print 5)**: section 0 below. The seam itself (the collar, its lobes and notches, level 0 and the lab draft) is
+the weld track's (`weld.py`, [weld.md](weld.md)); this track fixes where the arm meets the skin it leaves, the arm's own
+end and integument, the print weld on small bodies, the feathered tube and the honesty of the join numbers.
+
 ```python
 placed.layers()                 # {"bone", "muscle", "skin"}, the muscles under the skin this wing's junction moulds
 placed.kind.layers_on(placed, shaped)   # ... under the skin of a body shaped with every appendage (the ecorche view)
@@ -37,6 +42,191 @@ placement versions, the model, the junction, the collar profile, the layers, the
 ![835af09 (round 3) and round 4 (this track with the core's round-4 collar), level 2: neutral man, heavy man, child; rear, three-quarter, side](images/wing_root_r4_skin.png)
 
 ![round 4 on the core + tail + wing merged tree, level 2: slim woman, tall man, short man (bat) and the neutral man's angel; rear, three-quarter, side, top](images/wing_root_r4_skin_bodies.png)
+
+## 0. Round 6: the arm against the skin it leaves
+
+### What the review found, and the cause
+
+* **N3, every body, folded**: a flat brown fin (a triangle or a half disc) stood on the back beside each folded arm.
+* **N2, the heavy man at the swing's floor and half folded**: flat decal islands where the buried arm broke through the
+  junction-moulded back. (The critic asked for `swing=-45`; the placed wing clamps it to its range, -20 for the bat,
+  -15 for the angel: these are the range's floor.)
+
+Measured, not guessed (scratchpad `junction/S8_wing_tools/coplanar.py`, `isolate.py`): the arm piece's surface against the
+level-1 skin the pipeline meshes, every triangle sampled 15 times, true distance to the skin's nearest point; **coplanar
+contact** = the area within 0.03 of the skin whose outward normal is within 30 degrees of the skin's (two sheets lying on
+each other: a clean crossing meets the skin at its exit angle and is not counted). e7e16b8: neutral folded 0.44 units^2,
+heavy folded 0.26, heavy half_fold 0.22, heavy swing floor 0.31 (rest: 0). Then each part of the wing's junction alone,
+the same rows:
+
+| neutral folded / heavy half_fold / heavy swing floor | coplanar contact (units^2) |
+|---|---|
+| the whole junction (e7e16b8) | 0.44 / 0.22 / 0.31 |
+| the tube alone (no masses) | 0 / 0 / 0.005 |
+| the masses alone (no tube) | 0.18 / 0.09 / 0.08 |
+| no shoulder boss | 0.10 / 0 / 0.015 |
+| no fillet climb (the tube's `height` 0) | 0.25 / 0.09 / 0.08 |
+| no junction | 0 / 0 / 0 |
+
+So the masses, and above all the masses and the fillet's climb up the arm together, lifted the skin to a hair under the
+arm's top where the arm lies along the back (the arm's top 0.27 out of the plain skin over a unit of its length, the
+skin raised 0.2-0.25 under it); and the sleeve's buried end was a **flat disc on the joint** (the joint is 0.30 deep, the
+sleeve 0.46 thick there), which, folded, stood out of the back: the half-disc of the fin, and the red half-discs of the
+ecorche view.
+
+### What changed
+
+1. **The sleeve ends in a cone** (`wings.Sleeve.cap`, `kinds.WING_SLEEVE_CAP`): its pole is set back behind the joint by
+   0.7 of the first ring's radius (1.0 for the slimmer feathered arm), not a flat fan on the joint. The rings still start
+   on the joint, so the arm profile, the layers and the collar read the arm as before. (A first try rounded the end INTO
+   the arm, a dome over its first ring: it removed the disc but took 30% of the buried arm and blocked the child's print,
+   5.2 -> 3.5%; the cone adds buried volume instead.) The junction's tube follows: its first station (a ball of its
+   radius, `junction.tube_distance`) may be no fatter than the ball that fits in the cone (`TUBE_END_FIT` = 0.5 of the
+   first ring's radius, plus how far the station is past the joint), and a full-radius station at 0.1 of the humerus
+   (`TUBE_NEAR`) carries the tube to the arm's radius before the exit: a full ball on the joint stood out of the cone and
+   called the skin over a folded arm's end hidden though no arm covers it (`tests/test_junction.py::
+   test_the_tube_the_junction_uses_lies_inside_the_appendage_it_stands_for`, folded and the child's angel).
+2. **The fillet's climb ramps out with the exit angle** (`WingRoot.climb`, `CLIMB_MIN_EXIT, CLIMB_FULL_EXIT = 45, 55`):
+   the junction tube's `height` is `WING_FILLET_HEIGHT` at an exit of 55 degrees or more, none at 45 or less (at rest
+   60-65 degrees on five bodies: all of it; the heavy man's 46.3: a twentieth, the dragon's 44.7 on him: none). The climb
+   is not inert: it buries the feathered arm for the print (15% of it in the body with it, 10% without, neutral man).
+   **And the rest skin is NOT what it was**: with the cone end, the junction's tube keeps its station on the joint (on the
+   flat-ended arm `conform_spec` cut that station: the tube began past the exit, which is why the climb moved nothing at
+   rest on four bodies and round 5's M2 "survived"), so the fillet now acts at rest on every body: the cage moves up to
+   0.06-0.22 units more than at e7e16b8 near the root (24-185 of 13,378 vertices by more than 0.01, every body and
+   style; scratchpad `S8_wing_tools/restcages.py`), the skin tilting toward the arm (D below).
+3. **The masses yield to an arm lying on the back** (`WingRoot.yield_to_arm`, every call of `WingRoot.masses`): the
+   posed humerus is sampled (its rings, 24 points each, to 0.75 of the way to the elbow) against the plain body's cage;
+   a sample outside the plain skin by `h` whose outward normal is within 20 degrees of the moulded skin's (all of
+   `YIELD_CLEAR` = 0.08; none at 40 degrees, smoothstep between; the masses' slope tilts the predicted normal) asks the
+   relief under it, predicted from the masses' own weights, to stay under `h - YIELD_CLEAR` or over `h + YIELD_COVER`
+   (0.06: covered); the worst ask is met by scaling down the masses that raise the skin there, in turn (at most 24
+   rounds). A sample the plain skin itself lies on (it clears it by less than asked) is no ask: the masses did not put
+   the skin there. Centres and footprints stay: the same muscles, flatter under the arm. **At rest no mass yields on any of
+   the six bodies** (a test; the rest skin changes for the reason in item 2, not the yield); folded the scapular plateau and the boss under the arm drop to 0-55% of their height.
+   The muscle sheets of the ecorche carry the same lowered relief (they read `WingRoot.masses`).
+4. **The arm's integument runs from the body's skin into the wing's** (`WingRoot.tint`, `TintedMesh`, item C below).
+5. **The feathered tube starts inside the skin** (`WingRoot.tube_start`, item E below).
+
+Tried and dropped: a deltoid mound over the joint covering the folded arm's end (`head_cover`): to stand 0.06 over an end
+0.26 out of the back it needed a 0.35-0.42 mound falling off within a ring of the arm (0.26 units, one cage quad), and the
+second yield pass then flattened it or the masses round it; the folded arm's cone end now leaves the back at 45-50
+degrees, a clean crossing at the root, under the weld's region.
+
+### Measured (left wing; level 1; e7e16b8 -> round 6)
+
+| row | coplanar contact (units^2) | outside pieces |
+|---|---|---|
+| bat, folded: neutral / child / heavy / slim woman / tall / short | 0.44 / 0.34 / 0.26 / 0.38 / 0.65 / 0.30 -> 0 / 0 / 0 / 0 / 0 / 0.003 | neutral, heavy 2 (an island) -> 1 |
+| bat, half folded, the same bodies | 0.040 / 0.040 / 0.22 / 0.017 / 0.098 / 0.034 -> 0.024 / 0.007 / 0.020 / 0.017 / 0.046 / 0.004 | heavy 2 -> 1 |
+| bat, the swing's floor (-20), the same bodies | 0.016 / 0.030 / 0.31 / 0 / 0.070 / 0.009 -> 0.019 / 0 / 0.003 / 0.008 / 0.030 / 0.034 | 1 |
+| bat, rest, the same bodies | 0 / 0 / 0 / 0 / 0.023 / 0 -> 0.022 / 0.022 / 0 / 0.006 / 0.035 / 0.022 | 1 |
+| dragon, folded, six bodies | (not measured at e7e16b8) -> 0 everywhere | 1 |
+| dragon, half folded: neutral / child / heavy / slim / tall / short | 0.054 / 0.033 / - / - / 0.157 / 0.046 -> 0.040 / 0.033 / 0.013 / 0.005 / 0.051 / 0.041 | 1 |
+| dragon, rest, the same bodies | 0 / 0 / - / - / 0.065 / 0 -> 0.036 / 0.042 / 0 / 0.020 / 0.045 / 0.038 | 1 |
+| angel, rest: neutral / child / tall (the others) | 0.082 / 0 / 0.123 -> 0.057 / 0.018 / 0.097 (heavy 0.001, slim 0.026, short 0.037) | 1 |
+| angel, the swing's floor: neutral / tall | 0.054 / 0.084 -> 0.084 / 0.084 | 1 |
+| angel, folded and half folded, six bodies | -> 0 everywhere (its arm lies off the back or does not cross it) | 1 |
+
+What is left lies at the root, within 0.55 units of the joint, never along the arm, on the side of the arm facing out
+of the back (5-17 degrees from it): the top of the sleeve's first rings and the shoulder of its cone lying within 0.03 of
+the skin raised over the joint, nearly parallel to it, and the fillet meeting the arm's wall tangentially at the exit
+(measured, `copwhere.py`: tall man at rest, samples on the cone 0.04 behind the joint, 0.02 proud; the neutral dragon,
+12 of 27 on the cone, the rest on the first ring; the child's angel, its first 0.24 units). The yield leaves it (the plain
+skin itself lies there: lowering the masses would not clear it). That is why rest rows that were 0 show 0.006-0.045 now: the cone's shoulder sits where the flat disc's edge
+was and the fillet now acts at the exit. It is inside the weld's region (the skin there becomes the weld's plug). Corners of the control ranges (fold 0 /
+0.5 / 1 x swing and raise_ at both ends): the heavy man, bat and dragon,
+20 rows on the final code: at most 0.003, one outside piece everywhere; the tall man, bat and dragon, 20 rows: at the
+double floor (swing -20 and raise_ -26 together) **0.104 / 0.117** (e7e16b8, bat: 0.30), at fold 0.5 0.03-0.05, the
+rest at most 0.014. The tall man's double floor is NOT closed: his sleeve is 0.63 thick on a joint 0.38 deep and there the
+plain skin itself lies along the top of its first three rings (the yield cannot clear what the masses did not raise; a
+larger `YIELD_CLEAR`, 0.12, changes nothing there). The level-2 skin, the eight test rows: folded on the six bodies
+0-0.003, the heavy man half folded 0.016, at the swing's floor 0.
+
+![round 5 (e7e16b8) and round 6, folded, neutral, heavy, child: rear, three-quarter, side; app picture without the collar](images/wing_root_r6_folded.png)
+
+![round 6 folded, geometry only (left: flat-shaded triangles in one material, what a print shows; right: one material, smooth, no collar): no sticker and no fin; the arm's cone end stands out of the back at the joint (not covered, section 8)](images/wing_root_r6_folded_geo.png)
+
+![round 5 and round 6, half folded: the tall man and the heavy man](images/wing_root_r6_half.png)
+
+### C. The arm's integument (the colour step at the root)
+
+The skin-coloured root ended on the brown arm in a serrated line (round 5, B1; with the weld the skin climbs the arm
+about 0.9 root radii and ends in a clean ring, still a two-colour step). The placed wing's mesh (`PlacedWing.pose`,
+`PlacedWing.mesh`) is now a `wingroot.TintedMesh`: a mesh that carries a per-vertex albedo through its transforms. The arm
+piece's albedo is the body's skin (`material_named("skin")`, the skin every pipeline renders the figure with; a figure
+has no skin-tone setting) up to `TINT_HOLD` = 1.0 root radius past where the posed arm crosses the plain skin, then turns
+into the wing's own over `TINT_BLEND` = 1.5 more (smoothstep); folded, the crossing is further along the arm and so is the
+skin colour. A bat's and a dragon's arm leaves a furred or scaled shoulder whose coat runs onto the arm (wing/A14, A16).
+The renderer takes a mesh's own albedo where the shell sets none (`portrait._shell_colors`, `draft._face_colors`: one line
+each). Only the albedo blends (the arm keeps the wing's roughness and scatter). The lab's draft view draws wings from a
+cluster proxy and shows no blend; the final render, the CLI picture and the weld preview do. Geometry is untouched (a
+print is the same).
+
+![the weld preview (scratchpad weld/run.py) on e7e16b8 and round 6, app colours, neutral man: the skin's ring on the arm no longer ends in a brown step](images/wing_root_r6_tint.png)
+
+### E. The print weld on small bodies, the feathered tube, an old document
+
+The share of the arm piece's volume in the body (lab export, medium; `print_report` blocks under 5%, warns under 8%):
+
+| body | bat e7e16b8 -> r6 | dragon | angel |
+|---|---|---|---|
+| neutral | 14.7 -> 24.0 | 13.0 -> 21.7 | 15.1 -> 19.2 |
+| child | 5.2 -> 11.8 | 5.1 -> 12.4 | 5.8 -> 10.9 |
+| slim woman | 7.0 -> 12.7 | 5.2 -> 11.6 | 7.5 -> 13.0 |
+| heavy | 28.5 -> 29.6 | 25.0 -> 24.6 | 20.5 -> 21.3 |
+| tall | 23.3 -> 32.2 | 22.3 -> 30.6 | 24.5 -> 28.4 |
+| short | 10.6 -> 20.0 | 9.6 -> 18.0 | 11.7 -> 16.9 |
+
+(The round-5 critic quoted the angel only: slim woman 5.7%, child 7.4% by the CLI export; the lab export gives every
+style 5-7.5% on the child and the slim woman at e7e16b8.) The cone end buries more of every arm; the feathered tube now
+starts inside the skin (below), so its root has a tube to flow into again.
+
+Posed (the arm piece's share in the level-1 body, `print_report.embedded_volume_share`, e7e16b8 -> round 6): the bat folded
+31.7 -> 22.9% (child), 36.5 -> 24.9% (slim woman), half folded 11.5 -> 9.9%, 12.3 -> 15.4%: the masses that yield to a lying
+arm cover less of it, above the 8% warning still. The angel folded or half folded keeps only 0.7-2.5% of its arm piece in
+the body (e7e16b8: 1.1-1.6%): its folded arm lies off the back (it does not cross the skin); the print report judges the
+group by its best-buried root piece, and the arm is not it there. Not changed by this round.
+
+**The feathered tube** (`TUBE_START` 0.15 of the humerus) began 0.05 units OUTSIDE the plain skin on the neutral man and
+0.18-0.21 outside on the child and the slim woman: their collars were dropped ("the appendage's axis never enters the
+skin", round 5 B3), and with them the tube the weld finds the root by. `WingRoot.tube_start` moves the start back toward
+the joint until it lies 0.05 under the skin (0.075 neutral, 0.025 child, 0.05 slim woman, at rest): their collars are
+built again at rest (child at the swing's floor: the collar's own construction drops one side, the weld track's).
+
+**`old_taillef.mmchar`** (round 2, an angel at placement scale 1.3, unstamped and untouched: read as version 3): it
+renders with the cone end, the tube from 0.05 of its humerus (inside the skin: e7e16b8 dropped both collars, this tree
+builds them), the arm's skin-coloured base, and 16.5% of its left arm in the body (e7e16b8: 9.0%).
+
+### D. The join one sees, measured densely and against the plain skin
+
+`visible_join` samples 72 directions now (24 missed the leaning side's minimum by up to 9 degrees). The round-4 table
+compared trees, not the junction against no junction; the shaped skin at 1.8 root radii equals the plain skin of the same
+placement within a degree or two, so "the mean rose 39.9 -> 43.2" was the placement's, not the moulding's. Round 6, at
+rest, the moulded skin against the PLAIN skin on the same ring (min / mean, degrees):
+
+| body | 1.3 root radii: moulded / plain (e7e16b8 moulded) | 1.8 root radii: moulded / plain (e7e16b8) |
+|---|---|---|
+| neutral | 21.3 / 44.6 against 32.5 / 50.7 (28.8 / 50.6) | 17.3 / 40.8 against 24.4 / 43.9 (20.2 / 43.4) |
+| child | 19.4 / 44.2 against 33.0 / 50.6 (30.0 / 51.0) | 16.2 / 40.0 against 16.2 / 43.7 (16.2 / 43.3) |
+| heavy | 30.0 / 47.5 against 29.6 / 49.1 (27.0 / 45.1) | 21.2 / 46.7 against 18.5 / 48.6 (19.8 / 46.3) |
+| tall | 23.5 / 45.7 against 30.6 / 49.3 (22.8 / 46.3) | 18.7 / 41.9 against 18.7 / 43.5 (18.7 / 42.9) |
+| short | 18.9 / 43.9 against 32.0 / 51.2 (28.3 / 51.1) | 15.6 / 39.7 against 17.1 / 43.6 (17.1 / 43.0) |
+| slim woman | 24.7 / 45.2 against 29.4 / 50.0 (29.5 / 52.0) | 11.5 / 40.4 against 16.8 / 44.1 (16.2 / 44.3) |
+
+Honest reading: at e7e16b8 the moulded skin's mean at 1.3 root radii equalled the plain skin's on four of six bodies (the
+fillet did not act: the tube's station on the joint was cut, item 2) and was 3-4 degrees under it on the heavy and the
+tall man; now it is 1.6-7.3 degrees under the plain skin's on all six (the junction tube's fillet tilting the skin toward
+the arm: a fillet's direction, not a flange's; the heavy man's 1.6 is the thin margin, his climb is a twentieth),
+and it folds over the arm nowhere (minimum 19-30 at 1.3, 11.5-21 at 1.8); at 1.8 the moulding changes little. The skin that flows INTO the arm (tangent to its wall) is the weld's, on the subdivided skin; the cage
+cannot shape it (a quad is 0.28 units, the root 0.46). `test_the_visible_join_measured_densely_against_the_plain_skin`
+replaces the round-4 test's floor on the mean (which rewarded a flange).
+
+### Cost
+
+Neutral man, best of 5 on a box shared with three other builders (round 6 / e7e16b8): the wing's spec 9-11 ms / 2.5-7
+(the yield's arm samples against the plain cage; the pose is memoised per controls: a feathered pose is ~10 ms), the pair's
+`apply_junctions` 140-175 ms / 115-175 (bat), 240-425 / 230-505 (angel; noisy), `Placed.mesh` +1 ms (the tint).
 
 ## 1. Where the joint is (the placement's third version)
 
@@ -193,10 +383,14 @@ FROM: toward the spine and down), 0.35 on the side it leans over, 0.55 up the ar
 
 ## 5. Numbers: the join one sees
 
+**Round 6: the table below is round 4's, sampled at 24 directions, comparing trees; it does not survive 72 samples and
+does not separate the junction from the placement (the round-5 review). Section 0 (D) has the dense numbers against the
+plain skin; the claims under the table that rest on the mean are withdrawn.**
+
 `wingroot.visible_join`: the angle between the arm's axis and the skin's tangent plane on a ring k root radii round where the axis
 crosses the plain skin (`min`: the side the arm leans over, negative where the skin folds over the arm; 90: the skin square to the
 arm). The angle where the axis itself meets the skin (the 62 -> 74 round 2b quoted) is inside the arm. Membrane wing at rest,
-level 0 cage (`S7_wing_tools/visible_join.py` on the three trees):
+level 0 cage (`S7_wing_tools/visible_join.py` on the three trees, n = 24):
 
 ```
             c808d60 (shown to the user)      835af09 (round 3)               round 4
@@ -273,6 +467,16 @@ along it. No blocking finding; the angel without the junction is under the repor
 
 ## 7. References used
 
+Round 6: **wing/A07** (pigeon skeleton, folded: the humerus folds back along the flank from a joint at the top of the
+thorax, inside the body's contour: the folded arm lies ON the back, it is not lifted off it, so the relief yields to it
+rather than the arm being raised); **wing/A10** (hawk, folded: the wing lies on the body contour, no gap and no fin);
+**wing/A14, A16** (fruit bat; flying fox skin-skeleton preparation: the furred coat of the shoulder runs onto the arm and
+the membrane's root, the colour changes along the arm, not at a line round it: the integument blend); **wing/H03, H04**
+(Gray 204; the scapula's attachments: the coracoid hooking forward from the superior border at the glenoid's neck, the
+bowed medial border, the round inferior angle); **wing/H24** (the shoulder mound the cover was meant to make, not
+reached). Side-by-side sheets: scratchpad `junction/S8_wing_out/ref_*.png`.
+
+
 (library ids: `refs/wing/<id>`; `TAKEAWAYS.md` section 5; side-by-side sheets, third-party images kept out of the repository:
 scratchpad `junction/S7_wing_out/ref_muscle_H06_H05_vs_S7.png`, `ref_bone_H03_vs_S7.png`)
 
@@ -290,6 +494,25 @@ scratchpad `junction/S7_wing_out/ref_muscle_H06_H05_vs_S7.png`, `ref_bone_H03_vs
 * **wing/H15, H16** (muscular and lean backs): the relief's scale (no rings; the blade's mound and its lower edge read).
 
 ## 8. What it does not do (honestly)
+
+Round 6 (this track; the older items below stand where not superseded):
+
+* **The folded arm's end is not covered by a shoulder mound.** Its cone end leaves the back at 45-50 degrees, a clean
+  crossing at the root, but a sculptor would put the humeral head under a deltoid and have the arm come out of the
+  mound's flank. The cover was tried and dropped (section 0); with the weld the skin at least climbs it.
+* **Residual contact at the joint**: 0.01-0.05 units^2 of the arm within 0.03 of the skin and nearly parallel to it on
+  some rows (the tall man half folded 0.048, the neutral man at fold 0.5 / swing 16 / raise 26 0.033), all within 0.35
+  units of the joint, on the first ring's top and the cone's shoulder: inside the weld's region. The yield cannot help
+  there (the plain skin itself lies on the arm). **The tall man at the double floor** (swing -20 and raise_ -26) keeps
+  0.10-0.12 within 0.55 units of the joint (e7e16b8: 0.30): not closed; a per-body clamp of the raise floor was not made.
+* **The yield is a prediction**: the masses' relief on the plain cage, not the subdivided, validity-limited skin; the
+  tube's own displacement is not in it (with it, the raw undiffused fillet over-predicted and flattened the child's rest
+  mound: dropped). The tests measure the real level-1 skin.
+* **The integument blend is albedo only** and the lab's draft view (a cluster proxy) does not show it.
+* **The print weld** of the angel on the child is 10.9% (it was 5.8%); the round-5 critic's CLI figures were not re-run
+  through the CLI (the lab export and `print_report.embedded_volume_share` were).
+* **The bone layer** has a coracoid hook and rounded borders now, still no fossae and no posed scapula (the blade does not
+  rotate with the arm).
 
 * **The folded bat and dragon** pivot about the joint 0.35 units further out: their stowed membrane's root panel (the rig's,
   between the arm and the waist) shows larger flat flaps at the inner edge than at 835af09 (scratchpad
@@ -317,6 +540,38 @@ scratchpad `junction/S7_wing_out/ref_muscle_H06_H05_vs_S7.png`, `ref_bone_H03_vs
 * **Level 0** (the CLI's and the lab's default in 835af09) has no collar: the core track's level policy decides that.
 
 ## 9. Tests and mutations
+
+Round 6 (`tests/test_wing_root.py`, BODIES now six: the slim woman and the short man added): every new test fails on e7e16b8 with
+the defect's own numbers (the arm-lying test: 0.22-0.65 units^2 of coplanar contact on all 8 rows; the print test:
+4.8-7.2%; the feathered tube: 0.05-0.21 outside the skin; the dense visible join: the moulded mean equal to the plain on
+four bodies; the cone, the tint, the climb ramp and the coracoid do not exist there), and a mutation run on a copy
+(scratchpad `S8_wing_tools/mut.sh`, `muts.sh`, each mutant alone) catches every mutant:
+
+| mutant | caught by |
+|---|---|
+| no yield (the masses as the anatomy has them in every pose) | `test_an_arm_lying_along_the_back_leaves_it_cleanly_and_does_not_lie_on_its_skin[neutral-folded]` |
+| the climb never ramps out | the same (the heavy man at the swing's floor) |
+| the flat end disc (`WING_SLEEVE_CAP` 0) | `test_the_sleeve_ends_in_a_cone...` (its pole at least half a radius behind the joint; on the final code the print test alone no longer catches it: the tube's near station lets the fillet bury 8% or more without the cone) |
+| the yield's clearance 0; the yield blind to the masses' slope | the arm-lying test |
+| the yield also asks samples the plain skin lies on | `test_the_relief_does_not_yield_to_skin_the_masses_did_not_put_there` |
+| no tint hook; the tint held all the way; the renderer ignoring a mesh's albedo; the albedo shown in another material | `test_the_arm_runs_from_the_skin_colour_into_the_wing_s` |
+| the feathered tube from 0.15 again | `test_the_feathered_tube_starts_inside_the_skin` |
+| `visible_join` back to 24 samples | `test_the_visible_join_measured_densely_against_the_plain_skin` |
+| `WING_FILLET_HEIGHT` 0 (round 5's surviving M2) | `test_the_skin_climbs_the_arm_at_rest_and_not_where_the_arm_lies_along_the_back` |
+| the coracoid not reaching forward | `test_the_blade_has_a_coracoid_hook_and_rounded_borders` |
+| the tube's first station a full ball on the joint (no `TUBE_END_FIT`) | `tests/test_junction.py::test_the_tube_the_junction_uses_lies_inside_the_appendage_it_stands_for` (folded bat, the child's angel; it failed so before the fix) |
+
+Changed existing tests (each with the reason in the test): `test_the_arm_leaves_a_steeper_skin_than_it_did` is replaced by
+the dense test (its floor on the mean rewarded a flange and its numbers held only at 24 samples); in
+`test_a_folded_wing_adds_no_lobes...` the permanent masses are the same muscles at every pose, no higher than at rest
+(they were asserted identical: the yield lowers them under a lying arm); `test_the_shoulder_boss_follows_the_arm...` reads
+the anatomy's masses (`yielding=False`) for the boss's own law; `test_the_report_tool_measures_what_the_tests_pin` asserts
+the dense relation instead of the floor on the mean; `tests/test_junction.py::
+test_the_skin_meets_the_root_at_a_smaller_angle_and_without_new_creases[wing]` likewise (it asserted the visible join's
+min >= 20 and mean >= 45 at 24 samples; now: no fold, min >= 12, and the moulded mean at least a degree under the plain
+skin's; the neutral man there: 15.9 / 44.0 against the plain 29.0 / 50.9).
+
+Round 4:
 
 `tests/test_wing_root.py` (83 tests). Each round-4 behaviour has a test that fails without it; a mutation run on a copy
 (scratchpad `S7_wing_tools/mutrun.py`, each mutant alone) catches all 16:

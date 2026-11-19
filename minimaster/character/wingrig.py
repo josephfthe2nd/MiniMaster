@@ -1104,13 +1104,18 @@ class PlacedWing:
 
     rig: WingRig
     matrix: np.ndarray
+    # ``(mesh, controls, kw) -> Mesh``: what a body makes of the placed mesh (``wingroot.WingRoot.tint``: the arm's
+    # integument running from the body's skin colour at the root into the wing's); None: the mesh as it is
+    tint: object = None
 
     def mesh(self, pose=None) -> Mesh:
-        return self.rig.pose_mesh(pose).transform(self.matrix)
+        out = self.rig.pose_mesh(pose).transform(self.matrix)
+        return self.tint(out, None, {}) if (self.tint is not None and pose is None) else out
 
     def pose(self, controls: PoseControls | None = None, **kw) -> Mesh:
-        return self.rig.pose_mesh(self.rig.pose_from_controls(controls, **kw)).transform(
+        out = self.rig.pose_mesh(self.rig.pose_from_controls(controls, **kw)).transform(
             self.matrix)
+        return self.tint(out, controls, kw) if self.tint is not None else out
 
     def flap(self, phase_deg: float, amp: float = 45.0, **kw) -> PoseControls:
         """``WingRig.flap`` for this wing: a flap cycle sized to its placed range."""

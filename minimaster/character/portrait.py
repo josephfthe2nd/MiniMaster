@@ -133,8 +133,12 @@ def _shell_colors(shell: Shell, cam, view, rig, ao_strength, cache, ao=True):
     # view direction: from the surface toward the camera (origin in cam space)
     vd = -cam
     vd /= np.maximum(np.linalg.norm(vd, axis=1, keepdims=True), 1e-12)
+    # a mesh may carry its own albedo for its own material (wingroot.TintedMesh: a wing's arm running from the skin's
+    # colour into its own)
+    colors = getattr(mesh, "colors_for", None)
     return sh.shade_vertices(n_cam, vd, shell.material, rig, occ,
-                             base_colors=shell.base_colors)
+                             base_colors=shell.base_colors if shell.base_colors is not None
+                             else (colors(shell.material) if colors is not None else None))
 
 
 def render_portrait(shells, size=(600, 800), azimuth=25.0, elevation=6.0,

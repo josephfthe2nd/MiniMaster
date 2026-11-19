@@ -736,7 +736,7 @@ def scapula_blade(lm: Landmarks, skin: MouldedSkin, relief=None, rings: int = 5,
     """The shoulder blade (left frame): ``SCAPULA_BLADE`` laid ``depth`` (default ``SCAPULA_DEPTH`` x s) under the
     PLAIN skin (under a moulded ``skin`` by that plus the ``relief`` the masses raise there: muscle, not bone),
     ``SCAPULA_THICK`` thick. ``None`` off the back."""
-    sh = Sheet("scapula", "the shoulder blade", 0, 0.0, _xy(lm, SCAPULA_BLADE))
+    sh = Sheet("scapula", "the shoulder blade", 0, 0.0, _xy(lm, _rounded(SCAPULA_BLADE)))
     grid = _sheet_grid(sh, skin, rings, sides)
     if grid is None:
         return None
@@ -744,6 +744,50 @@ def scapula_blade(lm: Landmarks, skin: MouldedSkin, relief=None, rings: int = 5,
     rel = np.zeros(len(S)) if relief is None else np.asarray(relief(S), dtype=np.float64)
     top = S - N * ((SCAPULA_DEPTH * lm.s if depth is None else depth) + rel)[:, None]
     return _grid_lens(top, top - N * SCAPULA_THICK * lm.s, rings, sides, wall=True)
+
+
+def _rounded(poly, rounds: int = 2):
+    """A closed polygon with its corners cut (Chaikin, ``rounds`` times): the blade's borders are curves, its angles
+    rounded (wing/H03, H01: the medial border bows, the inferior angle is round; the first outline was nine straight
+    edges, "a flat triangular blade", round 5)."""
+    P = np.asarray(poly, dtype=np.float64)
+    for _ in range(rounds):
+        Q = np.roll(P, -1, axis=0)
+        P = np.stack([0.75 * P + 0.25 * Q, 0.25 * P + 0.75 * Q], axis=1).reshape(-1, 2)
+    return tuple(map(tuple, P))
+
+
+# The coracoid process (wing/H03 Gray 204, H04): from the superior border at the neck of the glenoid it runs forward
+# OVER the top of the rib cage and hooks out toward the shoulder, under the clavicle's outer third; in a bird it is the
+# strut from the shoulder joint to the sternum (wing/A02, A07), on a winged human the clavicle carries that load and the
+# coracoid stays the human hook. Its root on the blade (x / shx, (y - spine-1) / Lt), how far forward it reaches (s,
+# from the blade toward the front of the chest), its hook out and down (s), its radius at the root / the tip (s)
+CORACOID = ((0.76, 0.74), 0.42, (0.10, -0.06), (0.055, 0.035))
+
+
+def coracoid(lm: Landmarks, skin: MouldedSkin, surface: BodySurface, depth: float | None = None) -> Mesh | None:
+    """The coracoid process (left frame): a hooked bar from the blade's superior border at the glenoid's neck forward
+    under the clavicle (``CORACOID``), kept inside the body: its tip is pulled back to ``CLAVICLE_DEPTH`` + its
+    radius under the skin of the shoulder's front if the hook would reach it. ``None`` off the back."""
+    (fx, fy), fwd, (hx, hy), (r0, r1) = CORACOID
+    root, n_root, ok = skin.from_behind(np.array([[fx * lm.shx, lm.spine1[1] + fy * lm.lt]]))
+    if not ok[0]:
+        return None
+    s = lm.s
+    a = root[0] - n_root[0] * ((SCAPULA_DEPTH * s if depth is None else depth) + 0.5 * SCAPULA_THICK * s)
+    b = a + np.array([0.0, 0.02 * s, fwd * s])                   # forward over the ribs (the back is -Z)
+    c = b + np.array([hx * s, hy * s, 0.12 * s])                 # the hook: out, down and on toward the front
+    # inside the body: the tip at least a skin, the clavicle's depth and its own radius under the front of the shoulder
+    hit = surface.hit(c + np.array([0.0, 0.0, 3.0]), (0.0, 0.0, -1.0), near=6.0)
+    if hit is not None:
+        limit = hit[1][2] - (CLAVICLE_DEPTH + r1) * s
+        if c[2] > limit:
+            shift = c[2] - limit
+            b, c = b - np.array([0.0, 0.0, shift]), c - np.array([0.0, 0.0, shift])
+    t = np.linspace(0.0, 1.0, 9)[:, None]
+    path = (1 - t) ** 2 * a + 2 * (1 - t) * t * b + t ** 2 * c            # a quadratic curve: a hook, not a polyline
+    r = (r0 + (r1 - r0) * t[:, 0]) * s
+    return _path_tube(path, r)
 
 
 def acromion(lm: Landmarks, surface: BodySurface) -> np.ndarray | None:
@@ -884,6 +928,51 @@ _OWNER = {"owner": "trunk"} if "owner" in J.JunctionSpec.__dataclass_fields__ el
 
 
 # --------------------------------------------------------------------------
+# the arm's integument: the body's skin running onto the arm
+
+# the arm keeps the colour of the body's skin TINT_HOLD root radii past where it crosses the skin and turns into the
+# wing's own over TINT_BLEND more (a smoothstep): the skin that flows up the root (the weld, about 0.9 root radii up
+# the wall) ends on skin-coloured arm, not in a two-colour ring (round 5: a serrated skin / brown line at the root);
+# a bat's or a dragon's arm leaves a furred or scaled shoulder whose coat runs onto it (wing/A14-A16)
+TINT_HOLD, TINT_BLEND = 1.0, 1.5
+
+
+class TintedMesh(Mesh):
+    """A :class:`~minimaster.core.mesh.Mesh` that carries a per-vertex albedo (``base_colors``, linear RGB) through its
+    transforms: a renderer uses it where the shell sets none (``portrait.Shell.base_colors``). Geometry is a plain
+    mesh's: a print or a merge ignores the colours."""
+
+    def __init__(self, vertices, faces, base_colors=None, material=None):
+        super().__init__(vertices, faces)
+        self.base_colors = None if base_colors is None else np.asarray(base_colors, dtype=np.float64).reshape(-1, 3)
+        # the material the colours are for: a renderer that draws the mesh in another one (a one-colour view of the
+        # geometry) ignores them
+        self.tint_material = material
+
+    def colors_for(self, material):
+        """The per-vertex albedo for a shell drawn in ``material`` (``None`` for another material)."""
+        if self.base_colors is None or (self.tint_material is not None and material != self.tint_material):
+            return None
+        return self.base_colors
+
+    def _with(self, mesh: Mesh) -> "TintedMesh":
+        return TintedMesh(mesh.vertices, mesh.faces, self.base_colors, self.tint_material)
+
+    def copy(self) -> "TintedMesh":
+        return TintedMesh(self.vertices.copy(), self.faces.copy(),
+                          None if self.base_colors is None else self.base_colors.copy(), self.tint_material)
+
+    def transform(self, m) -> "TintedMesh":
+        return self._with(Mesh.transform(self, m))
+
+    def translated(self, v) -> "TintedMesh":
+        return self._with(Mesh.translated(self, v))
+
+    def scaled(self, s) -> "TintedMesh":
+        return self._with(Mesh.scaled(self, s))
+
+
+# --------------------------------------------------------------------------
 # the model of one placed wing
 
 # the skin meets the arm sleeve along a fillet this high over its width (junction.py)
@@ -901,7 +990,32 @@ FILLET_PULL = 1.0                 # the share of the in-plane redistribution of 
 # heavy man's and the child's shoulders hidden that the arm does not cover)
 TUBE_STATIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
 TUBE_START = {"feathered": 0.15}
+TUBE_INSIDE = 0.05                 # units: the tube's first point lies at least this far under the plain skin (tube_start)
+TUBE_NEAR = 0.1                    # a station this far along the humerus too, at the arm's full radius
+TUBE_END_FIT = 0.5                 # the first station's radius at most this share of the first ring's (the ball in the cone)
 MIRROR = np.array([-1.0, 1.0, 1.0])
+# degrees between the posed arm and the plain skin: the fillet's climb up the arm (the junction tube's ``height``) is
+# all there at CLIMB_FULL_EXIT or more and none at CLIMB_MIN_EXIT or less, a smoothstep between (round 6). An arm laid
+# along the back has its wall beside the skin for a unit or more and the climb lifted the skin into it: with the
+# masses, 0.22-0.44 units^2 of skin lay on the arm's top (the folded fin, the heavy man's islands) where the masses
+# alone laid 0.08-0.18 and the climb alone none; at a 45.7-degree exit (the neutral man half folded) the climb alone
+# still laid 0.05. At rest (exits of 60-65 degrees; the heavy man's 46: a twentieth of it) the climb is all there: it
+# buries the feathered arm for the print (its share in the body 15% with it, 10% without, neutral man)
+CLIMB_MIN_EXIT, CLIMB_FULL_EXIT = 45.0, 55.0
+# The relief yields to the arm (``WingRoot.yield_to_arm``): where the posed arm's surface lies over the back nearly
+# parallel to the skin the masses raise (its normal within YIELD_ANGLE[0] degrees of the moulded skin's: all of
+# YIELD_CLEAR; at YIELD_ANGLE[1] or more: none, a smoothstep between) and outside the plain skin, the masses under it
+# are lowered until the moulded skin stays that far (units) under it: a sheet of skin a hair under the arm's top is
+# the coplanar contact that renders as a flat decal (round 5: the folded wing's fin, the heavy man's islands at the
+# swing's floor and in half_fold). Predicted on the plain body's cage (the surface the junction displaces) from the
+# masses alone (``Mass.weight``, their slope tilting the skin's normal), along the humerus' rings to YIELD_RINGS of
+# the way to the elbow.
+YIELD_ANGLE = (20.0, 40.0)
+YIELD_CLEAR = 0.08
+YIELD_COVER = SKIN_T             # ... and skin this far over the arm's surface covers it: no contact either
+YIELD_RINGS = 0.75
+YIELD_SIDES = 24
+YIELD_ROUNDS = 24
 
 
 @dataclass(frozen=True)
@@ -959,12 +1073,13 @@ def virtual_arm_profile(placed_rig, matrix, sleeve=None, rings: int = 9) -> ArmP
     return ArmProfile(S[None, :] + t[:, None] * (E - S)[None, :], r, r, t, 0)
 
 
-def visible_join(plain: BodySurface, skin: BodySurface, S, E, r: float, k: float = 1.3, n: int = 24) -> tuple:
+def visible_join(plain: BodySurface, skin: BodySurface, S, E, r: float, k: float = 1.3, n: int = 72) -> tuple:
     """``(min, mean)`` of the angle (degrees) between the arm's axis (``S`` -> ``E``) and the tangent plane of the
     skin ``skin`` on a ring ``k`` root radii (``r``) round where the axis crosses the ``plain`` skin: the join one
     SEES (the angle where the axis itself meets the skin is hidden inside the arm). 90: the skin is square to the
     arm; the minimum is the side the arm leans over (negative: the skin folds over the arm). ``None`` if the axis
-    does not cross the skin."""
+    does not cross the skin. ``n`` ring samples (72: round 4 quoted 24, which missed the leaning side's minimum by up to
+    9 degrees on the child and the heavy man)."""
     S, E = np.asarray(S, dtype=np.float64), np.asarray(E, dtype=np.float64)
     d = _unit(E - S)
     h = plain.hit(S, d, near=float(np.linalg.norm(E - S)) + 2.0)
@@ -1031,18 +1146,32 @@ class WingRoot:
         preset = ctl.pop("preset", None)
         return self.rig.rig.pose_from_controls(preset, **ctl) if (ctl or preset) else None
 
+    def _posed(self, controls=None):
+        """``(humerus skin matrix or None, shoulder, elbow)`` of the pose ``controls`` (placed frame), memoised: a
+        feathered rig's pose costs ~10 ms and a spec asks for it several times."""
+        import json
+        key = json.dumps(controls or {}, sort_keys=True, default=str)
+        memo = self.__dict__.setdefault("_pose_memo", {})
+        if key not in memo:
+            pose = self._pose(controls)
+            M = None if pose is None else self.rig.skin_matrices_body(pose)["elbow"]
+            j = self.rig.joint_positions(pose)
+            if len(memo) >= 16:
+                memo.pop(next(iter(memo)))
+            memo[key] = (M, np.asarray(j["shoulder"], dtype=np.float64), np.asarray(j["elbow"], dtype=np.float64))
+        return memo[key]
+
     def _carried(self, points, controls=None) -> np.ndarray:
         """Rest points of the humerus (the placed frame) carried to the pose ``controls``."""
-        pose = self._pose(controls)
-        if pose is None:
+        M = self._posed(controls)[0]
+        if M is None:
             return np.asarray(points, dtype=np.float64)
-        M = self.rig.skin_matrices_body(pose)["elbow"]
         return np.asarray(points, dtype=np.float64) @ M[:3, :3].T + M[:3, 3]
 
     def joints(self, controls=None) -> tuple:
         """``(shoulder, elbow)`` of the posed upper arm in the LEFT frame."""
-        j = self.rig.joint_positions(self._pose(controls))
-        return self._to_left(j["shoulder"]), self._to_left(j["elbow"])
+        _, S, E = self._posed(controls)
+        return self._to_left(S), self._to_left(E)
 
     # -- the masses --------------------------------------------------------------------
 
@@ -1053,9 +1182,15 @@ class WingRoot:
                 self._left_masses = self.surface.memo["masses"] = permanent_masses(self.lm, self.surface)
         return self._left_masses
 
-    def masses(self, controls=None) -> list:
+    def masses(self, controls=None, yielding: bool = True) -> list:
         """All the masses (left frame) of the wing under ``controls``: the permanent ones and the
-        cap, which follows the posed arm."""
+        cap, which follows the posed arm, each lowered where the posed arm lies over it
+        (:meth:`yield_to_arm`; ``yielding=False``: as the anatomy has them, not lowered)."""
+        import json
+        key = (json.dumps(controls or {}, sort_keys=True, default=str), bool(yielding))
+        memo = self.__dict__.setdefault("_masses_memo", {})
+        if key in memo:
+            return list(memo[key])
         S, E = self.joints(controls)
         out = list(self.permanent())
         cap = cap_mass(self.lm, self.surface, S, E, self.exit_radius())
@@ -1063,7 +1198,135 @@ class WingRoot:
             cap = envelope(cap, out)
         if cap is not None:
             out.append(cap)
-        return out
+        if yielding and self.tube:
+            out = self.yield_to_arm(out, controls)
+        if len(memo) >= 16:
+            memo.pop(next(iter(memo)))
+        memo[key] = tuple(out)
+        return list(out)
+
+    def _plain_patch(self):
+        """The plain body's cage around this wing's side (left frame) as a :class:`~.collar.SkinPatch` (shared by
+        the pair through the surface's memo)."""
+        patch = self.surface.memo.get("plain_patch")
+        if patch is None:
+            from . import collar as CO
+            q = self.surface.q
+            tri = np.vstack([q[:, [0, 1, 2]], q[:, [0, 2, 3]]])
+            lm = self.lm
+            centre = np.array([0.6 * lm.shx, lm.spine1[1] + 0.5 * lm.lt, lm.spine1[2]])
+            patch = self.surface.memo["plain_patch"] = CO.SkinPatch(self.surface.v, tri, centre, 1.6 * lm.lt + 1.5)
+        return patch
+
+    def arm_samples(self, controls=None, upto: float = YIELD_RINGS, sides: int = YIELD_SIDES):
+        """``(points, normals, t)``: points on the posed humerus' surface (left frame) round its rest rings
+        (``ArmProfile``: the ring centres and their mean radius) to ``upto`` of the way to the elbow, the outward
+        normal of the sleeve there (tilted where the radius changes along the arm) and the share of the humerus. The
+        rings are carried rigidly with the bone."""
+        prof = self.profile
+        t_r = np.asarray(prof.t, dtype=np.float64)
+        ts = t_r[t_r <= upto + 1e-9]
+        if len(ts) < 2:
+            return np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0)
+        c, r, _ = prof.at(ts)
+        cr = np.asarray(prof.centers, dtype=np.float64)
+        length = float(np.linalg.norm(cr[-1] - cr[0]))
+        axis = np.gradient(c, axis=0)
+        axis /= np.maximum(np.linalg.norm(axis, axis=1, keepdims=True), _EPS)
+        # the radius' slope along the arm, piecewise between the rings (the sleeve is a polyline of rings)
+        k = np.clip(np.searchsorted(t_r, ts, side="right") - 1, 0, len(t_r) - 2)
+        slope = (prof.radius[k + 1] - prof.radius[k]) / np.maximum((t_r[k + 1] - t_r[k]) * length, _EPS)
+        ref = np.array([0.0, 0.0, 1.0]) if abs(float(axis[0, 2])) < 0.9 else np.array([1.0, 0.0, 0.0])
+        u = np.cross(axis, ref)
+        u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), _EPS)
+        v = np.cross(axis, u)
+        th = np.linspace(0.0, 2.0 * math.pi, sides, endpoint=False)
+        rad = np.cos(th)[None, :, None] * u[:, None, :] + np.sin(th)[None, :, None] * v[:, None, :]
+        nrm = rad - slope[:, None, None] * axis[:, None, :]
+        nrm /= np.maximum(np.linalg.norm(nrm, axis=2, keepdims=True), _EPS)
+        pts = (c[:, None, :] + r[:, None, None] * rad).reshape(-1, 3)
+        tip = (c[:, None, :] + rad * 0.0 + nrm).reshape(-1, 3)          # centre + the normal: carried like a point
+        both = self._to_left(self._carried(np.vstack([pts, tip, np.repeat(c, sides, axis=0)]), controls))
+        n = len(pts)
+        P, T, C = both[:n], both[n:2 * n], both[2 * n:]
+        N = T - C
+        N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), _EPS)
+        return P, N, np.repeat(ts, sides)
+
+    def _arm_over_skin(self, controls=None):
+        """The posed arm's surface against the plain skin (left frame), for the relief to fit round it: ``None`` or
+        ``dict(pt, nrm, h, N, t, along, t1, t2)``: per sample of the arm's surface (:meth:`arm_samples`) the nearest
+        point of the plain skin, its normal, the signed distance of the sample from it (``h``, positive outside),
+        the arm's outward normal, the share of the humerus, how much of a relief displacement (``RELIEF_DIRECTION``)
+        lies along the skin's normal there and two tangents of the skin. Only the samples outside the plain skin or
+        within ``YIELD_COVER`` under it and facing out of the back."""
+        P, N, t = self.arm_samples(controls)
+        if not len(P):
+            return None
+        pt, nrm, h, _ = self._plain_patch().closest(P)
+        keep = (h > -YIELD_COVER) & (h < 1.5) & ((N * nrm).sum(axis=1) > math.cos(math.radians(YIELD_ANGLE[1] + 25.0)))
+        if not keep.any():
+            return None
+        pt, nrm, h, N, t = pt[keep], nrm[keep], h[keep], N[keep], t[keep]
+        rd = np.asarray(RELIEF_DIRECTION, dtype=np.float64) if RELIEF_DIRECTION is not None else None
+        along = np.ones(len(pt)) if rd is None else np.maximum(nrm @ rd, 0.0)
+        t1 = np.cross(nrm, np.where(np.abs(nrm[:, 2:3]) < 0.9, [[0.0, 0.0, 1.0]], [[1.0, 0.0, 0.0]]))
+        t1 /= np.maximum(np.linalg.norm(t1, axis=1, keepdims=True), _EPS)
+        t2 = np.cross(nrm, t1)
+        return dict(pt=pt, nrm=nrm, h=h, N=N, t=t, along=along, t1=t1, t2=t2)
+
+    def yield_to_arm(self, masses, controls=None, clear: float = YIELD_CLEAR, arm=None) -> list:
+        """``masses`` lowered so that the skin they raise stays ``clear`` under the posed arm where the arm lies over
+        the back nearly parallel to that skin (``YIELD_ANGLE``): every sample of the arm's surface outside the plain
+        skin by ``h`` asks the relief under it (predicted at the nearest point of the plain skin, along its normal)
+        to stay under ``h - clear`` (or over ``h + YIELD_COVER``: covered); the worst ask is met by scaling down the
+        masses that raise the skin there, and so on (``YIELD_ROUNDS``). An arm that leaves the back steeply (the spread wing at rest) asks nothing: the masses are
+        returned as they are."""
+        if not masses:
+            return masses
+        arm = self._arm_over_skin(controls) if arm is None else arm
+        if arm is None:
+            return masses
+        out = (arm["h"] > 0.0)
+        if not out.any():
+            return masses
+        pt, nrm, h, N, along = (arm[k][out] for k in ("pt", "nrm", "h", "N", "along"))
+        t1, t2 = arm["t1"][out], arm["t2"][out]
+        eps = 0.02
+        # the relief's slope tilts the moulded skin's normal by its gradient (a mound's flank can lie on the arm)
+        C = np.stack([m.height * m.weight(pt) * along for m in masses], axis=0)            # (masses, samples)
+        G1 = np.stack([m.height * (m.weight(pt + eps * t1) - m.weight(pt - eps * t1)) / (2 * eps) for m in masses], axis=0)
+        G2 = np.stack([m.height * (m.weight(pt + eps * t2) - m.weight(pt - eps * t2)) / (2 * eps) for m in masses], axis=0)
+        lo, hi = (math.cos(math.radians(a)) for a in YIELD_ANGLE)
+        scale = np.ones(len(masses))
+        done = np.zeros(len(pt), dtype=bool)
+        for _ in range(YIELD_ROUNDS):
+            g1, g2 = scale @ G1, scale @ G2
+            n_m = nrm - (g1[:, None] * t1 + g2[:, None] * t2) * along[:, None]
+            n_m /= np.maximum(np.linalg.norm(n_m, axis=1, keepdims=True), _EPS)
+            need = clear * _smooth(((N * n_m).sum(axis=1) - hi) / (lo - hi))
+            relief = scale @ C
+            over = relief - np.maximum(h - need, 0.0)
+            # skin that stands YIELD_COVER over the arm covers it (the boss over the buried end): not a contact
+            # ... nor is an arm the PLAIN skin already lies on (it clears it by less than asked): the masses did not
+            # put the skin there, and lowering them would flatten the back for a few hundredths
+            over[(need <= 1e-6) | (relief >= h + YIELD_COVER) | (h < need) | done] = -1.0
+            j = int(np.argmax(over))
+            if over[j] <= 1e-4:
+                break
+            share = scale * C[:, j]
+            if float(share.sum()) <= 1e-9:          # nothing left the masses can give up there
+                done[j] = True
+                continue
+            f = max(h[j] - need[j], 0.0) / max(float(share.sum()), _EPS)
+            scale = np.where(share > 1e-9, scale * f, scale)
+        res = []
+        for m, k in zip(masses, scale):
+            if k >= 1.0 - 1e-9:
+                res.append(m)
+            elif k * m.height >= MIN_HEIGHT:
+                res.append(replace(m, height=float(k * m.height)))
+        return res
 
     def exit_radius(self) -> float:
         """The radius of the rest arm's skin where its axis crosses the plain skin (the sleeve at the root;
@@ -1101,6 +1364,15 @@ class WingRoot:
             return 0.0
         return float(_smooth((ang - COLLAR_MIN_EXIT) / (COLLAR_FULL_EXIT - COLLAR_MIN_EXIT)))
 
+    def climb(self, controls=None) -> float:
+        """The share of the fillet's climb up the arm (the junction tube's ``height``) in pose ``controls``: all of it
+        at an exit of ``CLIMB_FULL_EXIT`` degrees or more, none at ``CLIMB_MIN_EXIT`` or less (or where the arm does
+        not cross the skin), a smoothstep between."""
+        ang = self.exit_angle(controls)
+        if ang is None:
+            return 0.0
+        return float(_smooth((ang - CLIMB_MIN_EXIT) / (CLIMB_FULL_EXIT - CLIMB_MIN_EXIT)))
+
     def exit_angle(self, controls=None) -> float | None:
         """The angle (degrees, 90 = square) at which the posed arm's axis leaves the PLAIN skin, or ``None``
         if it does not cross it."""
@@ -1127,13 +1399,92 @@ class WingRoot:
             up = np.array([0.0, -1.0, 0.0])
         return self._to_left(_unit(up))
 
+    # -- the arm's integument --------------------------------------------------------------
+
+    def skin_share(self, controls=None) -> np.ndarray:
+        """Per vertex of the arm piece (rings, then its two poles): how much of the body's skin colour it has (1 at the
+        root, 0 on the wing), by its distance along the humerus past where the posed arm crosses the plain skin
+        (``TINT_HOLD`` root radii of skin colour, then ``TINT_BLEND`` to the wing's). An arm that does not cross the
+        skin counts from the joint."""
+        prof = self.profile
+        sides = prof.sides
+        a, b = self.rig.rig.ranges["arm"]
+        n_rings = (b - a - 2) // max(sides, 1)
+        c = np.asarray(prof.centers, dtype=np.float64)
+        arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(c, axis=0), axis=1))])
+        s_ring = np.full(n_rings, np.inf)                 # past the elbow: the forearm, the wing's own
+        k = min(n_rings, len(arc))
+        s_ring[:k] = arc[:k]
+        S, E = self.joints(controls)
+        d = _unit(E - S)
+        hit = self.surface.hit(S, d, near=float(np.linalg.norm(E - S)) + 2.0)
+        s_x = 0.0 if hit is None else float(hit[0])
+        r = self.exit_radius()
+        w = 1.0 - _smooth((s_ring - s_x - TINT_HOLD * r) / (TINT_BLEND * r))
+        w = np.where(np.isfinite(s_ring), w, 0.0)
+        return np.concatenate([np.repeat(w, sides), [1.0, 0.0]])
+
+    def tint(self, mesh: Mesh, controls=None, kw=None) -> Mesh:
+        """``mesh`` (the placed wing, a :class:`PlacedWing` pose) as a :class:`TintedMesh`: the arm piece's albedo
+        running from the body's skin (``kinds.material_named("skin")``: the figure's skin in every pipeline) at the
+        root into the wing's own material (:meth:`skin_share`); the rest of the wing in its own colour. ``controls``
+        and ``kw`` as :meth:`PlacedWing.pose` takes them (a preset name or ``PoseControls`` and keyword controls)."""
+        from .kinds import material_named
+        if not self.tube:
+            return mesh
+        ctl = dict(kw or {})
+        if isinstance(controls, str):
+            ctl["preset"] = controls
+        elif controls is not None:                  # a PoseControls: its fields are the controls
+            from dataclasses import asdict
+            ctl = {**asdict(controls), **ctl}
+        wing = np.asarray(material_named(self.style).linear_color(), dtype=np.float64)
+        skin = np.asarray(material_named("skin").linear_color(), dtype=np.float64)
+        cols = np.tile(wing, (len(mesh.vertices), 1))
+        a, b = self.rig.rig.ranges["arm"]
+        w = self.skin_share(ctl or None)
+        if len(w) == b - a:
+            cols[a:b] = w[:, None] * skin[None] + (1.0 - w[:, None]) * wing[None]
+        return TintedMesh(mesh.vertices, mesh.faces, cols, material_named(self.style))
+
     # -- the junction ------------------------------------------------------------------
 
     def spec(self, controls=None, name: str = "wing"):
         """The :class:`~.junction.JunctionSpec` of this wing's root under ``controls``."""
+        spec = self._tube_spec(controls, name).with_(mounds=tuple(m.mound() for m in self.masses(controls)))
+        return spec.mirrored() if self.letter == "r" else spec
+
+    def tube_start(self, controls=None) -> float:
+        """Where along the humerus (0..1) the junction tube starts in pose ``controls``: ``TUBE_START`` of the style,
+        moved back toward the joint until its first point lies ``TUBE_INSIDE`` under the plain skin (round 5: the
+        feathered tube's 0.15 lay outside the skin of the child and the slim woman, 0.18-0.21 units out, so their
+        roots had no tube to flow into, "the appendage's axis never enters the skin")."""
+        t0 = float(TUBE_START.get(self.style, 0.0))
+        if t0 <= 0.0 or not self.tube:
+            return t0
+        cand = np.linspace(t0, 0.0, 7)
+        pts, _, _ = self.profile.at(cand)
+        line = self._to_left(self._carried(pts, controls))
+        _, _, d, _ = self._plain_patch().closest(line)
+        inside = np.nonzero(d <= -TUBE_INSIDE)[0]
+        return float(cand[inside[0]]) if len(inside) else 0.0
+
+    def _tube_spec(self, controls=None, name: str = "wing"):
+        """The junction spec of the arm alone (no masses), in the LEFT frame."""
         ts = np.asarray(TUBE_STATIONS, dtype=np.float64)
-        ts[0] = max(ts[0], TUBE_START.get(self.style, 0.0))
+        ts[0] = self.tube_start(controls)
+        if self.tube:                   # a full-radius station just past the joint (the exit is 0.3-0.5 units out)
+            ts = np.unique(np.concatenate([ts, [max(TUBE_NEAR, ts[0] + 0.02)]]))
         pts, _, r_in = self.profile.at(ts)
+        if self.tube and len(r_in):
+            # the tube's first station is a ball of its radius round the point (junction.tube_distance): on the
+            # joint, a full-radius ball stood out of the arm's cone end behind the joint and called the skin there
+            # hidden although no arm covers it (tests/test_junction.py, folded). It may be no fatter than the ball
+            # that fits in the cone: TUBE_END_FIT of the first ring's radius, plus how far the station is past the joint
+            c = np.asarray(self.profile.centers, dtype=np.float64)
+            length = float(np.sum(np.linalg.norm(np.diff(c, axis=0), axis=1)))
+            r_in = np.asarray(r_in, dtype=np.float64).copy()
+            r_in[0] = min(float(r_in[0]), TUBE_END_FIT * float(self.profile.radius[0]) + float(ts[0]) * length)
         # the rest arm's ring centres, carried by the pose (the humerus' skin follows the bone named after
         # its far joint, "elbow"; the sleeve is rigid over it): the tube lies on the arm's own axis, which
         # is NOT the shoulder -> elbow line of the joints (0.2-0.25 wing units off it on a feathered wing,
@@ -1143,12 +1494,10 @@ class WingRoot:
         ref = float(r_in[-1])
         if not self.tube:
             line, r_in = (), ()
-        spec = J.JunctionSpec(name, line, tuple(np.asarray(r_in) * J.HUG), width=self.fillet,
+        return J.JunctionSpec(name, line, tuple(np.asarray(r_in) * J.HUG), width=self.fillet,
                               base_radius=ref if self.tube else None,
-                              height=self.fillet_height, pull=FILLET_PULL,
-                              mounds=tuple(m.mound() for m in self.masses(controls)),
+                              height=self.fillet_height * self.climb(controls), pull=FILLET_PULL,
                               keep=self._keep(), join_guard=JOIN_GUARD, **_OWNER)
-        return spec.mirrored() if self.letter == "r" else spec
 
     # -- the layers ---------------------------------------------------------------------
 
@@ -1309,7 +1658,8 @@ class WingRoot:
         if ms is not None:
             blade = scapula_blade(self.lm, ms)
             spine, acro = scapula_spine(self.lm, ms, self.surface)
-            parts = [m for m in (blade, spine, self.glenoid() if self.tube else None) if m is not None]
+            cor = coracoid(self.lm, ms, self.surface)
+            parts = [m for m in (blade, spine, cor, self.glenoid() if self.tube else None) if m is not None]
             if parts:
                 left["scapula"] = Mesh.merge(parts)
             left["clavicle"] = clavicle(self.lm, self.surface, acro)

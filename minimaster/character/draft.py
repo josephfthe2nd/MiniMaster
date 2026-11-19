@@ -237,8 +237,10 @@ def _face_colors(shell, cam, rig, faces):
     c = t.mean(axis=1)
     vd = -c / np.maximum(np.linalg.norm(c, axis=1, keepdims=True), 1e-12)
     base = None
-    if shell.base_colors is not None:
-        base = np.asarray(shell.base_colors, dtype=np.float64)[f].mean(axis=1)
+    own = getattr(shell.mesh, "colors_for", None)          # a mesh may carry its own (wingroot.TintedMesh)
+    colors = shell.base_colors if shell.base_colors is not None else (own(shell.material) if own else None)
+    if colors is not None:
+        base = np.asarray(colors, dtype=np.float64)[f].mean(axis=1)
     return sh.shade_vertices(n, vd, shell.material, rig, None, base_colors=base)
 
 

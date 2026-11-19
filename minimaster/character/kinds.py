@@ -1553,8 +1553,15 @@ class HornKind(_LoftKind):
 # 0.14 of the humerus' length in radius where the arm crosses the skin (0.135 / 0.149 / 0.137 on the
 # bat / dragon / feathered wing). The feathered arm is already as thick as a human forearm at the
 # shoulder (0.25-0.33), so it gains about half of what the bat's bone-thin rod does
-WING_SLEEVES = {"membrane": W.Sleeve(gain=1.1), "dragon": W.Sleeve(gain=1.0),
-                "feathered": W.Sleeve(gain=0.5)}
+# round 6: the sleeve's buried end is a blunt cone (``Sleeve.cap``, its pole set back behind the joint by this share
+# of the sleeve's radius there), not a flat disc on the joint: folded, that disc stood on the back as a flat half-disc
+# "fin" (round 5, N3). The cone also buries more of the arm for the print (the share of the arm piece in the body,
+# lab export, with the round-6 junction tube: membrane 14.7 -> 24.0% on the neutral man, 5.2 -> 11.8% on the child; the
+# slimmer feathered arm's longer cone 5.8 -> 10.9% on the child, 7.5 -> 13.0% on the slim woman)
+WING_SLEEVE_CAP = {"membrane": 0.7, "dragon": 0.7, "feathered": 1.0}
+WING_SLEEVES = {"membrane": W.Sleeve(gain=1.1, cap=WING_SLEEVE_CAP["membrane"]),
+                "dragon": W.Sleeve(gain=1.0, cap=WING_SLEEVE_CAP["dragon"]),
+                "feathered": W.Sleeve(gain=0.5, cap=WING_SLEEVE_CAP["feathered"])}
 WING_SLEEVE_S_REF = 1.17        # the body size s (wingroot.Landmarks.s) the gains above were tuned on: the neutral man
 WING_SLEEVE_K = (0.6, 1.3)      # the body's share of that size is clipped to this
 
@@ -1571,7 +1578,7 @@ def wing_sleeve(style: str, muscle: float, s: float):
         return None
     k = min(max(s / WING_SLEEVE_S_REF, WING_SLEEVE_K[0]), WING_SLEEVE_K[1])
     base = WING_SLEEVES[style]
-    return W.Sleeve(gain=base.gain * float(muscle) * k * k, sides=base.sides)
+    return W.Sleeve(gain=base.gain * float(muscle) * k * k, sides=base.sides, cap=base.cap)
 
 
 # a stowed feathered wing stands off a bulkier back by this many units per unit of the back's extra thickness
@@ -1966,6 +1973,8 @@ class WingKind(Kind):
                 letter or ("r" if idx else "l"), pw, pw.matrix, lm, surface, profile,
                 float(values.get("fillet", self.fillet_default)), values["style"], WING_FILLET_HEIGHT,
                 tube=arm is not None, body=(ctx.base, ctx.verts, lambda c, holder=holder: holder[0].junction(c)))
+            if arm is not None and not pl.get("pinned"):
+                pw.tint = model.tint             # the arm's integument runs from the body's skin into the wing's
             placed = Placed(name=name, spec_id=spec.id, kind=self, side=letter,
                             anchor=self._surface(ctx, app, idx), matrix=pw.matrix,
                             params=dict(values), controls=ctrl, rig=pw, model=model)

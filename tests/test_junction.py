@@ -689,9 +689,12 @@ def test_the_skin_meets_the_root_at_a_smaller_angle_and_without_new_creases(worl
         from minimaster.character import wingroot as WR
         p = placed[0]
         S, E = p.model.joints(p.controls)
-        seen = WR.visible_join(WR.BodySurface(*base.body_cage(v)), WR.BodySurface(*base.body_cage(out)), S, E,
-                               p.model.exit_radius(), 1.3)
-        assert seen[0] >= 20.0 and seen[1] >= 45.0, (seen, m)
+        plain = WR.BodySurface(*base.body_cage(v))
+        seen = WR.visible_join(plain, WR.BodySurface(*base.body_cage(out)), S, E, p.model.exit_radius(), 1.3)
+        flat = WR.visible_join(plain, plain, S, E, p.model.exit_radius(), 1.3)
+        # (round 6, the wing track: a floor on the mean rewarded a flange and held only at 24 ring samples; the skin
+        # tilts toward the arm on the visible ring, a fillet's direction, and folds over it nowhere)
+        assert seen[0] >= 12.0 and seen[1] <= flat[1] - 1.0, (seen, flat, m)
     else:
         assert m["join_angle_deg_after"] < m["join_angle_deg_before"] - gain, m
     # no crease the body did not already have: the 99th percentile of what the junction adds to

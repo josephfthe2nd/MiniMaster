@@ -262,6 +262,8 @@ BODIES = {
     "child": dict(age=0.1875),
     "heavy": dict(gender=1.0, muscle=1.0, weight=1.0),
     "tall": dict(gender=1.0, muscle=0.55, height=1.0),
+    "short": dict(gender=1.0, muscle=0.55, height=0.0),           # round 6: the round-5 review asked for these two
+    "slim_f": dict(gender=0.0, weight=0.0),
 }
 
 
@@ -371,30 +373,6 @@ def test_the_junction_moves_back_skin_only_and_never_the_front(world, body):
     assert np.abs(d - d[mirror]).max() < 1e-9
 
 
-@assets
-@pytest.mark.parametrize("body", list(BODIES))
-def test_the_arm_leaves_a_steeper_skin_than_it_did(world, body):
-    """The arm leaves the plain back over the upper blade at 45-65 degrees (28-47 in the first placement). The round-3
-    review: the 62 -> 74 the docs quoted was the angle where the arm's AXIS meets the skin, hidden inside the arm; on
-    the skin one sees round the arm the side the arm leans over had improved (-17 -> 12 degrees at 1.8 root radii on
-    the neutral man) but the mean had fallen (49.5 -> 39.9). Measured on that visible ring now (``visible_join``):
-    the leaning side's skin rises to meet the arm (the boss lifted toward it): at 1.3 root radii the skin is at least
-    22 degrees off the arm all round (c808d60: -14; 835af09: 23), at 1.8 at least 15 (c808d60: -17; 835af09: 11 on
-    the neutral man, child and short body), and the mean at 1.8 at least 42 (835af09: 39.9 on the neutral man)."""
-    _, base, verts, placed, shaped = built(world, body)
-    p = placed[0]
-    S, E = p.model.joints(p.controls)
-    d = (E - S) / np.linalg.norm(E - S)
-    plain = WR.BodySurface(*base.body_cage(verts))
-    skin = WR.BodySurface(*base.body_cage(shaped))
-    h = plain.hit(S, d, near=8.0)
-    assert math.degrees(math.asin(abs(float(d @ h[2])))) >= 44.0
-    r = p.model.exit_radius()
-    mn13, _ = WR.visible_join(plain, skin, S, E, r, 1.3)
-    mn18, me18 = WR.visible_join(plain, skin, S, E, r, 1.8)
-    assert mn13 >= 22.0 and mn18 >= 15.0 and me18 >= 42.0, (body, mn13, mn18, me18)
-
-
 def _seg_tri(P0, P1, A, B, C):
     """Moller-Trumbore, a segment against a triangle, vectorised over pairs."""
     e1, e2, D = B - A, C - A, P1 - P0
@@ -475,17 +453,22 @@ def test_a_folded_wing_adds_no_lobes_beyond_the_masses_and_the_arm(world):
         d, _ = J.tube_distance(P, np.asarray(spec.points), np.asarray(spec.radii))
         inside |= d < spec.fillet_width + 1e-9
         assert inside.all(), (pose, int((~inside).sum()))
-        # and the permanent masses are the same masses at every pose: only the shoulder boss follows the arm
-        perm = [m.to_dict() for m in spec.mounds[:3]]
-        assert perm == [m.to_dict() for m in placed[0].junction({}).mounds[:3]], pose
+        # and the permanent masses are the same muscles at every pose (only the shoulder boss follows the arm): the
+        # same centres and footprints, no higher than at rest (round 6: lowered where the arm lies over them)
+        rest = {(m.center, m.axis, m.radius, m.stretch): m.height for m in placed[0].junction({}).mounds}
+        perm = {(m.center, m.axis) for m in (x.mound() for x in placed[0].model.permanent())}
+        for m in spec.mounds:
+            if (m.center, m.axis) in perm:
+                key = (m.center, m.axis, m.radius, m.stretch)
+                assert key in rest and m.height <= rest[key] + 1e-12, pose
 
 
 @assets
 def test_the_shoulder_boss_follows_the_arm_and_vanishes_when_the_arm_already_leaves_steeply(world):
     _, base, verts, placed, _ = built(world)
     model = placed[0].model
-    rest = model.masses({})
-    folded = model.masses({"preset": "folded"})
+    rest = model.masses({}, yielding=False)                  # the boss as the anatomy has it (round 6: the masses
+    folded = model.masses({"preset": "folded"}, yielding=False)  # then yield to an arm lying on them, tested below)
     assert [m.name for m in rest][-1] == "deltoid" and [m.name for m in folded][-1] == "deltoid"
     assert rest[-1].height > 0.05
     assert not np.allclose(rest[-1].center, folded[-1].center)                   # it moved with the arm
@@ -732,7 +715,10 @@ def test_the_report_tool_measures_what_the_tests_pin(world):
     base, lib, cat = world
     r = tool.measure(base, lib, cat, "neutral", "membrane", None, with_crossings=False)
     assert r["exit_before"] >= 60 and r["moved"] > 300
-    assert r["ring1.3_after"][0] >= 22 and r["ring1.8_after"][0] >= 15 and r["ring1.8_after"][1] >= 42
+    # (round 6: 72 ring samples; the moulded skin tilts toward the arm near it and never folds over it, see
+    # test_the_visible_join_measured_densely_against_the_plain_skin; the old floor on the mean rewarded a flange)
+    assert r["ring1.3_after"][0] >= 15 and r["ring1.8_after"][0] >= 10
+    assert r["ring1.3_after"][1] <= r["ring1.3_before"][1] - 1.0
     assert 0.5 < r["area_min"] and r["area_max"] < 2.6 and r["limited"] == 0
     assert 0.40 < r["relief_litres"] < 1.2
     assert tool.parse_pose("rest") is None and tool.parse_pose("preset=folded") == {"preset": "folded"}
@@ -741,7 +727,7 @@ def test_the_report_tool_measures_what_the_tests_pin(world):
 
 # -- the second placement (S6b): the joint on the ribs under the shoulder blade ------------------------------
 
-PLACE_BODIES = dict(BODIES, short=dict(gender=1.0, muscle=0.55, height=0.0),
+PLACE_BODIES = dict({k: v for k, v in BODIES.items() if k != "slim_f"}, short=dict(gender=1.0, muscle=0.55, height=0.0),
                     female=dict(gender=0.0, muscle=0.5))
 SIX_BODIES = dict(BODIES, short=dict(gender=1.0, muscle=0.55, height=0.0), slim_f=dict(gender=0.0, weight=0.0))
 
@@ -1315,3 +1301,307 @@ def test_a_stowed_wing_of_the_second_placement_rests_on_the_back(world, macro):
         assert 0.02 < inside < limit, (style, macro, inside)
         a, b = pw.rig.ranges["wrist_knob"]
         assert _inside_body(w[a:b], tris).mean() < 0.30, (style, macro)
+
+
+# -- round 6: the arm against the skin it leaves (the folded fin, the heavy man's islands), its cone end, its
+# integument, the print weld on small bodies, the feathered tube, the visible join measured densely ------------------
+
+from minimaster.character import collar as CO  # noqa: E402
+
+
+def _figure(world, body, text="wing", pose=None):
+    """``(placed, base, verts, shaped)`` of a wing pair on one of ``SIX_BODIES`` posed by ``pose`` (a dict of the wing's
+    controls, or None)."""
+    from minimaster.character.sliders import Character
+    base, lib, cat = world
+    c = Character()
+    c.macro.update(SIX_BODIES[body])
+    spec = K.add_from_text(text, c.appendages, base=base, lib=lib)
+    if pose:
+        spec.controls["*"] = dict(pose)
+    c.appendages.append(spec)
+    verts = lib.apply(base.verts, c.effective_target_weights(cat))
+    placed = c.instantiate_appendages(base, verts, lib)
+    return placed, base, verts, c.shaped_body(base, verts, placed)
+
+
+def _arm_against_skin(p, skin_vf, clear=0.03, angle=30.0, sub=4):
+    """The arm piece of ``p`` against the subdivided skin ``skin_vf``: ``(coplanar, n_out)``. ``coplanar``: the area
+    (units^2) of the arm's surface within ``clear`` of the skin, true distance to the nearest point of the skin over
+    every sample of every triangle, whose outward normal is within ``angle`` degrees of the skin's there: the arm and
+    the skin lying on each other, the flat decal of round 5 (a clean crossing meets the skin at its exit angle and is
+    not counted). ``n_out``: the connected pieces of the arm's surface standing more than ``clear`` out of the skin
+    (an island is a piece of the buried arm breaking through away from the root)."""
+    arm = p.model.arm_mesh(p.mesh())
+    V, F = np.asarray(arm.vertices), np.asarray(arm.faces)
+    S, _ = p.model.joints(p.controls)
+    S = S * (np.array([-1.0, 1.0, 1.0]) if p.model.letter == "r" else 1.0)
+    patch = CO.SkinPatch(skin_vf[0], skin_vf[1], S, 6.0)
+    T = V[F]
+    bary = [(i / sub, j / sub) for i in range(sub + 1) for j in range(sub + 1 - i)]
+    P = np.concatenate([T[:, 0] * (1 - a - b) + T[:, 1] * a + T[:, 2] * b for a, b in bary])
+    fid = np.tile(np.arange(len(F)), len(bary))
+    _, nrm, d, _ = patch.closest(P)
+    fn = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    area = 0.5 * np.linalg.norm(fn, axis=1)
+    fn /= np.maximum(2.0 * area, 1e-12)[:, None]
+    if arm.volume() < 0:
+        fn = -fn
+    flat = (np.abs(d) < clear) & ((fn[fid] * nrm).sum(axis=1) > math.cos(math.radians(angle)))
+    coplanar = float((area[fid] * flat).sum() / len(bary))
+    fmin = np.full(len(F), np.inf)
+    np.minimum.at(fmin, fid, d)
+    out = fmin > clear
+    # pieces of the 'out' faces joined through shared vertices (a union-find over the faces)
+    parent = np.arange(len(F))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    first = {}
+    for f in np.nonzero(out)[0]:
+        for v in F[f]:
+            g = first.setdefault(int(v), f)
+            ra, rb = find(f), find(g)
+            if ra != rb:
+                parent[ra] = rb
+    n_out = len({find(f) for f in np.nonzero(out)[0]})
+    return coplanar, n_out
+
+
+_LYING = [("neutral", {"preset": "folded"}), ("child", {"preset": "folded"}), ("heavy", {"preset": "folded"}),
+          ("slim_f", {"preset": "folded"}), ("tall", {"preset": "folded"}), ("short", {"preset": "folded"}),
+          ("heavy", {"preset": "half_fold"}), ("heavy", {"swing": -45.0})]
+
+
+@assets
+@pytest.mark.parametrize("body,pose", _LYING, ids=[f"{b}-{'_'.join(map(str, p.values()))}" for b, p in _LYING])
+def test_an_arm_lying_along_the_back_leaves_it_cleanly_and_does_not_lie_on_its_skin(world, body, pose):
+    """Round 5 (N2, N3): folded on every body a flat brown fin stood on the back beside the arm; the heavy man at the
+    swing's floor (the UI clamps -45 to -20) and half folded had flat decal islands where the buried arm broke through
+    the junction-moulded back. Cause, isolated on the neutral folded and the heavy rows: the masses and the fillet's
+    climb up the arm together lifted the skin to a hair under the arm's top (tube alone: 0 units^2; masses alone
+    0.08-0.18; both 0.22-0.44), and the sleeve's flat end disc on the joint stood out of the back. Now the climb ramps
+    out with the exit angle, the masses yield to the arm (``WingRoot.yield_to_arm``) and the sleeve ends in a cone.
+    Measured on the level-1 skin the pipeline meshes, every vertex of the arm piece: e7e16b8 0.21-0.44 units^2 of
+    coplanar contact on these rows and two outside pieces (an island) folded; now at most 0.03 and one piece."""
+    placed, base, verts, shaped = _figure(world, body, "wing", pose)
+    skin = CO.shaped_skin(base, shaped, 1)
+    for p in placed:
+        coplanar, n_out = _arm_against_skin(p, skin)
+        assert coplanar <= 0.03, (body, pose, p.name, coplanar)
+        assert n_out == 1, (body, pose, p.name, n_out)
+
+
+@assets
+@pytest.mark.parametrize("body", list(SIX_BODIES))
+def test_the_relief_yields_only_to_an_arm_lying_on_the_back(world, body):
+    """At rest (exits of 46-65 degrees) every mass is the anatomy's: nothing yields (the rest skin moves for another
+    reason this round: the cone end keeps the tube's station on the joint, see docs/anatomy_wing.md section 0). Folded, the masses under the arm are lowered so that no sample of the arm's surface lying nearly parallel to
+    the skin is left in the band between clearing the predicted skin by ``YIELD_CLEAR`` (graded by the angle) and
+    being covered by ``YIELD_COVER``; their centres and footprints stay (the same muscles, flatter under the arm)."""
+    placed, _, _, _ = _figure(world, body)
+    m = placed[0].model
+    assert m.masses({}) == m.masses({}, yielding=False)
+    folded = {"preset": "folded"}
+    raw = {x.name: x for x in m.masses(folded, yielding=False)}
+    got = m.masses(folded)
+    assert sum(x.height for x in got) < 0.9 * sum(x.height for x in raw.values()), body
+    for x in got:
+        r = raw[x.name]
+        assert x.center == r.center and x.axis == r.axis and x.half_long == r.half_long and x.height <= r.height
+    arm = m._arm_over_skin(folded)
+    sel = arm["h"] > 0.0
+    M = sum(x.height * x.weight(arm["pt"][sel]) for x in got) * arm["along"][sel]
+    lo, hi = (math.cos(math.radians(a)) for a in WR.YIELD_ANGLE)
+    need = WR.YIELD_CLEAR * WR._smooth(((arm["N"][sel] * arm["nrm"][sel]).sum(axis=1) - hi) / (lo - hi))
+    h = arm["h"][sel]
+    bad = (need > 1e-6) & (h >= need) & (M > h - need + 1e-3) & (M < h + WR.YIELD_COVER)
+    assert not bad.any(), (body, int(bad.sum()))
+
+
+@assets
+def test_the_sleeve_ends_in_a_cone_behind_the_joint_not_a_flat_disc_on_it(world):
+    """The sleeve's buried end was a flat fan on the joint: folded, that disc stood on the back as a half-disc "fin"
+    (round 5, N3). Its pole is set back behind the joint now (``Sleeve.cap`` of the first ring's radius); the rings
+    still start on the joint, so the arm profile, the junction tube and the layers read the arm as before."""
+    placed, _, _, _ = _figure(world, "neutral")
+    for style, k in K.WING_SLEEVE_CAP.items():
+        if style != "membrane":
+            placed, _, _, _ = _figure(world, "neutral", f"wing:style={style}")
+        p = placed[0]
+        m = p.model
+        arm = m.arm_mesh(p.mesh())
+        sides = m.profile.sides
+        V = np.asarray(arm.vertices)
+        ring0 = V[:sides]
+        c0 = ring0.mean(axis=0)
+        axis = V[sides:2 * sides].mean(axis=0) - c0
+        axis /= np.linalg.norm(axis)
+        r0 = float(np.linalg.norm(ring0 - c0, axis=1).mean())
+        assert float((V[-2] - c0) @ axis) == pytest.approx(-k * r0, rel=0.02), style
+        assert float((V[-2] - c0) @ axis) <= -0.5 * r0, style          # a cone, not the flat disc (k = 0) of round 5
+        assert m.profile.t[0] == 0.0 and m.profile.radius[0] == pytest.approx(r0, rel=0.02)
+
+
+def _arm_buried_share(p, base, shaped, level=1, samples=4096):
+    from minimaster.character import print_report as PR
+    V, F = CO.shaped_skin(base, shaped, level)
+    arm = p.model.arm_mesh(p.mesh())
+    if arm.volume() < 0:                         # the right wing's piece, sliced out of a mirrored mesh
+        arm = Mesh(arm.vertices, arm.faces[:, ::-1])
+    return PR.embedded_volume_share(arm, PR.Solid(Mesh(V, F)), samples)
+
+
+@assets
+@pytest.mark.parametrize("body,style", [("child", "membrane"), ("child", "feathered"), ("slim_f", "membrane"),
+                                        ("slim_f", "feathered"), ("child", "dragon")])
+def test_the_arm_is_buried_deep_enough_to_print_on_the_small_bodies(world, body, style):
+    """The print weld: the share of the arm piece's volume inside the body (``print_report.embedded_volume_share``,
+    which the print report blocks under 5% and warns about under 8%). e7e16b8 (lab export, medium): the child 5.2%
+    (membrane) / 5.8% (feathered) / 5.1% (dragon), the slim woman 7.0% / 7.5%; with the cone end and the round-6
+    tube (the feathered one starting in the skin) 10.9-13%. Measured here on the level-1 body the pipeline shapes."""
+    placed, base, _, shaped = _figure(world, body, f"wing:style={style}")
+    share = min(_arm_buried_share(p, base, shaped) for p in placed)
+    assert share >= 0.08, (body, style, share)
+
+
+@assets
+@pytest.mark.parametrize("body", list(SIX_BODIES))
+def test_the_feathered_tube_starts_inside_the_skin(world, body):
+    """The feathered tube started at 0.15 of its humerus on every body: 0.05 units outside the plain skin on the neutral
+    man and 0.18-0.21 outside on the child and the slim woman, so their roots had no tube to flow into and the collar
+    was dropped ("the appendage's axis never enters the skin", round 5 B3). ``WingRoot.tube_start`` moves the start back
+    toward the joint until it lies ``TUBE_INSIDE`` under the skin, at rest and at the swing's floor."""
+    placed, base, verts, _ = _figure(world, body, "wing:style=feathered")
+    p = placed[0]
+    for pose in ({}, {"swing": -15.0}):
+        spec = p.model._tube_spec(pose)
+        assert spec.tube
+        _, _, d, _ = p.model._plain_patch().closest(np.asarray(spec.points[:1]))
+        assert d[0] <= -WR.TUBE_INSIDE + 1e-9, (body, pose, d[0])
+        assert p.model.tube_start(pose) <= WR.TUBE_START["feathered"]
+
+
+@assets
+def test_the_skin_climbs_the_arm_at_rest_and_not_where_the_arm_lies_along_the_back(world):
+    """The fillet's climb up the arm (``WING_FILLET_HEIGHT``, round 5's M2 survived its removal) is the junction tube's
+    height times ``WingRoot.climb``: all of it at an exit of 55 degrees or more, none at 45 or less. At rest on the
+    neutral man it lifts the skin up the feathered arm (which is what buries that arm for the print: 15% of it in the
+    body with the climb, 10% without); folded and half folded it is off."""
+    placed, base, verts, _ = _figure(world, "neutral", "wing:style=feathered")
+    p = placed[0]
+    assert K.WING_FILLET_HEIGHT > 0.0
+    assert p.model.climb({}) == 1.0 and p.junction({}).height == pytest.approx(K.WING_FILLET_HEIGHT)
+    for pose in ({"preset": "folded"}, {"preset": "half_fold"}):
+        assert p.model.climb(pose) == 0.0 and p.junction(pose).height == 0.0, pose
+    spec = p.junction({})
+    a = base.body_cage(J.apply_junctions(base, verts, [spec]))[0]
+    b = base.body_cage(J.apply_junctions(base, verts, [spec.with_(height=0.0)]))[0]
+    assert float(np.linalg.norm(a - b, axis=1).max()) > 0.05
+
+
+@assets
+def test_the_arm_runs_from_the_skin_colour_into_the_wing_s(world):
+    """Round 5 (B1): the skin-coloured root ended on the brown arm in a serrated two-colour line. The arm's integument
+    now runs from the body's skin colour at the root into the wing's own (``WingRoot.tint``): the placed mesh carries a
+    per-vertex albedo through every transform and the renderer uses it where the shell sets none. Skin colour up to
+    ``TINT_HOLD`` root radii past where the arm crosses the skin, the wing's beyond ``TINT_BLEND`` more; folded, the
+    crossing is further along the arm, so is the skin colour."""
+    from minimaster.character import portrait as po
+    placed, _, _, _ = _figure(world, "neutral")
+    p = placed[0]
+    mesh = p.mesh()
+    assert isinstance(mesh, WR.TintedMesh) and mesh.base_colors.shape == mesh.vertices.shape
+    moved = mesh.transform(po.MH_TO_Z_UP)
+    assert isinstance(moved, WR.TintedMesh) and np.array_equal(moved.base_colors, mesh.base_colors)
+    skin = np.asarray(K.material_named("skin").linear_color())
+    wing = np.asarray(K.material_named("membrane").linear_color())
+    a, b = p.rig.rig.ranges["arm"]
+    sides = p.model.profile.sides
+    cols = mesh.base_colors[a:b - 2].reshape(-1, sides, 3)[:, 0]
+    assert np.allclose(cols[0], skin) and np.allclose(cols[-1], wing)
+    share = np.linalg.norm(cols - wing, axis=1) / np.linalg.norm(skin - wing)
+    assert (np.diff(share[:len(p.model.profile.t)]) <= 1e-9).all()               # from the root out, never back
+    assert ((share > 0.01) & (share < 0.99)).any()                               # a blend, not a step
+    assert np.allclose(mesh.base_colors[:a], wing) and np.allclose(mesh.base_colors[b:], wing)
+    rest = p.model.skin_share({})
+    folded = p.model.skin_share({"preset": "folded"})
+    assert folded.sum() > rest.sum()
+    # the renderer takes the mesh's albedo where the shell gives none
+    cam = np.asarray(moved.vertices) - np.array([0.0, -10.0, 0.0])
+    from minimaster.character import shading as sh
+    lit = po._shell_colors(po.Shell(moved, p.material), cam, np.eye(4), sh.LightRig(), 1.0, False, ao=False)
+    plain = po._shell_colors(po.Shell(Mesh(moved.vertices, moved.faces), p.material), cam, np.eye(4), sh.LightRig(),
+                             1.0, False, ao=False)
+    assert not np.allclose(lit[a:b], plain[a:b]) and np.allclose(lit[:a], plain[:a])
+    # ... and only for the wing's own material: a one-colour view of the geometry stays one colour
+    mono = po._shell_colors(po.Shell(moved, sh.SKIN), cam, np.eye(4), sh.LightRig(), 1.0, False, ao=False)
+    mono0 = po._shell_colors(po.Shell(Mesh(moved.vertices, moved.faces), sh.SKIN), cam, np.eye(4), sh.LightRig(), 1.0,
+                             False, ao=False)
+    assert np.allclose(mono, mono0)
+
+
+@assets
+@pytest.mark.parametrize("body", list(SIX_BODIES))
+def test_the_visible_join_measured_densely_against_the_plain_skin(world, body):
+    """Replaces ``test_the_arm_leaves_a_steeper_skin_than_it_did`` (round 5: its numbers reproduced only at 24 ring
+    samples, and its floor on the mean rewarded a flange). ``visible_join`` samples 72 directions now; the junction
+    is judged against the PLAIN skin of the same placement on the same ring. Measured at rest: the arm leaves the plain
+    back at 44 degrees or more; the moulded skin tilts toward the arm near it (the mean at 1.3 root radii at least a
+    degree under the plain skin's: 1.6-7.3 on the six bodies; the heavy man's 1.6 is the thin margin) and never folds
+    over it (the minimum at 1.3 / 1.8 root radii at least 15 / 10 degrees: 18.9-30.0 / 11.5-21.2). The tilt is the
+    junction tube's fillet acting at rest (e7e16b8: equal to the plain skin on four bodies, the tube's joint station cut
+    by ``conform_spec`` on the flat-ended arm; the cone end keeps it), not the masses. Not more: the skin flowing into the
+    arm is the weld's."""
+    placed, base, verts, shaped = _figure(world, body)
+    p = placed[0]
+    S, E = p.model.joints(p.controls)
+    plain = WR.BodySurface(*base.body_cage(verts))
+    skin = WR.BodySurface(*base.body_cage(shaped))
+    assert p.model.exit_angle({}) >= 44.0
+    r = p.model.exit_radius()
+    mn13, me13 = WR.visible_join(plain, skin, S, E, r, 1.3)
+    _, pe13 = WR.visible_join(plain, plain, S, E, r, 1.3)
+    mn18, _ = WR.visible_join(plain, skin, S, E, r, 1.8)
+    assert me13 <= pe13 - 1.0 and mn13 >= 15.0 and mn18 >= 10.0, (body, me13, pe13, mn13, mn18)
+    # 72 directions by default: the 24 the docs quoted missed the leaning side's minimum by up to 9 degrees
+    assert WR.visible_join.__defaults__[-1] >= 72
+
+
+@assets
+@pytest.mark.parametrize("body", list(SIX_BODIES))
+def test_the_blade_has_a_coracoid_hook_and_rounded_borders(world, body):
+    """Round 5: "the bone layer is schematic: a flat triangular blade ... no coracoid". The blade's outline is cut at
+    its corners (``_rounded``: the bowed medial border, the round inferior angle of wing/H03, H01) and the coracoid
+    process (``coracoid``, wing/H03, H04) hooks forward from the superior border at the glenoid's neck over the rib cage,
+    under the clavicle: its tip at least 0.35 s in front of its root, the whole hook inside the body by 0.05 or more."""
+    placed, base, verts, _ = _figure(world, body)
+    m = placed[0].model
+    lm = m.lm
+    ms = m.moulded(None, verts)
+    cor = WR.coracoid(lm, ms, m.surface)
+    assert cor is not None and cor.volume() > 0
+    V = np.asarray(cor.vertices)
+    root, tip = V[:10].mean(axis=0), V[-12:-2].mean(axis=0)          # the first and the last ring of the bar (10 sides)
+    assert tip[2] - root[2] >= 0.35 * lm.s, (body, tip[2] - root[2])
+    sv, sf = CO.shaped_skin(base, verts, 1)
+    _, _, d, _ = CO.SkinPatch(sv, sf, V.mean(axis=0), 4.0).closest(V)
+    assert d.max() <= -0.05, (body, d.max())
+    assert len(WR._rounded(WR.SCAPULA_BLADE)) == 4 * len(WR.SCAPULA_BLADE)
+
+
+@assets
+def test_the_relief_does_not_yield_to_skin_the_masses_did_not_put_there(world):
+    """At the swing's floor the bat's butt ring lies on the PLAIN skin of the neutral man (0.02-0.07 out of it, nearly
+    parallel): the masses did not put the skin there and lowering them cannot clear it, only flatten the back. The
+    yield leaves such samples alone: the back keeps most of its relief (79%; asking them too: 46%, the scapular
+    plateau, the trapezius and the boss all gone)."""
+    placed, _, _, _ = _figure(world, "neutral")
+    m = placed[0].model
+    pose = {"swing": -20.0}
+    raw = sum(x.height for x in m.masses(pose, yielding=False))
+    got = sum(x.height for x in m.masses(pose))
+    assert got >= 0.65 * raw, (got, raw)
