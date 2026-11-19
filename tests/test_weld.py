@@ -616,9 +616,8 @@ def test_a_patch_that_would_fold_is_left_out_and_the_rest_of_the_root_stays_weld
     V, F = sphere
     spot = np.array([0.8, 0.0, 5.95])
     real = _fold_near(monkeypatch, V, spot, 0.3)
-    monkeypatch.setattr(W, "KEPT_MIN", 0.5)       # (the mechanism, apart from the policy: on this small ring -- 24
-    d: dict = {}                                  # vertices -- one patch is 0.29 of it, under the shipped 0.75)
-    out, wall, centre = _weld_tube(sphere, diag=d)
+    d: dict = {}        # (the mechanism, apart from the policy: on this small ring -- 24 vertices -- one patch is
+    out, wall, centre = _weld_tube(sphere, profile=W.WeldProfile(kept_min=0.5), diag=d)   # 0.29, under the shipped 0.75)
     monkeypatch.setattr(W.CO, "crossing_pairs", real)
     assert d["applied"] and d["guard"] > W.WeldProfile().guard, d              # the hard rounds ran
     assert 0.6 <= d["kept"] < 0.98, d["kept"]                                  # most of the ring, not all of it (0.71)
