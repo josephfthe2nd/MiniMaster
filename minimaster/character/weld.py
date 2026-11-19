@@ -54,20 +54,37 @@ from . import collar as CO
 
 MIN_LEVEL = 1          # the default subdivision of a figure with a root that wants a weld (level 0 is the cage)
 FOLD_COS = 0.26        # a visible face whose normal is more than ~75 degrees from the blend's gradient is folded
+FLIP_COS = -0.3        # ... and one more than ~107 degrees from it is turned over (the guard shrinks the reach there;
+                       # an edge-on sliver on the last strip, three corners along one profile, is not a fold: the guard
+                       # halved the reach on a tail's back for two of them)
 CLEAR_SHARE = 0.6     # a probe at height s up the skin's normal whose own distance to the skin is under this share of s ...
 CLEAR_K = 0.45        # ... has another part of the skin near it: the reach there is at most this many times s
-CLIMB_MAX = 1.0       # the last ring climbs the wall at most this many reaches (where the wall runs along the skin, the
+REACH_SLOPE = 0.6     # the reach changes by at most this much per unit of length over the skin ...
+RING_SLOPE = 0.5      # ... and the last ring's height by this much per unit along the ring
+CLIMB_MAX = 2.0       # the last ring climbs the wall at most this many reaches (where the wall runs along the skin, the
                       # height it can reach there is its reach: a crease, not a sliver dragged along the root)
+PLACEMENT = "harmonic"  # how the sleeve's vertices are laid on the fillet: "harmonic" (a membrane's displacement, then
+                       # the zero set) or "profile" (round 6's first pass: each vertex on its own preset profile)
+HARMONIC_RELAX = 2    # extra rounds of evening along the fillet with the harmonic placement
+HARMONIC_GRADE = 2    # ... then this many steps packing the rings toward the wall (0: none)
 PROJECT_ROUNDS = 3    # Newton steps of the sleeve onto the zero set ...
 RESTORE_ROUNDS = 2    # ... and steps along it back to its own profile parameter
 U_SMOOTH = 4          # rounds of smoothing of the share of the way to the rim
 WALL_MARGIN = 0.8     # units of wall past the clip that are searched (true normals at the clip)
 CAP1_ON = 0.7         # the cap's first ring: this many edges on past the last ring, the way the skin arrives ...
 CAP1_BACK = 0.1       # ... and this share of the way back to where it was, under the wall (distinct points)
+CAP1_FULL = 1.5       # the cap's first ring is moved in full where the reach is at least this many edges
 MIN_AREA = 1e-10      # a welded triangle smaller than this is degenerate (Mesh.degenerate_faces: 1e-12): refused
 LAND_MAX = 1.5        # a fillet lands at most this many times its nominal distance (``region`` reaches) out
 GUARD_SHRINK = 0.45    # the reach where a fold was found is cut by this share per guard round
+GUARD_HARD = 3         # ... and after the profile's soft rounds, this many rounds that take the patch out of the weld
 _H = np.linspace(0.0, 1.0, 513)
+TRACE = None            # a list to receive (stage, region ids, values) from the construction (tools, debugging)
+
+
+def _trace(stage, ids, values):
+    if TRACE is not None:
+        TRACE.append((stage, np.array(ids), np.array(values, dtype=np.float64)))
 
 
 @dataclass(frozen=True)
@@ -128,6 +145,16 @@ class WeldProfile:
 
     def digest(self) -> str:
         return hashlib.blake2b(repr(sorted(asdict(self).items())).encode(), digest_size=8).hexdigest()
+
+    def openness(self, points, centre) -> np.ndarray:
+        """0..1 round a root at ``centre``: 1 on the side ``up`` points to, 0 on the opposite one (0 all round
+        for a kind without a side)."""
+        P = np.asarray(points, dtype=np.float64)
+        if self.up is None or self.open == self.ventral:
+            return np.zeros(len(P))
+        d = CO._unit(P - np.asarray(centre, dtype=np.float64))
+        t = np.clip(0.5 + 0.5 * (d @ np.asarray(self.up)), 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
 
     def shape(self, points, centre) -> np.ndarray:
         """The kind's factor of the reach at ``points`` around a root at ``centre`` (1 all round without ``up``)."""
@@ -430,6 +457,7 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     # only the wall near the root counts: skin whose closest wall point is farther out (a drooping tail beside the
     # thigh, an arm lying along the back) is not welded to it
     kv = np.where(np.linalg.norm(wq - centre, axis=1) < clip_r, kv, 0.0)
+    openn = pr.openness(V[near], centre)
     if locked is not None and np.any(locked):
         kv, keep = _away_from(V, near, b0, kv, locked, pr)
     else:
@@ -449,8 +477,9 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
     t_setup = time.perf_counter() - t0
     best = None
     rounds = 0
-    for rounds in range(pr.guard + 1):
-        res = _solve(V, F, topo, near, keep, b0, nb0, na0, ga, gb, kv, skin, wp, pr, k0, ax_pts, solid)
+    last = pr.guard + (GUARD_HARD if pr.guard > 0 else 0)
+    for rounds in range(last + 1):
+        res = _solve(V, F, topo, near, keep, b0, nb0, na0, ga, gb, kv, skin, wp, pr, k0, ax_pts, solid, openn)
         if res is None:
             break
         region, P = res["region"], res["P"]
@@ -475,6 +504,9 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         res["crossings_before"] = int(len(old_pairs))
         bad_v = np.unique(F[fi][new_pairs].ravel()) if len(new_pairs) else np.zeros(0, dtype=np.int64)
         res["bad"] = bad_v
+        _trace("guard_bad", bad_v, np.full(len(bad_v), rounds))
+        _trace("guard_flipped", region[res["flipped"]], np.full(len(res["flipped"]), rounds))
+        _trace("guard_folded", region[res["folded"]], np.full(len(res["folded"]), rounds))
         score = (res["crossings"], len(res["flipped"]), len(res["folded"]))
         if best is None or score < best["score"]:
             best = res
@@ -482,7 +514,7 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
             best["trial"] = trial
         if not res["crossings"] and not len(res["flipped"]):
             break
-        if rounds == pr.guard:
+        if rounds == last:
             break
         # shrink the reach around the crossing and the turned-over faces (and only there), then solve again
         w = np.zeros(len(near))
@@ -491,8 +523,15 @@ def weld_skin(V, F, wall, centre, radius, profile: WeldProfile | None = None, *,
         pos[near] = np.arange(len(near))
         bp = pos[bad_v]
         w[bp[bp >= 0]] = 1.0
-        w = _smooth_on(topo, near, w, 3) * 4.0
-        kv = np.maximum(kv * (1.0 - GUARD_SHRINK * np.clip(w, 0.0, 1.0)), 1e-4)
+        w = np.clip(_smooth_on(topo, near, w, 3) * 4.0, 0.0, 1.0)
+        if rounds < pr.guard:
+            kv = np.maximum(kv * (1.0 - GUARD_SHRINK * w), 1e-4)
+        else:
+            # the soft rounds did not clear it: no weld at all on that patch (reach 0: its vertices stay where the
+            # junction left them, the reach around it fades in at its bounded slope), the rest of the root keeps
+            # its weld.  Round 6's first pass gave the whole root up for two crossing triangles.
+            w = np.clip(_smooth_on(topo, near, (w > 0.0).astype(np.float64), 2) * 4.0, 0.0, 1.0)
+            kv = _envelope_on(topo, V, near, np.where(w > 0.5, 0.0, kv * (1.0 - w)), REACH_SLOPE)
     if best is None:
         if diag is not None:
             diag.update(info, seconds=time.perf_counter() - t0)
@@ -614,7 +653,28 @@ def _smooth_on(topo, ids, w, rounds):
     return w
 
 
-def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr, k0, ax_pts, solid=None):
+def _envelope_on(topo, V, ids, x, slope, rounds: int = 96):
+    """The largest field under ``x`` (over the vertices ``ids``) that changes by at most ``slope`` per unit of
+    length along the mesh: a patch taken out of the weld (0) lets the reach around it fade in instead of step."""
+    tab = topo.table(ids)
+    loc = np.full(topo.n, -1, dtype=np.int64)
+    loc[ids] = np.arange(len(ids))
+    has = tab >= 0
+    lt = np.where(has, loc[np.where(has, tab, 0)], -1)
+    inn = lt >= 0
+    safe = np.where(inn, lt, 0)
+    P = V[ids]
+    step = np.where(inn, slope * np.linalg.norm(P[safe] - P[:, None, :], axis=2), np.inf)
+    x = np.asarray(x, dtype=np.float64).copy()
+    for _ in range(rounds):
+        new = np.minimum(x, np.where(inn, x[safe] + step, np.inf).min(axis=1))
+        if np.all(x - new < 1e-9):
+            break
+        x = new
+    return x
+
+
+def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr, k0, ax_pts, solid=None, openn=None):
     """One construction with the reach ``kvn`` (per vertex of ``near``): ``None`` when there is nothing to weld,
     else the region, the new positions, the sets and the folded faces."""
     inr = keep & (kvn > 1e-6) & (b0n < pr.region * kvn)          # (skin under far wall: not this root's plug)
@@ -650,6 +710,22 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
             x = 0.5 * x + 0.5 * (xn * has).sum(axis=1) / cnt
         return x
 
+    def envelope(x, slope=REACH_SLOPE, among=None, rounds=96):
+        """The largest field under ``x`` that changes by at most ``slope`` per unit of length along the mesh (a
+        cut stays as deep as it is and fades out over cut / slope around it: it never lowers the reach on the far
+        side of the root, which iterated min-averaging did).  ``among``: only along edges between these."""
+        ok = inn if among is None else (inn & among[lsafe] & among[:, None])
+        step = np.where(ok, slope * elen, np.inf)
+        x = np.asarray(x, dtype=np.float64).copy()
+        for _ in range(rounds):
+            cand = np.where(ok, x[lsafe] + step, np.inf).min(axis=1)
+            new = np.minimum(x, cand)
+            fin = np.isfinite(x)
+            if np.all(x[fin] - new[fin] < 1e-9) and np.all(np.isfinite(new) == fin):
+                break
+            x = new
+        return x
+
     # -- the reach: no deeper than the skin's concave radius (a valley), no higher than the room over the skin
     conc = np.maximum(((lap(P0) - P0) * na0).sum(axis=1), 0.0)
     rho = edge * edge / np.maximum(4.0 * conc, 1e-9)
@@ -659,11 +735,21 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
         _, _, sd, _ = skin.closest(P0 + hgt[:, None] * na0, ga)
         short = (sd < CLEAR_SHARE * hgt) & ~np.isfinite(room)
         room[short] = hgt[short]
-    kv = np.minimum(kv, np.where(np.isfinite(room), CLEAR_K * room, kv))
+    _trace("start", region, kv)
+    # (on the kind's tight side in full, not on its open side: there the skin moves as one sheet with the last
+    # ring, and a probe from the floor of a furrow -- the spinal furrow over a heavy body's tail -- found the
+    # furrow's own walls and cut the reach of the back to a fifth)
+    cut = np.where(np.isfinite(room), CLEAR_K * room, kv)
+    op = 0.0 if openn is None else openn[region_pos]
+    kv = np.minimum(kv, cut + (kv - cut) * op)
+    _trace("room", region, kv)
     kv = np.minimum(kv, pr.valley * smooth_scalar(rho, 2))
-    for _ in range(6):                      # smoothed without ever raising a value: a cut stays cut (the cleft)
-        kv = np.minimum(kv, smooth_scalar(kv, 1))
-    kv = np.maximum(kv, 1e-4)
+    _trace("valley", region, kv)
+    # a cut stays cut (the cleft) and fades out at a bounded slope.  Over the skin OUTSIDE the wall only: what lies
+    # under the root is hidden, and its own cuts (a probe from under a tail finds the spinal furrow's walls) took the
+    # reach of the last ring next to it down with them (the heavy body: 0.5 to 0.1 on the back)
+    kv = np.maximum(envelope(kv, among=b0 >= 0.0), 1e-4)
+    _trace("minsmooth", region, kv)
 
     # -- the sets
     outer = (has & ~inn).any(axis=1)                       # touches a vertex outside the region
@@ -730,6 +816,17 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
             P[mask] += np.where(free, step, 0.0)[:, None] * grad
             P[mask] -= (f / np.maximum((g * g).sum(axis=1), 0.05))[:, None] * g
 
+    def relax_tangent(mask, factor=0.5):
+        """Toward the neighbours' mean, along the surface only (the blend's gradient is its normal)."""
+        L = lap(P, mask)
+        a, na, b, nb = fields(mask)
+        Rm = Rv[mask]
+        _, hh = smin(a, b / Rm, kv[mask])
+        g = CO._unit(na * hh[:, None] + nb * ((1.0 - hh) / Rm)[:, None])
+        dd = L - P[mask]
+        dd -= (dd * g).sum(axis=1)[:, None] * g
+        P[mask] += factor * dd
+
     def climb(mask, height, depth, rounds=6, start=None):
         """Onto the wall ``depth`` under it, then up the wall's GENERATOR (the root's axis laid on the wall) until
         the height over the original skin is ``height`` or it has climbed ``CLIMB_MAX`` of it: a vertex keeps its
@@ -772,18 +869,22 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
     # -- the last ring ON the wall at height k; where it cannot climb that high its reach is what it reached, and so
     # is the reach of the skin next to it (blending back to its own over the fillet's width)
     reached = climb(top, kv[top], 0.0, start=P0[top] - b0[top][:, None] * nb_i[top])
+    _trace("top_asked", region[top], kv[top])
+    _trace("top_reached", region[top], reached)
     kt_all = np.zeros(len(region))
     kt_all[top] = np.clip(np.minimum(kv[top], reached), 1e-4, None)
     ring = (inn & top[lsafe]) & top[:, None]                  # the last ring's own neighbours
     rc = np.maximum(ring.sum(axis=1), 1)
-    for _ in range(max(8, int(top.sum()) // 3)):                 # smoothed along the ring without ever rising (as
-        # many rounds as the ring is long: a level-2 ring has twice the vertices, and a zigzag of reached heights
-        # left a ragged contact line on the wall)
+    # along the ring the height changes at a bounded slope (a zigzag of reached heights left a ragged contact line on
+    # the wall), then a light averaging that never raises: the side that can climb keeps its height
+    kt_all = np.where(top, envelope(np.where(top, kt_all, np.inf), RING_SLOPE, among=top), kt_all)
+    for _ in range(3):
         nbm = np.where(ring, kt_all[lsafe], 0.0).sum(axis=1) / rc
         kt_all = np.where(top & (ring.sum(axis=1) > 0), np.minimum(kt_all, 0.5 * kt_all + 0.5 * nbm), kt_all)
     if np.any(kt_all[top] < kv[top] - 1e-6):                   # lowered: climb to the new height
         climb(top, kt_all[top], 0.0, rounds=3)
     kt = kt_all[top]
+    _trace("top_ring", region[top], kt)
     ti = np.nonzero(top)[0]
     dmin = np.full(len(region), np.inf)
     src = np.zeros(len(region), dtype=np.int64)
@@ -796,8 +897,8 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
     w = w * w * (3.0 - 2.0 * w)
     kv = np.where(cap | top, kv, np.minimum(kv, kt_all[src] + (kv - kt_all[src]) * w))
     kv[top] = kt
-    for _ in range(4):
-        kv = np.where(top | cap, kv, np.minimum(kv, smooth_scalar(kv, 1)))
+    kv = np.where(top | cap, kv, envelope(kv, among=~cap))
+    _trace("ring_blend", region, kv)
 
     # -- the share of the way from the last ring to the rim (graph distances: monotone, no two rings on one spot) and
     # the landing: where the vertex's own path meets the rim, at most LAND_MAX nominal fillets out
@@ -808,6 +909,7 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
     land = np.where(rim, np.maximum(b0, 1e-4), np.maximum(land, 1e-4))
     land = np.minimum(land, LAND_MAX * pr.region * kv)
     kv = np.minimum(kv, land / 1.2)
+    _trace("land", region, kv)
     Rv[:] = np.clip(land / kv, 1.2, _ASPECTS[-1])
     d_land = np.minimum(d_rim, np.maximum(land - np.maximum(b0, 0.0), 0.0))
     fin = np.isfinite(d_top) & np.isfinite(d_land)
@@ -826,20 +928,46 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
 
     # -- the sleeve: analytic placement on its profile, onto the zero set, its h restored, evened along its ring
     m = sleeve
-    a_t = kv * (1.0 - h_t) ** 2
-    b_t = Rv * kv * h_t * h_t
-    slide = (b_t - b0) / np.maximum(tl, 0.5)
-    P[m] = P0[m] + slide[m][:, None] * t_i[m] + a_t[m][:, None] * na_i[m]
-    project(sleeve, PROJECT_ROUNDS)
-    restore(sleeve, RESTORE_ROUNDS)
-    for _ in range(pr.relax):
-        along_ring(top, among=top)
-        climb(top, kv[top], 0.0, rounds=2)
-        along_ring(sleeve)
-        if RESTORE_ROUNDS:
-            restore(sleeve, 1)
-        else:
+    if PLACEMENT == "harmonic":
+        # the skin between the last ring (now on the wall) and the rim follows them as a membrane does: the
+        # DISPLACEMENT is harmonic over the sleeve (the skin's own relief rides along, the vertices keep their order
+        # and their spacing round the root), then it is laid on the fillet (the zero set) and evened along it.  No
+        # vertex is sent to a preset place on its own profile: that left rays of slivers where the reach changes
+        # round the ring (a tail's shoulders) and the guard cut the reach of the whole back for them.
+        D = P - P0
+        D[~top] = 0.0
+        _membrane(D, sleeve, lt, inn, has, np.zeros_like(Vout), cnt, iters=200, tol=1e-5)
+        P[m] = P0[m] + D[m]
+        project(sleeve, PROJECT_ROUNDS)
+        for _ in range(pr.relax + HARMONIC_RELAX):
+            along_ring(top, among=top)
+            climb(top, kv[top], 0.0, rounds=2)
+            relax_tangent(sleeve)
             project(sleeve, 1)
+        if pr.grade != 1.0 and HARMONIC_GRADE:
+            # the rings packed toward the wall (where the fillet turns into it: the last strip's chord is the angle
+            # the skin arrives at): every vertex's own place on the fillet, h, to h ** grade, along the surface
+            a_, na_, b_, nb_ = fields(sleeve)
+            _, hh_ = smin(a_, b_ / Rv[sleeve], kv[sleeve])
+            # (in full only where the reach is healthy: in a crease the rings have no room to be packed)
+            gw = np.clip((kv[sleeve] / max(k0, 1e-9) - 0.3) / 0.4, 0.0, 1.0)
+            h_t[sleeve] = np.clip(hh_, 0.0, 1.0) ** (1.0 + (pr.grade - 1.0) * gw * gw * (3.0 - 2.0 * gw))
+            restore(sleeve, HARMONIC_GRADE)
+    else:
+        a_t = kv * (1.0 - h_t) ** 2
+        b_t = Rv * kv * h_t * h_t
+        slide = (b_t - b0) / np.maximum(tl, 0.5)
+        P[m] = P0[m] + slide[m][:, None] * t_i[m] + a_t[m][:, None] * na_i[m]
+        project(sleeve, PROJECT_ROUNDS)
+        restore(sleeve, RESTORE_ROUNDS)
+        for _ in range(pr.relax):
+            along_ring(top, among=top)
+            climb(top, kv[top], 0.0, rounds=2)
+            along_ring(sleeve)
+            if RESTORE_ROUNDS:
+                restore(sleeve, 1)
+            else:
+                project(sleeve, 1)
 
     # -- cap1 continues up the wall just under it; the rest of the cap is a membrane spanning cap1
     if cap1.any():
@@ -863,6 +991,13 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
         # a share of the way back to where it was (inside the wall already): two of them under the same two
         # neighbours on the ring were laid on one spot (zero-area triangles: the printed body was not watertight)
         P[cap1] = (1.0 - CAP1_BACK) * P[cap1] + CAP1_BACK * P0[cap1]
+        # ... and no further from where it was than the weld is high there: where the reach is next to nothing (the
+        # crease under a tail, both sides of the ring meeting in the cleft) the ring on the wall has hardly moved,
+        # and a first ring pushed on by a fixed step crossed its mirror image under the root (level 2: the weld was
+        # refused for three hidden triangles)
+        kn = (kv[lsafe] * tops).sum(axis=1) / np.maximum(tops.sum(axis=1), 1.0)
+        wk = np.clip(kn / (CAP1_FULL * edge), 0.0, 1.0)[cap1]
+        P[cap1] = P0[cap1] + wk[:, None] * (P[cap1] - P0[cap1])
     if capin.any():
         _membrane(P, capin, lt, inn, has, Vout, cnt)
     # the whole plug inside the wall (a membrane spanning a ring on a wall that is not convex -- a dome with its arm
@@ -904,7 +1039,7 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
     gm = CO._unit(g[vf].sum(axis=1))
     dots = (fn * gm).sum(axis=1)
     folded = np.unique(vf[dots < FOLD_COS])
-    flipped = np.unique(vf[dots < 0.0])
+    flipped = np.unique(vf[dots < FLIP_COS])
     ids = dict(region=region, sleeve=region[sleeve], top=region[top], cap=region[cap], cap1=region[cap1],
                fixed=region[rim])
     return {"region": region, "region_pos": region_pos, "P": P, "folded": folded, "flipped": flipped, "ids": ids,
