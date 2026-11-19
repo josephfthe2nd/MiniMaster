@@ -76,6 +76,10 @@ class Piece:
     # slab's (rows, columns) grid shape and the column ranges of each panel
     # between two bone lines. Optional; without it the sheet is just skinned.
     pleat: dict | None = None
+    # per vertex, how much of the BODY's skin the piece is where it grows out of the body (1 at the skin, 0 in
+    # the wing's own integument): a membrane's root, built against the body (wings.membrane_pieces). ``None``:
+    # the piece is all wing.  The geometry does not depend on it; ``wingroot.WingRoot.tint`` colours by it.
+    skin_share: np.ndarray | None = None
 
 
 # --------------------------------------------------------------------------
@@ -375,6 +379,9 @@ PLEAT_FOLD_FULL = 0.3
 # folded up (165 degrees stowed). Below that the column keeps its skinned arc.
 BEND_FROM, BEND_SPAN = 75.0, 30.0       # sheet column follows the bent finger
 FOLD_FROM, FOLD_SPAN = 120.0, 45.0      # ... then the straight line between its ends
+# A root fillet (``pleat["swell"]``) is built against the back as the wing rests: it is whole while the upper arm
+# is within the first of these of its rest (degrees) and gone by the second.
+SWELL_SWING = (6.0, 30.0)
 # Tallest a single pleat may stand off the sheet (soft limit, wing units).
 PLEAT_CAP = 0.30
 # A pleat grows in over this much further closure of its panel, past what the skin takes
@@ -717,7 +724,13 @@ class WingRig:
             pinned[:, [c0 for c0, _ in sectors] + [sectors[-1][1]]] = True
             pinned |= (self._wt[a:a + nv, 0] >= 0.97).reshape(n1, m1)
             new_mid = self._limit_stretch(new_mid, r_mid, pinned, limit_v=limit_v)
-            if np.allclose(new_mid, skinned_mid, atol=1e-12, rtol=0.0):
+            # a sheet that grows out of the body does so in a fillet built against the back AS THE WING RESTS
+            # (``pleat["swell"]``: what each face stands out by, wings._root_fillet).  A wing whose arm has swung
+            # drags the sheet across the back, and the fillet with it: its lips, drawn in under the skin where
+            # they were, came out of it along the flank as a jagged flap.  It goes as the arm leaves its rest.
+            swell = piece.pleat.get("swell")
+            fade = self._arm_swing(pose) if (swell is not None and pose) else 0.0
+            if fade <= 0.0 and np.allclose(new_mid, skinned_mid, atol=1e-12, rtol=0.0):
                 continue
             # rebuild the two faces of the slab about the new mid-surface. The thickness
             # axis is the surface normal where that is well defined and the panel's own
@@ -733,9 +746,21 @@ class WingRig:
             # (A surface that doubles back is still wound consistently and the solid stays
             # valid; the normals are not re-oriented toward a skinned "up", which turned the
             # slab inside out wherever a panel folded over itself.)
-            pos[:nv] = (new_mid + nrm * r_half[..., None]).reshape(-1, 3)
-            pos[nv:2 * nv] = (new_mid - nrm * r_half[..., None]).reshape(-1, 3)
+            up_by = r_half if fade <= 0.0 else r_half - fade * np.asarray(swell[0])
+            down_by = r_half if fade <= 0.0 else r_half - fade * np.asarray(swell[1])
+            pos[:nv] = (new_mid + nrm * up_by[..., None]).reshape(-1, 3)
+            pos[nv:2 * nv] = (new_mid - nrm * down_by[..., None]).reshape(-1, 3)
         return posed
+
+    def _arm_swing(self, pose) -> float:
+        """How far the upper arm has swung from its rest, 0 (within ``SWELL_SWING[0]`` degrees of it) .. 1
+        (``SWELL_SWING[1]`` degrees or more), read off the posed joints."""
+        P = self.armature.posed_positions(pose)
+        J = self.skeleton.joints
+        a, b = P["elbow"] - P["shoulder"], J["elbow"] - J["shoulder"]
+        c = a @ b / max(float(np.linalg.norm(a) * np.linalg.norm(b)), 1e-12)
+        swing = float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
+        return float(_smooth01((swing - SWELL_SWING[0]) / (SWELL_SWING[1] - SWELL_SWING[0])))
 
     def _panel_ray(self, k, pleat, mid, joints) -> np.ndarray:
         """Unit vector along panel ``k`` (arm toward free edge), from the joints ``joints``

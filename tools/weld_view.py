@@ -2,9 +2,10 @@
 ``minimaster.character.weld``), with geometry-only modes, for judging the seam as GEOMETRY.
 
     python tools/weld_view.py OUT.png "<spec>[;<spec>]" FOCUS [az,el ...] [--levels N] [--macro k=v,...]
-        [--pose ID:control=value] [--seam weld|none|collar] [--mono] [--flat] [--size WxH] [--r R]
+        [--pose ID:control=value] [--seam weld|none|collar] [--mono] [--flat] [--size WxH] [--r R] [--at X,Y,Z]
 
-``FOCUS`` is the start of an appendage name (``tail``, ``wing``, ``horn``, ``arm``, ``leg``) or ``all``.
+``FOCUS`` is the start of an appendage name (``tail``, ``wing``, ``horn``, ``arm``, ``leg``) or ``all``;
+``--at`` centres the view on a point of the body instead (MakeHuman frame: Y up, +Z front).
 ``--seam`` overrides the document's (``none``: the bare junction, ``collar``: the round-4 overlay shell);
 ``--mono`` draws every shell in the skin's material (colour apart from geometry), ``--flat`` every triangle
 flat-shaded in one material (what a slicer or an STL viewer shows).  It prints, per root, whether the weld was
@@ -31,6 +32,7 @@ def main(argv):
     out, specs, focus = argv[0], [s for s in argv[1].split(";") if s], argv[2]
     views, macro, size, rad, levels, seam = [], {"gender": 1.0, "muscle": 0.55}, (380, 380), None, 1, None
     mono = flat = False
+    at = None
     poses = []
     i = 3
     while i < len(argv):
@@ -52,6 +54,9 @@ def main(argv):
             i += 2
         elif a == "--seam":
             seam = argv[i + 1]
+            i += 2
+        elif a == "--at":
+            at = tuple(float(x) for x in argv[i + 1].split(","))
             i += 2
         elif a == "--mono":
             mono = True
@@ -118,6 +123,8 @@ def main(argv):
     else:
         lo, hi = body[0].mesh.bounds
         ctr_z = (lo + hi) / 2
+    if at is not None:                               # a point of the body (MakeHuman frame) instead of a root
+        ctr_z = (po.MH_TO_Z_UP[:3, :3] @ np.asarray(at)) + po.MH_TO_Z_UP[:3, 3]
     fit = (ctr_z, rad or 3.0)
     rows = [po.render_portrait(shells, size=size, azimuth=az, elevation=el, fit=fit, cache=False) for az, el in views]
     po.write_png(out, np.concatenate(rows, axis=1))

@@ -1445,6 +1445,14 @@ class WingRoot:
         w = self.skin_share(ctl or None)
         if len(w) == b - a:
             cols[a:b] = w[:, None] * skin[None] + (1.0 - w[:, None]) * wing[None]
+        # ... and a sheet built against the body is the body's skin where it grows out of it (``Piece.skin_share``)
+        for piece in self.rig.rig.pieces:
+            w = getattr(piece, "skin_share", None)
+            if w is None:
+                continue
+            a, b = self.rig.rig.ranges[piece.name]
+            if len(w) == b - a:
+                cols[a:b] = w[:, None] * skin[None] + (1.0 - w[:, None]) * wing[None]
         return TintedMesh(mesh.vertices, mesh.faces, cols, material_named(self.style))
 
     # -- the junction ------------------------------------------------------------------

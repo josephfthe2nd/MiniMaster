@@ -294,7 +294,10 @@ class TestOnRealBody:
         assert max(gaps.values()) <= 0.1
         wrong = [s for a in apps for s in a.build(base, v)]
         far = pp.assemble_character(body + wrong, size="medium", reference=pp.FIGURE_SHELLS)[1]
-        assert min(pr.root_gaps(far.placed_shells).values()) > 1.0
+        # (the wrongly framed wing is 0.86 from the body, for 2.43: its sheet is built against the back now, its
+        # inner edge moved onto the skin and flared -- still eight times what a root that is ON the body may be
+        # off it)
+        assert min(pr.root_gaps(far.placed_shells).values()) > 0.5
 
     def test_flight_report_uses_the_characters_own_mass(self, assets):
         base, lib, cat = assets

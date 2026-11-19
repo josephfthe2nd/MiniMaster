@@ -847,6 +847,88 @@ def back_wings(style: str = "membrane", scale: float = 1.0,
                      scale=scale, params=dict(style=style, **params), **place)
 
 
+_MIRROR_X = np.diag([-1.0, 1.0, 1.0, 1.0])
+SKIN_SYMMETRY_TOL = 1e-4       # of the body's height (the child's cage is 2.4e-5 off its mirror image): "symmetric"
+
+
+def _is_symmetric(base, body_v) -> bool:
+    """Is the body cage its own x-mirror image (every vertex against its partner of the base mesh)?"""
+    try:
+        vmap = mirror_vertex_map(base)
+    except ValueError:
+        return False
+    v = np.asarray(body_v, dtype=np.float64)
+    if len(vmap) != len(v):
+        return False
+    err = float(np.abs(v[vmap] * np.array([-1.0, 1.0, 1.0]) - v).max())
+    return err <= SKIN_SYMMETRY_TOL * float(v[:, 1].max() - v[:, 1].min())
+
+
+SKIN_PROBE_HEIGHT = 17.5       # the body cage's height on the reference man (gender 1, muscle 0.55), units
+SKIN_PROBE_RADIUS = 6.0        # wing units round the wing's origin: the back from the neck to the hip
+
+
+class SkinProbe:
+    """The body's skin in a wing's own frame (``matrix``: wing units -> body): ``distance(points)`` is the signed
+    distance of wing-local points to the body cage in WING units (positive outside), ``normal(points)`` the skin's
+    outward normal at their closest points, in the wing's axes. A wing is built in its own flat frame and then
+    placed; this is how its builder knows where the back is (which coverts at the shoulder are inside the body,
+    where the membrane's edge along the flank meets the skin)."""
+
+    def __init__(self, matrix, body_v, body_q, centre, radius):
+        from . import weld as W
+        q = np.asarray(body_q)
+        tris = np.concatenate([q[:, [0, 1, 2]], q[:, [0, 2, 3]]])
+        self.matrix = np.asarray(matrix, dtype=np.float64)
+        self.scale = float(abs(np.linalg.det(self.matrix[:3, :3])) ** (1.0 / 3.0))
+        self._surface = W.Surface(np.asarray(body_v, dtype=np.float64), tris, np.asarray(centre, dtype=np.float64),
+                                  float(radius), walk=1)
+        # (every sixth vertex of the patch is within this of any point of it: the pre-filter of ``distance``)
+        V = self._surface.V
+        F = self._surface.F
+        edge = float(np.linalg.norm(V[F[:, 1]] - V[F[:, 0]], axis=1).max()) if len(F) else 0.0
+        self._coarse_gap = 4.0 * edge
+        self._lo, self._hi = V.min(axis=0), V.max(axis=0)
+        # the body's size against the reference man's (his height): what is built into the skin is sized by it
+        y = np.asarray(body_v, dtype=np.float64)[:, 1]
+        self.size = float(np.clip((y.max() - y.min()) / SKIN_PROBE_HEIGHT, 0.6, 1.3))
+
+    def _query(self, points):
+        P = np.atleast_2d(np.asarray(points, dtype=np.float64)) @ self.matrix[:3, :3].T + self.matrix[:3, 3]
+        q, n, b, _ = self._surface.closest(P)
+        return P, q, n, b
+
+    def distance(self, points, within: float | None = None, normals: bool = False):
+        """Signed distances (wing units).  ``within``: only points nearer the skin than this are wanted; the rest
+        come back as ``inf`` without a closest-point search (most of a wing is nowhere near the body, and the
+        search is what costs: 0.1 s for a membrane's grid).  ``normals``: ``(distances, normals)``, the skin's
+        outward normal at each point's closest point (the wing's axes; zero for a point that was not searched)."""
+        P = np.atleast_2d(np.asarray(points, dtype=np.float64))
+        out = np.full(len(P), np.inf)
+        nrm = np.zeros((len(P), 3))
+        sel = np.ones(len(P), bool)
+        if within is not None and len(P):
+            W_ = P @ self.matrix[:3, :3].T + self.matrix[:3, 3]
+            coarse = self._surface.V[::6]
+            reach = float(within) * self.scale + self._coarse_gap
+            box = np.nonzero(np.all((W_ >= self._lo - reach) & (W_ <= self._hi + reach), axis=1))[0]
+            sel = np.zeros(len(P), bool)
+            for i in range(0, len(box), 2048):
+                part = box[i:i + 2048]
+                d2 = ((W_[part, None, :] - coarse[None, :, :]) ** 2).sum(axis=2).min(axis=1)
+                sel[part] = d2 < reach * reach
+        if sel.any():
+            W_, q, n, b = self._query(P[sel])
+            out[sel] = np.linalg.norm(W_ - q, axis=1) * np.where(np.asarray(b) < 0.0, -1.0, 1.0) / self.scale
+            if normals:
+                nrm[sel] = (np.asarray(n) @ self.matrix[:3, :3]) / self.scale
+        return (out, nrm) if normals else out
+
+    def normal(self, points) -> np.ndarray:
+        _, _, n, _ = self._query(points)
+        return (np.asarray(n) @ self.matrix[:3, :3]) / self.scale       # (R s)^T n / s = R^T n
+
+
 @dataclass
 class Appendage:
     """A declarative appendage on a character."""
@@ -1106,6 +1188,17 @@ class Appendage:
                 rp = self._root_world(surface, idx, body_v, body_q, base)
                 local = np.linalg.inv(M) @ np.append(rp, 1.0)      # into wing units
                 kw["root"] = (float(local[0]), float(local[2]))
+            if "skin" not in kw:
+                # where the body's skin is, in the wing's own frame: what is built at the root (the coverts over the
+                # arm where it leaves the back, the membrane's edge along the flank) is built against it.  The right
+                # wing reads the LEFT side's skin through the mirror when the body is symmetric: a quad and its
+                # mirror image are split along different diagonals, so the two sides' triangles are not mirror
+                # images (1e-6 apart, and a root fitted to them 0.05 apart) and the pair would not be one either.
+                P = _MIRROR_X @ M if idx == 1 and _is_symmetric(base, body_v) else M
+                try:
+                    kw["skin"] = SkinProbe(P, body_v, body_q, P[:3, 3], SKIN_PROBE_RADIUS * float(self.scale))
+                except ValueError:
+                    pass
             rig = make_wing_rig(style, **kw)
             # where the back is, in the wing's own frame: a stowed wing lies against it
             Rm = M[:3, :3] / float(self.scale)

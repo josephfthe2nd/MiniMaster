@@ -126,7 +126,13 @@ def test_root_gap_measures_the_distance_to_the_surface_not_to_a_vertex():
 def test_two_hundred_rays_estimate_the_bat_membrane_like_the_full_probe(figure):
     """Evenly spaced quantiles alias with the grid order of a slab (every 24th face of the
     membrane is a rim column) and read 1.7% of its area under 0.2 mm against the full probe's
-    0.44%. The low-discrepancy sample has no period: 0.41%."""
+    0.44%. The low-discrepancy sample has no period: 0.41%.
+
+    (Round 8: the sheet flares into the back along its root edge, and a face of that flare reads the distance
+    along the sheet to the edge buried under the skin -- 1.6% of the area reads under 0.3 mm now, against the
+    report's 20% and 30% rules.  Two hundred rays stand for half a percent each and one of them lands there
+    (0.5%): the tolerance is a little over two rays, which the aliasing this test is about (1.3 points off)
+    still fails.)"""
     base, v, _, _ = figure
     (_, pw), _ = A.back_wings("membrane").build_rigs(base, v)
     membrane = dict(pw.piece_meshes())["membrane"]
@@ -135,7 +141,7 @@ def test_two_hundred_rays_estimate_the_bat_membrane_like_the_full_probe(figure):
     t, w = pr.thickness_samples(membrane, rays=200)
     for limit in (0.2 / REF_MM, 0.3 / REF_MM):
         assert pr._share_below(t, w, limit) == pytest.approx(
-            pr._share_below(t_full, w_full, limit), abs=0.006)
+            pr._share_below(t_full, w_full, limit), abs=0.012)
     assert pr._percentile(t, w, 0.05) * REF_MM == pytest.approx(
         pr._percentile(t_full, w_full, 0.05) * REF_MM, abs=0.02)
 

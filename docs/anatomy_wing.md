@@ -43,6 +43,111 @@ placement versions, the model, the junction, the collar profile, the layers, the
 
 ![round 4 on the core + tail + wing merged tree, level 2: slim woman, tall man, short man (bat) and the neutral man's angel; rear, three-quarter, side, top](images/wing_root_r4_skin_bodies.png)
 
+## Round 8: the wing grows out of the body
+
+The owner's finding on a7f84cd: *"wings themselves don't seem to connect to the body"*. Measured on that tree, on four bodies
+(neutral man, muscular heavy man, child, slim woman), against the skin the pipeline draws (moulded by the root, subdivided once):
+
+| | a7f84cd | now |
+|---|---|---|
+| bat / dragon: the sheet's inner edge, lower corner | **0.40 - 0.57 off the skin** (daylight between sheet and flank) | under it |
+| ... the whole edge, shoulder to waist | a straight line: 0.5 off the lumbar hollow, 0.3 under the shoulder blade | 0.17 - 0.42 under the skin on all eight of its points, evenly along it |
+| ... the sheet where its middle meets the skin | a blade, 0.17 - 0.21 thick | 0.22 - 0.40 on the four middle columns of the edge (their median 0.32 - 0.36) |
+| ... its colour there | the wing's, to a hard edge on the skin | the body's skin, turning into the wing's over about a unit |
+| feathered: arm's top and leading side with no feather over it, first 1.2 past the skin | **27 - 62%** (a bare skin-coloured stub) | 0 - 3% |
+| ... coverts round the shoulder | the nose row, 76 - 99% of each feather inside the muscle | 36 - 76 small ones per wing, each rooted in the arm and lying on it |
+
+![bat: before and after](images/wing_connect_r8_bat.png)
+
+![feathered: before and after](images/wing_connect_r8_bird.png)
+
+### The cause, and what a wing knows now
+
+A wing is built flat in its own frame and then placed (`Appendage.place_rigs`), so its builder never knew where the back was: the
+membrane's inner edge was the plan's straight line, the feathers at the shoulder were laid on a bare rod. The placement is computed
+first now and the builder is handed the body's skin in the wing's own frame: **`appendages.SkinProbe`** (`distance(points, within=,
+normals=)`: signed distance in wing units, positive outside; `normal(points)`; `size`: the body's height against the reference
+man's, 0.6 - 1.3). It reads the body's **cage** (before the root's relief is moulded and before subdivision: both depend on the
+placed wing), inside `SKIN_PROBE_RADIUS` = 6 wing units of the wing's origin. A wing built alone (`make_wing_rig(style)`, `skin=None`)
+is bit-identical to what it was.
+
+Two rules keep the rest of the pipeline where it was:
+
+* **The right wing reads the left side's skin through the mirror** when the body is its own mirror image (within `SKIN_SYMMETRY_TOL`
+  = 1e-4 of its height; the child's cage is 2.4e-5 off). A cage quad and its mirror image are split along different diagonals, so
+  the two sides' triangles are not mirror images (1e-6 apart) and a root fitted to each was 0.005 - 0.05 off its mirror image: eleven
+  existing tests of the pair's exact symmetry failed. An asymmetric body's right wing reads its own side.
+* **The skeleton and the bones are the plan's.** The joints are lifted onto the sheet as the plan has it and the bones are laid on
+  it; only the sheets (`membrane`, `propatagium`) and, on a feathered wing with a muscular sleeve, the coverts of the shoulder
+  differ from a wing built alone. (Lifted onto the fitted sheet, the elbow of a rolled wing moved by 0.07: an old document's arm
+  left the back 0.0095 of the shoulder's width from where c808d60 put it, and the tall man's trapezius yielded to the arm at rest.)
+
+### The membrane (`wings.membrane_pieces`)
+
+1. **The edge follows the back** (`_conform_root`). Each of the root line's eight points moves ACROSS the line, in the wing's plane,
+   until it is `ROOT_BURY` (0.025 of the wing's scale, 0.11 units on the man) under the skin *as the sheet's foot has it*
+   (`_foot_distance`: the greatest of its own distance and of the points `ROOT_FOOT` = 0.4 fillets to either side: a sheet meets the
+   back at a slant, and the face that leans away is higher over it than the middle). The moves are evened along the edge but never
+   short of the skin; the waist corner moves with its point and the last five trailing-edge points follow it. The rows crowd toward
+   the edge on these columns (`ROOT_ROWS`).
+   *Tried first: each point along its own column's ray from the arm. The rays next to the shoulder run along the back and meet it
+   at a slant, up to 2.6 past the line on a ray 1.7 long: five of the eight points ended within half a unit of the waist corner.
+   And a reach of 1.2 with plain evening left five points of eight up to 0.4 off the heavy man's skin.*
+2. **Each face leaves the sheet in a fillet of its own** (`_root_fillet`, `_slab_from_grid(..., swell=)`). Within `ROOT_FILLET`
+   (0.10 of the scale: 0.44 units) of the skin a face stands out along a quarter circle whose foot is `ROOT_BURY` under the skin, so
+   it crosses the skin at about 40 degrees and ends in a lip under it. The lip `w` of a face solves `w = g(d + c w)`: `d` the
+   middle's height, `c` the cosine between the sheet's normal and the skin's (+ for the face that leans away), `g` the quarter
+   circle. *Sized by the middle's height alone, the face that leans away stood 0.14 over the muscular man's skin and came out of his
+   back in torn flaps.* A lip that the plane-under-each-point estimate still leaves out of the skin is drawn in to `ROOT_TUCK`
+   under it; under the skin the slab narrows again (`ROOT_KEEL`). The fillet runs out toward the waist corner (`ROOT_FADE`), where
+   a column is too short to carry it (next to the shoulder), and on a column that never leaves the skin; a child's is a child's
+   (`SkinProbe.size`).
+3. **The sheet is the body's skin where it grows out of it** (`Piece.skin_share`, per vertex; `WingRoot.tint` colours by it, as it
+   does the arm). Colour only.
+4. **The fillet goes as the arm swings** (`wingrig.SWELL_SWING` = 6 - 30 degrees of the upper arm off its rest; `pleat["swell"]`).
+   It is built against the back as the wing rests; a folding wing dragged it across the back and its tucked lips came out along
+   the flank as a jagged flap. A half-folded wing leaves the back in a plain skin-coloured web.
+
+### The feathered wing (`wings._coverts`)
+
+The marginal (nose) rows are not built where the muscular sleeve is fatter than `SHOULDER_SWELL` over the bone (a long vane seated
+on a fat sleeve is a chord through it with only its shaft proud: the "ribs" of the first attempts). There, rings of **small
+coverts** (`shoulder_scales`: `SHOULDER_SCALE` = 0.11 of the scale long, at most 0.8 of the arm's radius, `SHOULDER_PITCH` apart,
+alternate rows staggered, over `SHOULDER_ARC` = 100 degrees to either side of the leading edge) lie tangent on the sleeve, above
+and below, up to the skin; one rooted `ROOT_PROUD` or less outside the body is not built (its end came out of the back as a slat).
+A bird's wing meets its body under a mound of coverts (wing/A11), a sculpted angel's in rows of ever smaller feathers (wing/H22).
+Spread, half folded and folded the wing's 340 solids are one connected body.
+
+### What changes for a saved document, and what it costs
+
+No new parameter and no version stamp: every wing ON A BODY changes at its root when the document is next built (the sheet's inner
+edge, its fillet and colour; the shoulder's coverts). The joints, the bones, the arm, the placement, the poses and their limits,
+the junction, the weld and the collar are what they were. A bat pair builds in 0.35 s (0.10), a feathered pair in 0.38 s (0.28);
+drafts carry the fitted sheet too (a feathered draft has no coverts, as before). In the print report the membrane's share of area
+that reads under 0.3 mm goes from 0.8% to 2.0% (the rules are 20% and 30%): faces of the buried lip, which read the distance to
+the edge under the skin.
+
+### What it does not do
+
+* **The fillet is small.** The sheet is under twice its own thickness where it meets the skin and its faces cross the skin at
+  55 - 65 degrees (the blade's: 68 - 82). `ROOT_FILLET` = 0.14 was tried: the line where the sheet meets the back came out notched.
+  In one colour the join reads as a sheet set into the back along a clean line, not as a web; a web proper would be the body's own
+  skin raised onto the sheet (the weld of `weld.py`, which is built for round roots, not for a line).
+* **The probe reads the cage**, not the moulded, rounded skin (up to 0.19 off it beside the arm, 0.05 elsewhere): up to six lip
+  vertices per wing still stand up to 0.07 out of the skin, most of them next to the arm (none on the neutral man's bat wing).
+* **A posed wing has no fillet** (see 4), and a folded bat's root shows as skin-coloured parts in the pack.
+* The folded feathered wing still shows two stray slats and a bare patch at the shoulder (they were there; the stub is covered).
+* The sheet crosses itself at its root: 83 - 243 pairs of faces per sheet (it had 220 - 266 at the elbow and the wrist, and
+  has them still), where the lips of neighbouring columns meet under the skin. All of them are under the skin on the neutral man
+  and the slim woman; one pair has a face out of it on the child (0.05) and six on the muscular man (up to 0.2).
+* No critic has looked at this round.
+
+Tests: `tests/test_wing_connect.py` (43; 32 of them fail on a7f84cd, the rest are invariants), and in `tests/test_wing_root.py`
+the sleeve test (the coverts on the sleeve change with it now) and the colour test (a sheet carries the skin's colour at its root).
+`tests/test_print_report.py`: the 200-ray estimate's tolerance is 0.012 for 0.006 (the share it estimates is 2% for 0.4%).
+`tests/test_creature_anatomy.py`: a wing assembled in the WRONG frame is 0.86 from the body for 2.43 (the control asks for 0.5
+for 1.0). On this tree every test file runs green: 2609 passed and 29 skipped outside the two Tk files, 183 passed in them.
+
 ## 0. Round 6: the arm against the skin it leaves
 
 ### What the review found, and the cause

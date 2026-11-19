@@ -127,19 +127,22 @@ def _tube(points, radii, sides: int = 8, start_back: float = 0.0) -> Mesh:
     return _orient(Mesh(verts, np.asarray(tris, dtype=np.int64)))
 
 
-def _slab_from_grid(grid: np.ndarray, thickness: np.ndarray) -> Mesh:
+def _slab_from_grid(grid: np.ndarray, thickness: np.ndarray, swell=None) -> Mesh:
     """Thicken a surface grid into a closed solid.
 
     ``grid`` is (n+1, m+1, 3) mid-surface points, ``thickness`` an (n+1, m+1)
     field. Emits a top sheet, a bottom sheet, and a rim stitching their shared
-    perimeter, wound so every edge is used exactly twice.
+    perimeter, wound so every edge is used exactly twice.  ``swell``: what the top and the
+    bottom face stand out by on top of half the thickness, each its own (n+1, m+1) field
+    (the fillet of a sheet that grows out of a body: :func:`_root_fillet`).
     """
     n1, m1, _ = grid.shape
     n, m = n1 - 1, m1 - 1
     nrm = grid_normals(grid)
     half = (thickness / 2.0)[:, :, None]
-    top = (grid + nrm * half).reshape(-1, 3)
-    bot = (grid - nrm * half).reshape(-1, 3)
+    up, down = (0.0, 0.0) if swell is None else (np.asarray(swell[0])[:, :, None], np.asarray(swell[1])[:, :, None])
+    top = (grid + nrm * (half + up)).reshape(-1, 3)
+    bot = (grid - nrm * (half + down)).reshape(-1, 3)
     verts = np.vstack([top, bot])
     nv = n1 * m1
 
@@ -1052,13 +1055,193 @@ SCALLOP_DRAGON = {"III-IV": 0.40, "IV-V": 0.50, "V-root": 0.15}
 # the flank. A full-width panel ending in a corner at the hip hangs as a flat rectangular tab
 # beside the buttock once the arm closes (half fold).
 ROOT_TAPER = 0.35
+# Where the sheet meets the body (built against it: ``skin``, an ``appendages.SkinProbe``).  The plagiopatagium is a
+# fold of the body's own skin (wing/A22, the flying squirrel's flap along the flank; wing/A15, the flying fox's fur
+# running onto the wing): it was a 0.22-unit blade standing on the back at 70-86 degrees, its lower corner 0.3 off
+# the skin.  The root edge is moved along its own rays until it lies ROOT_BURY (x scale) under the skin, the slab
+# thickens within ROOT_FILLET of the skin along a quarter circle (each face turns from the sheet's plane into the
+# skin's), the rows crowd toward the body so that several lie within the fillet (ROOT_ROWS: the exponent), and the
+# sheet is the body's skin up to ROOT_TINT[0] fillets from it and its own over the next ROOT_TINT[1] (a colour:
+# ``Piece.skin_share``).
+ROOT_BURY = 0.025
+ROOT_FILLET = 0.10
+ROOT_ROWS = 1.6
+ROOT_TINT = (0.6, 2.2)
+ROOT_KEEL = (0.3, 0.8)
+ROOT_FADE = 3.0
+
+
+ROOT_FOOT = 0.4                 # of a fillet: where a tilted sheet's far lip stands beside its middle
+ROOT_TUCK = 0.12                # of a fillet: how far under the skin a buried lip is drawn
+
+
+def _foot_distance(skin, pts, normal, rho, within=None):
+    """Signed distance of a sheet's edge points to the skin as its FOOT has it: the greatest of the point's own and
+    of the points ``ROOT_FOOT`` fillets to either side of it along ``normal`` (the sheet's own).  A sheet that
+    meets the back at a slant has one face leaning away from it, and that face's lip is higher over the skin than
+    the sheet's middle is: an edge buried by its middle alone left the lip's end showing."""
+    pts = np.atleast_2d(np.asarray(pts, dtype=np.float64))
+    d = skin.distance(pts, within=within)
+    near = np.isfinite(d)
+    if near.any():
+        for sign in (-1.0, 1.0):
+            d[near] = np.maximum(d[near], skin.distance(pts[near] + sign * ROOT_FOOT * rho * np.asarray(normal)))
+    return d
+
+
+def _conform_root(B, I, root_cols, te_cols, skin, bury, graze, arm, rho, reach=1.5, back=1.0, step=0.03):
+    """Move the root edge's points (``B[root_cols]``, in place) until they lie ``bury`` under the skin: the edge
+    then follows the back's own profile (the straight line from the shoulder to the waist stood up to 0.4 off the
+    lumbar hollow and lay 0.5 under the shoulder blade).  Each point moves ACROSS the line, in the wing's plane
+    (away from ``arm``, a point on the arm's side of it): the edge stays a height over its own line, its points
+    evenly along it.  (Along each column's own ray from the arm, as the first version had it, the rays near the
+    shoulder run along the back and meet it at a slant, up to 2.6 past the line on a ray 1.7 long: five of the
+    eight points ended within half a unit of the waist corner, the rest of the edge stretched between two.)
+
+    A point with the body on the arm's side of it as well (at the shoulder) stays where it is (returned: a bool per
+    root column); one whose path only grazes the back goes to where it comes nearest (within ``graze``, which the
+    fillet bridges), and one that never reaches the body keeps its neighbours' move.  The moves are evened along
+    the edge, but never short of the skin (a point evened back out of the body hangs beside it); the corner where
+    the free trailing edge meets the root line moves with it, and the last trailing-edge points follow it a share
+    of the way so that the edge does not kink there."""
+    held = np.zeros(len(root_cols), bool)
+    first, last = B[root_cols[0]], B[root_cols[-1]]
+    along = last - first
+    length = float(np.linalg.norm(along))
+    if length < 1e-6:
+        return held
+    along = along / length
+    out = np.array([along[2], 0.0, -along[0]])                  # across the line, in the wing's plane ...
+    if float(out @ (np.asarray(arm, dtype=np.float64) - 0.5 * (first + last))) > 0.0:
+        out = -out                                              # ... away from the arm
+    e = np.arange(-back, reach, step)
+    pts = B[root_cols][:, None, :] + e[None, :, None] * out[None, None, :]
+    # (the plan is flat: the sheet's own normal is the wing's Y)
+    dist = _foot_distance(skin, pts.reshape(-1, 3), np.array([0.0, 1.0, 0.0]), rho).reshape(len(root_cols), len(e))
+    move = np.full(len(root_cols), np.nan)
+    for i in range(len(root_cols)):
+        d = dist[i]
+        inside = d <= -bury
+        if inside[0]:
+            held[i] = True
+            continue
+        if not inside.any():
+            k = int(np.argmin(d))
+            if d[k] < graze:
+                move[i] = e[k]
+            continue
+        k = int(np.argmax(inside))
+        t = (d[k - 1] + bury) / max(d[k - 1] - d[k], 1e-9)
+        move[i] = e[k - 1] + t * (e[k] - e[k - 1])
+    ok = np.isfinite(move)
+    if not ok.any():
+        return held
+    idx = np.arange(len(move))
+    need = np.interp(idx, idx[ok], move[ok])                    # a point with no crossing: its neighbours'
+    move = need.copy()
+    for _ in range(2):                                          # ... and evened (ends held)
+        move[1:-1] = 0.25 * move[:-2] + 0.5 * move[1:-1] + 0.25 * move[2:]
+        move = np.maximum(move, need)
+    move[held] = 0.0
+    for i, c in enumerate(root_cols):
+        B[c] = B[c] + move[i] * out
+    for k, c in enumerate(te_cols[::-1][:5]):
+        B[c] = B[c] + move[0] * out * (1.0 - (k + 1) / 6.0) ** 2
+    return held
+
+
+def _root_fillet(grid, thick, skin, bury, rho, weight=None):
+    """``((top, bottom), skin share)`` of a sheet's grid built against the body: what each face stands out by on
+    top of the sheet's own thickness (:func:`_slab_from_grid`'s ``swell``), and how much of the body's skin the
+    sheet is.  Within ``rho`` of the skin each face leaves the sheet's plane along a quarter circle and arrives
+    in the skin's, and the sheet is the body's own skin there, turning into the wing's over ``ROOT_TINT``.
+    ``weight`` (per column): how much of the fillet a column carries (a free edge hanging beside the body has
+    none).
+
+    Each face is sized by ITS OWN height over the skin.  A sheet meets the back at a slant (50-60 degrees on the
+    heavy man), so the face that leans away from the back is higher over it than the sheet's middle by its own
+    lip's width times the cosine of that slant: sized by the middle, its lip stood 0.14 over the skin and came
+    out of the heavy man's back in torn flaps.  With the skin taken as a plane under each point the face's lip
+    ``w`` solves ``w = g(d + c w)`` (``g`` the quarter circle, ``c`` the cosine, + for the face that leans away):
+    one root by bisection for the face that leans away; for the one that leans in, the smallest (it grows from
+    nothing as the sheet nears the skin, and jumps to the full lip only where the face is already under it).
+
+    Under the skin the slab keeps its width for ``ROOT_KEEL[0]`` fillets and narrows again over the next
+    ``ROOT_KEEL[1]``: what is buried is a keel, not a slab that comes out of the back somewhere else.  (Measuring
+    the distance under each face's own position and iterating the whole profile, keel and all, was tried: where a
+    face dips under the skin the keel's taper takes the swell away, the face comes back out and the swell returns
+    -- a ragged root on every body.  The keel is by the sheet's middle.)"""
+    far = (ROOT_TINT[0] + ROOT_TINT[1] + 1.0) * rho
+    shape = grid.shape[:2]
+    d, ns = skin.distance(grid.reshape(-1, 3), within=far, normals=True)
+    d = d + bury
+    c = (grid_normals(grid).reshape(-1, 3) * ns).sum(axis=1)       # > 0: the top face leans away from the skin
+
+    def g(h):                                                       # the quarter circle: a lip's width at height h
+        x = np.clip(h / rho, 0.0, 1.0)
+        return rho * (1.0 - np.sqrt(np.clip(1.0 - (1.0 - x) ** 2, 0.0, 1.0)))
+
+    def lip(c):
+        near = np.isfinite(d)
+        w = np.zeros(len(d))
+        if not near.any():
+            return w
+        dn, cn = d[near], c[near]
+        away = cn >= 0.0
+        lo, hi = np.zeros(len(dn)), np.full(len(dn), rho)
+        for _ in range(26):                                         # leaning away: the one root
+            mid = 0.5 * (lo + hi)
+            more = g(dn + cn * mid) >= mid
+            lo, hi = np.where(more, mid, lo), np.where(more, hi, mid)
+        grow = np.zeros(len(dn))
+        for _ in range(60):                                         # leaning in: the smallest, from nothing up
+            grow = g(dn + cn * grow)
+        w[near] = np.where(away, lo, grow)
+        return w
+
+    keel = np.clip(1.0 + (d / rho + ROOT_KEEL[0]) / ROOT_KEEL[1], 0.0, 1.0)
+    keel[~np.isfinite(d)] = 0.0
+    flat, nrm = grid.reshape(-1, 3), grid_normals(grid).reshape(-1, 3)
+    half = 0.5 * np.asarray(thick, dtype=np.float64).reshape(-1)
+
+    def tuck(w, sign):
+        """A lip that still stands out of the skin where the sheet's middle is under it (the back is not a plane:
+        it falls away at a shoulder blade's edge, and the figure's skin is the cage's moulded and rounded) is
+        drawn in until it is ``ROOT_TUCK`` under it too."""
+        sel = np.nonzero(np.isfinite(d) & (d < bury) & (w > 1e-6))[0]
+        if not len(sel):
+            return w
+        out = skin.distance(flat[sel] + sign * nrm[sel] * (half[sel] + w[sel])[:, None]) > 0.0
+        sel = sel[out]                                              # (a lip that is under the skin stays as it is)
+        if not len(sel):
+            return w
+        steps = np.linspace(0.9, 0.0, 10)
+        pts = flat[sel][None] + sign * nrm[sel][None] * (half[sel][None] + steps[:, None] * w[sel][None])[:, :, None]
+        under = skin.distance(pts.reshape(-1, 3)).reshape(len(steps), len(sel)) <= -ROOT_TUCK * rho
+        keep = np.where(under.any(axis=0), steps[np.argmax(under, axis=0)], 0.0)
+        w = w.copy()
+        w[sel] = w[sel] * keep
+        return w
+
+    # a column of the sheet that never comes out of the skin (between the arm and the back, next to the shoulder)
+    # has nothing to grow out of: no fillet on it (lips a fillet wide, folded through one another inside the body)
+    out = np.where(np.isfinite(d), d - bury, np.inf).reshape(shape).max(axis=0)
+    shows = np.clip(out / (0.5 * rho), 0.0, 1.0)
+    shows = np.broadcast_to((shows * shows * (3.0 - 2.0 * shows))[None, :], shape).reshape(-1)
+    top = tuck(lip(c) * keel * shows, 1.0).reshape(shape)
+    bottom = tuck(lip(-c) * keel * shows, -1.0).reshape(shape)
+    if weight is not None:
+        top = top * np.asarray(weight, dtype=np.float64)[None, :]
+        bottom = bottom * np.asarray(weight, dtype=np.float64)[None, :]
+    u = np.clip((d / rho - ROOT_TINT[0]) / ROOT_TINT[1], 0.0, 1.0).reshape(shape)
+    return (top, bottom), 1.0 - u * u * (3.0 - 2.0 * u)
 
 
 def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
                     camber=CAMBER, scallop=None, root_chord=1.4,
                     billow=BILLOW, propatagium=True, bones=True, rows=22,
                     spike=0.10, bone_scale=1.0, root=None, spec=None, claw=None, spur=0.0,
-                    root_taper=None, sleeve=None):
+                    root_taper=None, sleeve=None, skin=None):
     """A patagium stretched over a knuckled forelimb, as a skeleton + pieces.
 
     The sheet is a *fan*: every grid line runs from the arm out to the free
@@ -1146,24 +1329,22 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
     t0 = np.where(kind == "dist", 0.04, 0.04 * (1.0 - sigma))
     t0[-1] = 0.0
 
+    # -- the root edge follows the back ------------------------------------
+    crowd = np.ones(nu)                       # how the rows crowd toward the edge on each column (1: evenly spaced)
+    size = float(getattr(skin, "size", 1.0))      # a child's back takes a child's fillet
+    bury = ROOT_BURY * sk.scale * size
+    rho = ROOT_FILLET * sk.scale * size
+    held = np.zeros(len(root_cols), bool)
+    B_plan = B.copy()                         # the edge as the plan has it (straight from the shoulder to the waist)
+    if skin is not None and len(root_cols):
+        held = _conform_root(B, I, root_cols, te_cols, skin, bury, 0.5 * rho, E, rho)
+        crowd[root_cols] = ROOT_ROWS
+        for k, c in enumerate(te_cols[::-1][:5]):               # ... fading out along the free edge
+            crowd[c] = 1.0 + (ROOT_ROWS - 1.0) * (1.0 - (k + 1) / 6.0)
+
     # -- the sheet -------------------------------------------------------
     n = rows
     tau = np.linspace(0.0, 1.0, n + 1)
-    tt = t0[None, :] + (1.0 - t0)[None, :] * tau[:, None]          # (n+1, nu)
-    grid = I[None, :, :] + tt[:, :, None] * (B - I)[None, :, :]
-
-    # camber: arch along each ray, strongest in the plagiopatagium where the
-    # rays are chordwise; billow: panels bulge between the fingers
-    ray = np.linalg.norm(B - I, axis=1)
-    # (the weight differs between the hand panels and the arm panel, but it must
-    # change gradually: a step at digit V left a 0.13-unit ledge down the finger,
-    # more than half the membrane's thickness)
-    w_cam = np.where(kind == "dist", HAND_CAMBER, 1.0)
-    pad = 4
-    ext = np.concatenate([np.full(pad, w_cam[0]), w_cam, np.full(pad, w_cam[-1])])
-    w_cam = np.convolve(ext, np.ones(2 * pad + 1) / (2 * pad + 1), mode="valid")
-    arch = np.sin(np.pi * np.clip(tt, 0, 1) ** CAMBER_PEAK)
-    grid[:, :, 1] -= camber * ray[None, :] * w_cam[None, :] * arch
     # sector gap lengths for the billow amplitude
     gaps = {}
     for si, (a, b, _, _, _) in enumerate(segments):
@@ -1176,36 +1357,74 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
                     if kind[c] in ("dist", "te") else 0.0
                     for c in range(nu)])
     prof = np.array([np.sin(np.pi * sloc[c]) for c in range(nu)])
-    grid[:, :, 1] -= (amp * prof)[None, :] * tt
-    # the whole wing arcs downward toward the tip
-    grid[:, :, 1] += droop * span * (np.clip(grid[:, :, 0], 0.0, None) / span) ** 2
-    # gull wing: the hand panel rises a few degrees off the arm, so the wrist
-    # is the low point of the wing (measured +5..+11 deg on flying foxes)
-    grid[:, :, 1] -= gull * np.clip(grid[:, :, 0] - float(W[0]), 0.0, None)
-    # washout: the outer wing is twisted leading-edge-down, so toward the tip the
-    # trailing edge stands a little higher than the digit-III leading edge it
-    # trails (the hand is not a rigid plane)
     lead = np.array([W] + [J_[j] for j in sk.chains["III"][1:]])
     span_out = max(float(lead[-1, 0] - W[0]), 1e-9)
-    along = np.clip((grid[:, :, 0] - float(W[0])) / span_out, 0.0, 1.0)
-    behind = np.clip(grid[:, :, 2] - np.interp(grid[:, :, 0], lead[:, 0], lead[:, 2]), 0.0, None)
-    grid[:, :, 1] -= np.tan(np.radians(WASHOUT)) * behind * along ** 1.5
+    # (the camber's weight differs between the hand panels and the arm panel, but it must
+    # change gradually: a step at digit V left a 0.13-unit ledge down the finger,
+    # more than half the membrane's thickness)
+    w_cam = np.where(kind == "dist", HAND_CAMBER, 1.0)
+    pad = 4
+    ext = np.concatenate([np.full(pad, w_cam[0]), w_cam, np.full(pad, w_cam[-1])])
+    w_cam = np.convolve(ext, np.ones(2 * pad + 1) / (2 * pad + 1), mode="valid")
+
+    def sheet(B, crowd):
+        """``(grid, tt)`` of the sheet whose outer edge is ``B``."""
+        tt = t0[None, :] + (1.0 - t0)[None, :] * (1.0 - (1.0 - tau[:, None]) ** crowd[None, :])   # (n+1, nu)
+        grid = I[None, :, :] + tt[:, :, None] * (B - I)[None, :, :]
+        # camber: arch along each ray, strongest in the plagiopatagium where the
+        # rays are chordwise; billow: panels bulge between the fingers
+        ray = np.linalg.norm(B - I, axis=1)
+        arch = np.sin(np.pi * np.clip(tt, 0, 1) ** CAMBER_PEAK)
+        grid[:, :, 1] -= camber * ray[None, :] * w_cam[None, :] * arch
+        grid[:, :, 1] -= (amp * prof)[None, :] * tt
+        # the whole wing arcs downward toward the tip
+        grid[:, :, 1] += droop * span * (np.clip(grid[:, :, 0], 0.0, None) / span) ** 2
+        # gull wing: the hand panel rises a few degrees off the arm, so the wrist
+        # is the low point of the wing (measured +5..+11 deg on flying foxes)
+        grid[:, :, 1] -= gull * np.clip(grid[:, :, 0] - float(W[0]), 0.0, None)
+        # washout: the outer wing is twisted leading-edge-down, so toward the tip the
+        # trailing edge stands a little higher than the digit-III leading edge it
+        # trails (the hand is not a rigid plane)
+        along = np.clip((grid[:, :, 0] - float(W[0])) / span_out, 0.0, 1.0)
+        behind = np.clip(grid[:, :, 2] - np.interp(grid[:, :, 0], lead[:, 0], lead[:, 2]), 0.0, None)
+        grid[:, :, 1] -= np.tan(np.radians(WASHOUT)) * behind * along ** 1.5
+        return grid, tt
+
+    grid, tt = sheet(B, crowd)
 
     thick = np.maximum(thickness * (1.0 - 0.25 * tt), thickness * 0.7)   # never below ~0.3 mm printed
+    share = swell = None
+    if skin is not None:
+        # the fillet runs out toward the corner where the free trailing edge leaves the body (over the root edge's
+        # first columns), and a free edge has none: at full width to the corner the sheet ended beside the hip
+        # in the cut face of a plank
+        # ... and toward the shoulder, where the edge is inside the body and the sheet between it and the arm
+        # runs along the skin: thickened there, one face came through the back as a sliver beside the arm
+        # (... and a column cannot carry a fillet wider than itself: next to the shoulder the sheet between the
+        # arm and its edge is half a unit long, and lips of a fillet's width to either side of it folded through
+        # one another there -- 4% of the sheet's area read as paper-thin)
+        fil = np.zeros(nu)
+        first_held = int(np.argmax(held)) if held.any() else len(root_cols) + 2
+        for k, c in enumerate(root_cols):
+            room = float(np.clip((np.linalg.norm(B[c] - I[c]) - rho) / (2.0 * rho), 0.0, 1.0))
+            u_ = min(k / ROOT_FADE, 1.0) * float(np.clip((first_held - k) / 2.0, 0.0, 1.0)) * room
+            fil[c] = u_ * u_ * (3.0 - 2.0 * u_)
+        swell, share = _root_fillet(grid, thick, skin, bury, rho, fil)
     # column range of each panel between two bone lines (the root line, last,
     # is body and never pleats)
     starts = [0]
     for (_, _, _, nseg, _) in segments:
         starts.append(starts[-1] + nseg)
     panels = [(starts[i], starts[i + 1]) for i in range(4)]
-    parts: list[Piece] = [Piece("membrane", _slab_from_grid(grid, thick), membrane=True,
-                                pleat={"shape": grid.shape[:2], "sectors": panels,
+    parts: list[Piece] = [Piece("membrane", _slab_from_grid(grid, thick, swell), membrane=True,
+                                pleat={"shape": grid.shape[:2], "sectors": panels, "swell": swell,
                                        # the long inboard panel hangs as a drape,
                                        # not a tent as deep as the fingers' panels
                                        "gains": [1.0, 1.0, 1.0, 0.8],
                                        "lobes": [1, 2, 2, 3],
                                        # the digit each panel's first column runs down
-                                       "fingers": ["II", "III", "IV", "V"]})]
+                                       "fingers": ["II", "III", "IV", "V"]},
+                                skin_share=None if share is None else np.tile(share.ravel(), 2))]
 
     # -- propatagium: skin fills the elbow notch in front of the arm -----
     # With the arm a Z (humerus aft, forearm forward) the elbow sits behind the
@@ -1224,12 +1443,25 @@ def membrane_pieces(span=13.0, thickness=0.22, sweep=0.0, droop=0.0, gull=0.16,
         pgrid[:, :, 1] += droop * span * (np.clip(pgrid[:, :, 0], 0, None) / span) ** 2
         pgrid[:, :, 1] -= gull * np.clip(pgrid[:, :, 0] - float(W[0]), 0.0, None)
         pthick = np.full(pgrid.shape[:2], thickness * 0.9)
-        parts.append(Piece("propatagium", _slab_from_grid(pgrid, pthick), membrane=True,
-                           chain=("elbow", "wrist")))
+        pshare = pswell = None
+        if skin is not None:
+            pswell, pshare = _root_fillet(pgrid, pthick, skin, bury, rho)
+        parts.append(Piece("propatagium", _slab_from_grid(pgrid, pthick, pswell), membrane=True,
+                           chain=("elbow", "wrist"),
+                           skin_share=None if pshare is None else np.tile(pshare.ravel(), 2)))
 
     # -- lift the skeleton onto the surface, then lay the bones on it ----
     flat_xz = grid[:, :, [0, 2]].reshape(-1, 2)
     flat_y = grid[:, :, 1].reshape(-1)
+    if skin is not None:
+        # the SKELETON AND THE BONES are the plan's, whatever the body: the joints are lifted onto the sheet as the
+        # plan has it and the bones laid on it (a root edge fitted to the back moved the elbow by up to 0.07 on a
+        # rolled wing -- and with it where an old document's arm leaves the back, its pose limits, the draft's
+        # wing against the final's -- and the arm by enough to make the tall man's trapezius yield to it at rest).
+        # What is built against the body is the sheet: its edge and the rows next to it, a hundredth of a unit
+        # from the plan's where the bones lie.
+        plan = sheet(B_plan, np.ones(nu))[0]
+        flat_xz, flat_y = plan[:, :, [0, 2]].reshape(-1, 2), plan[:, :, 1].reshape(-1)
     height_at = lambda q: _surface_height(flat_xz, flat_y, q)        # noqa: E731
     sk.lift_joints(height_at)
     # the thumb hangs ventrally: tilted about 30 degrees off the wing plane
@@ -1529,6 +1761,14 @@ ALULA_OFF_EDGE = 26.0                     # degrees the alula stands off the lea
 # shoulder is sunk 0.9 into the back), and stowed, the shoulder end of the arm is the second dome that
 # stands up beside the wrist.
 ROOT_BURIED = 0.13
+ROOT_PROUD = 0.02                         # x scale: a shoulder covert is built when its root is this far out of the body's cage
+# The shoulder's coverts (``_coverts.shoulder_scales``): where the arm is more than SHOULDER_SWELL fatter than the rod,
+# scales SHOULDER_SCALE long (at most 0.8 of the arm's radius: a longer vane is a chord through the arm), one ring
+# of them every SHOULDER_PITCH along the arm, round it from the leading edge to SHOULDER_ARC degrees (just over the top)
+SHOULDER_SWELL = 0.012
+SHOULDER_SCALE = 0.11
+SHOULDER_PITCH = 0.05
+SHOULDER_ARC = 100.0
 COVERT_JITTER = 0.09                      # +-9% on each covert's length (it was 3-4%: a stowed wing read as a lattice)
 FA_P = LONGEST_PRIMARY
 
@@ -1664,7 +1904,7 @@ def _along(points, fractions):
 
 def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
                      primaries=10, secondaries=14, tertials=7, scapulars=7,
-                     coverts=True, underwing=True, bones=True, root=None, spec=None, sleeve=None):
+                     coverts=True, underwing=True, bones=True, root=None, spec=None, sleeve=None, skin=None):
     """A bird wing as skeleton + pieces: every flight feather (and the scapulars
     and alula) has its own root and tip joint, so the fan opens and closes and
     the whole plumage folds together; each covert is bound to the feather it
@@ -1711,7 +1951,7 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
         if fe["row"] == "alula":
             alula_roots.append(root_pt.copy())
     if coverts:
-        parts += _coverts(sk, layout, bone_of, thickness, height, step, underwing)
+        parts += _coverts(sk, layout, bone_of, thickness, height, step, underwing, sleeve=sleeve, skin=skin)
     if bones:
         parts += _feather_bones(sk, height, s, sleeve)
         parts.append(_alula_mount(sk, alula_roots, height, s))
@@ -1843,7 +2083,7 @@ def _covert_blade(length, wol, thickness, ventral=False, n=10, m=6, tip_floor=0.
                   ridge_dir=1.0 if ventral else -1.0, butt=0.14)
 
 
-def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> list[Piece]:
+def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleeve=None, skin=None) -> list[Piece]:
     """The shingles over the flight feathers' bases. Each covert is welded to the
     bone of the feather it lies beside, so it fans with it; the leading-edge
     rows ride on the nearest secondary or tertial.
@@ -1857,6 +2097,11 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
     straddles two flight feathers, so the rows brick rather than stack into
     columns -- and ends in a rounded tip. ``underwing`` adds the ventral covert
     field, which is what an angel seen from the front shows.
+
+    ``sleeve`` is the muscular upper arm the wing has on a body (``_feather_bones``): the rows on the arm are
+    seated on ITS surface, and where it is fatter than one row can wrap, more rows go round it. ``skin`` (an
+    ``appendages.SkinProbe``) is where the body is: with it the nose rows run right to the back and only what
+    would lie wholly inside the body is left out; without it the first ``ROOT_BURIED`` of the arm has none.
     """
     out: list[Piece] = []
     s = sk.scale
@@ -1925,13 +2170,29 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
     secs = [f["length"] for f in layout if f["row"] == "secondary"]
     ref = float(np.mean(secs)) if secs else 0.66 * FA_P * s
 
+    l_h = float(np.linalg.norm(J["elbow"] - J["shoulder"]))
+    l_arm = l_h + float(np.linalg.norm(J["wrist"] - J["elbow"]))
+
+    def swell(f):
+        """How much fatter than the bone-thin rod the arm is at the fraction ``f`` of its length (wing units):
+        the sleeve's swell over the humerus, 0 past the elbow (and without a sleeve)."""
+        if sleeve is None:
+            return 0.0
+        t_h = f * l_arm / max(l_h, 1e-9)
+        return float(sleeve.extra(np.array([t_h]), l_h)[0]) if t_h <= 1.0 else 0.0
+
     def arm_row(tag, r, ratio, n, tier, ahead, wol, roll, ventral, stagger, nose=False,
                 pitch=0.0, curl=0.04):
         fr = np.linspace(0.02, 0.98, n) + (stagger / n)
         pts = _along(arm, fr)
         for j, p in enumerate(pts):
-            if nose and fr[j] < ROOT_BURIED:
-                continue            # the end of the rope at the shoulder is sunk in the back: never seen
+            fat = swell(fr[j])
+            if nose and (fr[j] < ROOT_BURIED or fat > SHOULDER_SWELL * s):
+                # the end of the rope at the shoulder is sunk in the back: never seen.  And where the arm is the
+                # muscular sleeve the nose row is not built at all: rooted for the rod it lay inside the sleeve,
+                # and seated on the sleeve a vane this long is a chord through it with only its shaft showing
+                # (a rib).  The shoulder's own small coverts cover the sleeve (``shoulder_scales``)
+                continue
             root = p + np.array([0.0, 0.0, -ahead * s])
             hf = min(host, key=lambda f: float(np.linalg.norm(f["root"] - root)))
             if nose:
@@ -1939,14 +2200,14 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
                 # axis, and wraps over (or under) it
                 root[1] = height(root[0]) - NOSE_LIFT * s
                 root[2] = p[2] - (NOSE_RADIUS[0] + (NOSE_RADIUS[1] - NOSE_RADIUS[0])
-                                  * min(1.0, j / max(n - 1, 1))) * s
+                                  * min(1.0, j / max(n - 1, 1))) * s - fat
             elif ventral:
-                root[1] = height(root[0]) + tier * 0.6 * thickness
+                root[1] = height(root[0]) + tier * 0.6 * thickness + fat
             else:
                 # above the median coverts of the feather it lies in front of, each
-                # row a little higher than the one behind it
+                # row a little higher than the one behind it (and on the sleeve, on top of it)
                 root[1] = height(root[0]) - (hf["layer"] + 2 * 0.7 * thickness / step
-                                             + tier * 0.35 * thickness / step) * step
+                                             + tier * 0.35 * thickness / step) * step - fat
             taper = 1.0
             if nose:                # the rope dwindles into the shoulder instead of ending in a cap
                 u = float(np.clip((fr[j] - ROOT_BURIED) / 0.25, 0.0, 1.0))
@@ -1956,15 +2217,63 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True) -> li
             out.append(Piece(f"{tag}{j:02d}", _place_feather(blade, root, 90.0, roll, pitch),
                              bone=bone_of[(hf["row"], hf["i"])]))
 
+    def shoulder_scales(ventral):
+        """The small coverts of the shoulder: where the arm is the muscular sleeve (from where it leaves the back
+        to where its swell fades into the rod) rows of short scales lie round it from its leading edge over the
+        top (under it: ``ventral``), each tangent to the sleeve where it is rooted and lapping the row behind it,
+        the rows staggered.  A bird's wing meets its body in a rounded mound of overlapping coverts (wing/A11) and
+        a sculpted angel's in rows of ever smaller feathers (wing/H22); this arm left the back as bare skin for
+        half a unit, with the nose row inside it.  ``skin`` says where the back is: a scale rooted inside the
+        body is not built (its end came out of the skin as a slat)."""
+        if sleeve is None:
+            return
+        sign = 1.0 if ventral else -1.0                       # wing-local Y is down: the upper face is -Y
+        f_end = l_h / l_arm                                   # the elbow
+        n_st = max(int(np.ceil(l_h / (SHOULDER_PITCH * s))), 2)
+        todo = []
+        for j, f in enumerate(np.linspace(0.0, f_end, n_st, endpoint=False)):
+            fat = swell(f)
+            if fat <= SHOULDER_SWELL * s:
+                continue
+            r_arm = (NOSE_RADIUS[0] + 0.5 * (f / f_end) * (NOSE_RADIUS[1] - NOSE_RADIUS[0])) * s + fat
+            length = min(SHOULDER_SCALE * s, 0.8 * r_arm)
+            dphi = np.degrees(0.55 * length / r_arm)
+            k = 0
+            while k * dphi <= SHOULDER_ARC:
+                phi = k * dphi
+                g = f + (0.5 * (k % 2)) * f_end / n_st        # every other row half a pitch along the arm
+                p = _along(arm, [min(g, f_end)])[0]
+                at = np.array([p[0], height(p[0]) - NOSE_LIFT * s + sign * r_arm * np.sin(np.radians(phi)),
+                               p[2] - r_arm * np.cos(np.radians(phi))])
+                todo.append((j, k, phi, length, at))
+                k += 1
+        if not todo:
+            return
+        proud = np.full(len(todo), np.inf) if skin is None else skin.distance(np.array([t[4] for t in todo]))
+        for (j, k, phi, length, at), d in zip(todo, proud):
+            if d < ROOT_PROUD * s:
+                continue
+            hf = min(host, key=lambda fe: float(np.linalg.norm(fe["root"] - at)))
+            q = 11 * j + 5 * (k + 1) + (40 if ventral else 0)
+            blade = _covert_blade(length * _jit(q, COVERT_JITTER), 1.0, thickness, ventral, n=8, m=4,
+                                  lead_frac=0.45, curl=0.0)
+            tag = "under_shoulder" if ventral else "shoulder"
+            out.append(Piece(f"{tag}{k}_{j:02d}",
+                             _place_feather(blade, at, 90.0, 3.0 * float(np.sin(2.9 * q)),
+                                            sign * max(90.0 - phi, 0.0) - sign * 4.0),
+                             bone=bone_of[(hf["row"], hf["i"])]))
+
     for r, ratio in enumerate(LESSER_RATIO):
         arm_row(f"lesser{r}_", r, ratio, 22 + 4 * r, 1.0 + r, -0.02 * (1 - r), 0.75, -12.0,
                 False, 0.5 * (r % 2))
     arm_row("marginal0_", 0, MARGINAL_RATIO, 36, 3.0, 0.0, 1.0, -8.0, False, 0.0,
             nose=True, pitch=-58.0, curl=0.30)
+    shoulder_scales(False)
     if underwing:
         arm_row("under_lesser0_", 0, 0.15, 22, 1.2, 0.0, 0.75, 12.0, True, 0.0)
         arm_row("under_marginal0_", 0, 0.12, 28, 1.0, 0.0, 0.95, 8.0, True, 0.5,
                 nose=True, pitch=52.0, curl=-0.25)
+        shoulder_scales(True)
     return out
 
 

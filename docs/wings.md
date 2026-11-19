@@ -136,6 +136,12 @@ humerus wide centred 0.36 from the shoulder, merged with the spindle by a soft m
 blade like the muscle mass of an upper arm. It is a fairing in the middle of the bone, not a lump: never more than 1.5× the rod, and back
 to the rod by mid-humerus.
 
+**Where the sheet meets the body** (round 8; `docs/anatomy_wing.md`, "Round 8"): on a body the inner edge is no longer the
+plan's straight line from the shoulder to the waist. `Appendage.place_rigs` hands the builder the body's skin in the wing's frame
+(`appendages.SkinProbe`): the edge follows the back's profile under the skin (`_conform_root`), each face of the sheet leaves the
+back in a small fillet sized by its own height over the skin (`_root_fillet`), and the sheet carries the body's skin colour where
+it grows out of it (`Piece.skin_share`). The joints and the bones are the plan's, and a wing built alone is unchanged.
+
 ## The feathered wing (bird / angel)
 
 Primaries root along the hand, secondaries along the ulna, tertials and scapulars on the
@@ -243,6 +249,10 @@ on the placed wing), so the spread wing's inner trailing edge rises into the bac
 scapula instead of the two wings' edges nearly meeting at buttock height (that edge sat at body
 height 1.9 and now sits at 2.4; raising the root alone moves it by only 0.2-0.3, because the wing plane is
 fixed mostly by the span axis).
+
+**Where the arm leaves the body** (round 8): on a body with a muscular sleeve the nose rows are not built where the sleeve is
+fat; rings of small coverts (`shoulder_scales`) lie on it there, above and below, up to the skin (`docs/anatomy_wing.md`,
+"Round 8").
 
 ## The rig
 

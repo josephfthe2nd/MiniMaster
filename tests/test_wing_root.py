@@ -210,17 +210,32 @@ def test_the_sleeve_adds_nothing_at_the_elbow_and_tapers_from_the_skin_to_the_el
     assert sl.sides >= 28
 
 
-def test_a_sleeve_changes_only_the_arm_piece_of_the_wing():
-    for style, make in (("membrane", W.membrane_rig), ("feathered", W.feathered_rig)):
-        bare = make()
-        thick = make(sleeve=W.Sleeve(gain=1.0))
-        names = [p.name for p in bare.pieces]
-        assert names == [p.name for p in thick.pieces]
-        for a, b in zip(bare.pieces, thick.pieces):
-            same = np.array_equal(a.mesh.vertices, b.mesh.vertices)
-            assert same == (a.name != "arm"), (style, a.name)
-        # a rig built without a sleeve is what it always was: it IS the default
-        assert np.array_equal(bare.rest_mesh.vertices, make(sleeve=None).rest_mesh.vertices)
+def test_a_sleeve_changes_only_the_arm_and_the_coverts_that_sit_on_it():
+    """The membrane wing: the arm piece and nothing else.  The feathered wing: the arm, the lesser rows (seated on
+    the sleeve's surface, not the rod's) and the nose rows, which are not built where the arm is the sleeve (rooted
+    for the rod they lay inside it and the arm left the back bare); the shoulder's own small coverts cover it
+    instead (round 8).  Every flight feather and every other covert is exactly what it was."""
+    bare, thick = W.membrane_rig(), W.membrane_rig(sleeve=W.Sleeve(gain=1.0))
+    assert [p.name for p in bare.pieces] == [p.name for p in thick.pieces]
+    for a, b in zip(bare.pieces, thick.pieces):
+        assert np.array_equal(a.mesh.vertices, b.mesh.vertices) == (a.name != "arm"), a.name
+    bare, thick = W.feathered_rig(), W.feathered_rig(sleeve=W.Sleeve(gain=1.0))
+    a = {p.name: p for p in bare.pieces}
+    b = {p.name: p for p in thick.pieces}
+    rows_on_arm = ("lesser", "under_lesser", "marginal", "under_marginal", "shoulder", "under_shoulder")
+    for name, piece in a.items():
+        if name == "arm" or name.startswith(rows_on_arm):
+            continue
+        assert name in b and np.array_equal(piece.mesh.vertices, b[name].mesh.vertices), name
+    assert not np.array_equal(a["arm"].mesh.vertices, b["arm"].mesh.vertices)
+    new = [n for n in b if n not in a]
+    assert len(new) >= 40 and all(n.startswith(("shoulder", "under_shoulder")) for n in new), new[:5]
+    gone = [n for n in a if n not in b]
+    assert gone and all(n.startswith(("marginal", "under_marginal")) for n in gone), gone[:5]
+    # a rig built without a sleeve is what it always was: it IS the default
+    for make in (W.membrane_rig, W.feathered_rig):
+        assert np.array_equal(make().rest_mesh.vertices, make(sleeve=None).rest_mesh.vertices)
+    assert not any(p.name.startswith(("shoulder", "under_shoulder")) for p in bare.pieces)
 
 
 def test_the_sleeve_is_thickest_where_the_registry_wings_arm_crosses_the_skin():
@@ -1526,7 +1541,22 @@ def test_the_arm_runs_from_the_skin_colour_into_the_wing_s(world):
     share = np.linalg.norm(cols - wing, axis=1) / np.linalg.norm(skin - wing)
     assert (np.diff(share[:len(p.model.profile.t)]) <= 1e-9).all()               # from the root out, never back
     assert ((share > 0.01) & (share < 0.99)).any()                               # a blend, not a step
-    assert np.allclose(mesh.base_colors[:a], wing) and np.allclose(mesh.base_colors[b:], wing)
+    # the rest of the wing is the wing's colour -- but for a sheet built against the body (round 8): where it grows
+    # out of the back it is the body's own skin, and turns into the wing's a little way out
+    sheets = 0
+    for piece in p.rig.rig.pieces:
+        if piece.name == "arm":
+            continue
+        lo, hi = p.rig.rig.ranges[piece.name]
+        got = mesh.base_colors[lo:hi]
+        if piece.skin_share is None:
+            assert np.allclose(got, wing), piece.name
+            continue
+        w = np.asarray(piece.skin_share)[:, None]
+        assert np.allclose(got, wing + w * (skin - wing)), piece.name
+        sheets += 1
+    w = np.asarray(next(q for q in p.rig.rig.pieces if q.name == "membrane").skin_share)
+    assert sheets >= 1 and w.max() > 0.95 and (w == 0.0).mean() > 0.6 and ((w > 0.05) & (w < 0.95)).any()
     rest = p.model.skin_share({})
     folded = p.model.skin_share({"preset": "folded"})
     assert folded.sum() > rest.sum()
@@ -1536,7 +1566,11 @@ def test_the_arm_runs_from_the_skin_colour_into_the_wing_s(world):
     lit = po._shell_colors(po.Shell(moved, p.material), cam, np.eye(4), sh.LightRig(), 1.0, False, ao=False)
     plain = po._shell_colors(po.Shell(Mesh(moved.vertices, moved.faces), p.material), cam, np.eye(4), sh.LightRig(),
                              1.0, False, ao=False)
-    assert not np.allclose(lit[a:b], plain[a:b]) and np.allclose(lit[:a], plain[:a])
+    assert not np.allclose(lit[a:b], plain[a:b])
+    for piece in p.rig.rig.pieces:                                  # ... and only where the mesh carries one
+        lo, hi = p.rig.rig.ranges[piece.name]
+        if piece.name != "arm" and piece.skin_share is None:
+            assert np.allclose(lit[lo:hi], plain[lo:hi]), piece.name
     # ... and only for the wing's own material: a one-colour view of the geometry stays one colour
     mono = po._shell_colors(po.Shell(moved, sh.SKIN), cam, np.eye(4), sh.LightRig(), 1.0, False, ao=False)
     mono0 = po._shell_colors(po.Shell(Mesh(moved.vertices, moved.faces), sh.SKIN), cam, np.eye(4), sh.LightRig(), 1.0,
