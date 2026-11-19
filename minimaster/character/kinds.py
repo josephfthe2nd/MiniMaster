@@ -220,6 +220,13 @@ TAIL_WELD_MAX_R = 1.0                       # ... none on a tail BUILT thicker t
                                             # raises the range again (a 1.2 tail's weld folded on the cheeks)
 # ... of a horn: a tight cuff (the reach is at least HORN_WELD_MIN units: a 0.14-radius horn's 0.13 is one level-1 edge)
 HORN_WELD = dict(reach=1.0, region=1.6)
+# The sheath's own base is skin-coloured up to HORN_TINT_HOLD reaches over the skin (along its axis: a leaning horn's
+# last ring of skin is that much further up it) and turns keratin over HORN_TINT_BLEND root radii.  The welded skin
+# arrives on the sheath nearly flat, and where two separate, faceted surfaces of two colours meet at a few degrees the
+# line between them is a sawtooth (round 7: a ragged white fringe round every horn in the app picture, at both
+# levels; the bare junction's line was clean).  With the base in the skin's colour the line that shows is a ring of
+# the sheath's own mesh: the skin cuff a horn grows out of (horn/A06), drawn on the horn.
+HORN_TINT_HOLD, HORN_TINT_BLEND = 1.5, 0.35
 # ... of a wing's arm: wide where the arm comes from, a crease on the side it leans over
 WING_WELD = dict(open=1.0, ventral=0.7)
 # ... of a girdle limb, per girdle: the lower pair's opens upward, the fan pair's and the hip's all round
@@ -1464,7 +1471,10 @@ class HornKind(_LoftKind):
                          HR.SkinField(ctx.cage, m, reach=reach, fallback=fallback))
             hpl = HornPlacement(model, site, plan, keeps, ctx.cage, head, m, field, raw_field, jspec, fit=fit,
                                 temporalis=temporal)
-            mesh = hpl.skin().transform(m)
+            local = hpl.skin()
+            mesh = local.transform(m)
+            if not hp.fillet_foot and self.welds(values):
+                mesh = self._base_tint(local, mesh, field, model, site, m, jspec, values)
             if hp.fillet_foot and not draft:
                 # shaded as the skin it comes out of where it meets it (HR.ShadedMesh: the renderer draws each shell
                 # with its own normals, and the foot's dive under the skin at a few degrees drew a ragged ring)
@@ -1481,6 +1491,33 @@ class HornKind(_LoftKind):
                               static=mesh, repose=repose,
                               root_depth=float(model.p.sink * site.scale)))
         return out
+
+    def _base_tint(self, local, mesh, field, model, site, m, jspec, values):
+        """``mesh`` (the placed sheath; ``local``: the same in the horn's frame) with its base in the figure's skin
+        colour up to where the welded skin ends on it and a little more (``HORN_TINT_*``), as a mesh that carries
+        its albedo (:class:`wingroot.TintedMesh`: a renderer uses it, a print ignores it)."""
+        from . import weld as W
+        from .wingroot import TintedMesh
+        radius = float(site.radius)
+        if jspec is not None and getattr(jspec, "tube", False):
+            try:
+                radius = float(np.max(np.asarray(HR.collar_axis(model, m, jspec)[1], dtype=np.float64)[:3]))
+            except (ValueError, IndexError, TypeError):
+                pass
+        reach = W.WeldProfile(strength=float(values.get("collar", 1.0)), **HORN_WELD).k(radius)
+        if reach <= 0.0:
+            return mesh
+        v = np.asarray(local.vertices, dtype=np.float64)
+        scale = float(site.scale)
+        height = (v[:, 2] - field.height(v[:, :2])) * scale          # over the skin, along the horn's axis
+        u = np.clip((height - (HORN_TINT_HOLD * reach + 0.02)) / max(HORN_TINT_BLEND * radius, 0.03), 0.0, 1.0)
+        w = 1.0 - u * u * (3.0 - 2.0 * u)
+        # (the root only: a ram's curl comes back down past its own base, far from it)
+        w = np.where(np.linalg.norm(v[:, :2], axis=1) * scale < 3.0 * radius, w, 0.0)
+        mat = self.material(values)
+        horn = np.asarray(mat.linear_color(), dtype=np.float64)
+        skin = np.asarray(material_named("skin").linear_color(), dtype=np.float64)
+        return TintedMesh(mesh.vertices, mesh.faces, w[:, None] * skin[None] + (1.0 - w[:, None]) * horn[None], mat)
 
     def junction(self, placed, controls=None):
         """The skin around the root: the tube of the sheath's first part with the tent as a mound

@@ -74,6 +74,7 @@ WALL_MARGIN = 0.8     # units of wall past the clip that are searched (true norm
 CAP1_ON = 0.7         # the cap's first ring: this many edges on past the last ring, the way the skin arrives ...
 CAP1_BACK = 0.1       # ... and this share of the way back to where it was, under the wall (distinct points)
 CAP1_FULL = 1.5       # the cap's first ring is moved in full where the reach is at least this many edges
+TOP_LIFT = 0.1        # the last ring stands this many edges off the wall (see _solve)
 MIN_AREA = 1e-10      # a welded triangle smaller than this is degenerate (Mesh.degenerate_faces: 1e-12): refused
 LAND_MAX = 1.5        # a fillet lands at most this many times its nominal distance (``region`` reaches) out
 GUARD_SHRINK = 0.45    # the reach where a fold was found is cut by this share per guard round
@@ -93,7 +94,8 @@ def _trace(stage, ids, values):
 class WeldProfile:
     """How the skin is welded onto one root (lengths in the root's radii unless named in units).
 
-    ``reach``: the fillet's height up the wall, ``k``, in root radii (at most ``reach_max`` units);
+    ``reach``: the fillet's height up the wall, ``k``, in root radii (at most ``reach_max`` units and at least
+    ``reach_min``: a root thinner than the mesh can draw a fillet on still gets a cuff of a few edges);
     ``region``: it lands on the skin this many ``k`` from the wall; ``strength``: the record's ``collar``
     (0..2) scales ``k``; ``up`` / ``open`` / ``ventral``: the kind's own shape, the factor of ``k`` on the side
     ``up`` points to (the back above a tail, the spine beside a wing) and on the opposite side (the crease under
@@ -107,6 +109,7 @@ class WeldProfile:
 
     reach: float = 0.9
     reach_max: float = 0.75
+    reach_min: float = 0.0
     region: float = 2.0
     strength: float = 1.0
     up: tuple | None = None
@@ -141,7 +144,7 @@ class WeldProfile:
 
     def k(self, radius: float) -> float:
         """The fillet's reach ``k`` (units) on a root of ``radius``."""
-        return min(self.reach * float(radius), self.reach_max) * self.strength
+        return max(min(self.reach * float(radius), self.reach_max), self.reach_min) * self.strength
 
     def with_(self, **changes) -> "WeldProfile":
         d = asdict(self)
@@ -908,9 +911,14 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
         dd = ((L - P[mask]) * c).sum(axis=1)
         P[mask] += (factor * np.where(cl > 0.2, dd, 0.0))[:, None] * c
 
+    # (the last ring stands ``TOP_LIFT`` edges off the wall, not exactly on it: the skin arrives nearly flat, and a
+    # faceted wall bulges between the ring's vertices by e^2 / 8R and came through the last strip in a row of
+    # teeth -- a sawtooth line wherever the root is another colour than the skin.  The strip from the ring to the
+    # cap's first ring goes into the wall steeply: that is the line that shows, and it is clean.)
+    lift = TOP_LIFT * edge
     # -- the last ring ON the wall at height k; where it cannot climb that high its reach is what it reached, and so
     # is the reach of the skin next to it (blending back to its own over the fillet's width)
-    reached = climb(top, kv[top], 0.0, start=P0[top] - b0[top][:, None] * nb_i[top])
+    reached = climb(top, kv[top], -lift, start=P0[top] - b0[top][:, None] * nb_i[top])
     _trace("top_asked", region[top], kv[top])
     _trace("top_reached", region[top], reached)
     kt_all = np.zeros(len(region))
@@ -924,7 +932,7 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
         nbm = np.where(ring, kt_all[lsafe], 0.0).sum(axis=1) / rc
         kt_all = np.where(top & (ring.sum(axis=1) > 0), np.minimum(kt_all, 0.5 * kt_all + 0.5 * nbm), kt_all)
     if np.any(kt_all[top] < kv[top] - 1e-6):                   # lowered: climb to the new height
-        climb(top, kt_all[top], 0.0, rounds=3)
+        climb(top, kt_all[top], -lift, rounds=3)
     kt = kt_all[top]
     _trace("top_ring", region[top], kt)
     ti = np.nonzero(top)[0]
@@ -983,7 +991,7 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
         project(sleeve, PROJECT_ROUNDS)
         for _ in range(pr.relax + HARMONIC_RELAX):
             along_ring(top, among=top)
-            climb(top, kv[top], 0.0, rounds=2)
+            climb(top, kv[top], -lift, rounds=2)
             relax_tangent(sleeve)
             project(sleeve, 1)
         if pr.grade != 1.0 and HARMONIC_GRADE:
@@ -1004,7 +1012,7 @@ def _solve(V, F, topo, near, keep, b0n, nb0n, na0n, gan, gbn, kvn, skin, wp, pr,
         restore(sleeve, RESTORE_ROUNDS)
         for _ in range(pr.relax):
             along_ring(top, among=top)
-            climb(top, kv[top], 0.0, rounds=2)
+            climb(top, kv[top], -lift, rounds=2)
             along_ring(sleeve)
             if RESTORE_ROUNDS:
                 restore(sleeve, 1)
@@ -1303,9 +1311,12 @@ def arrival_report(V, F, wall, centre, radius, *, V0=None, tol: float = 2e-3, re
     """How the skin ``V`` (triangles ``F``) meets the root ``wall`` around ``centre``, from the geometry alone (it
     reads the bare junction and a welded skin alike).
 
-    * ``angles`` / ``p50`` / ``p90`` / ``max``: degrees between the normal of every triangle that reaches the wall
-      from outside (a corner on or under the wall, ``tol``, and a corner outside it) and the wall's normal where it
-      reaches it: 0 = the skin arrives tangentially, 90 = it runs into the wall (a pipe in a plate);
+    * ``angles`` / ``p50`` / ``p90`` / ``max``: degrees between the normal of every triangle of the skin's first
+      strip OUTSIDE the wall (a corner on the skin's last ring outside it -- the vertices next to the ones the wall
+      covers in the original skin ``V0`` -- and no corner under it) and the wall's normal beside it: 0 = the skin
+      arrives tangentially, 90 = it runs into the wall (a pipe in a plate).  (Until round 7 the triangles that
+      CROSS the wall were measured; the welded skin's last ring now stands a hair off the wall and the strip that
+      crosses it goes in steeply, on purpose: what is seen arriving is the strip outside.);
       ``open_*`` / ``crease_*``: the same split by the side: with ``up`` (a kind's open side), the half of the
       ring ``up`` points to and the other half; without, the crease where the wall faces the skin (the ORIGINAL
       skin's normal there, ``V0``, against the wall's, below -0.2);
@@ -1325,12 +1336,23 @@ def arrival_report(V, F, wall, centre, radius, *, V0=None, tol: float = 2e-3, re
     s = np.full(len(V), np.inf)
     s[ids] = sd
     f = F[fi]
-    cont = f[(s[f] <= tol).any(axis=1) & (s[f] > tol).any(axis=1)]
+    # the plug (what the wall covers in the ORIGINAL skin) and the skin's last ring outside it
+    if V0 is not None:
+        _, _, sd0, _ = wp.closest(np.asarray(V0, dtype=np.float64)[ids])
+        s_ref = np.full(len(V), np.inf)
+        s_ref[ids] = sd0
+    else:
+        s_ref = s
+    plug = s_ref <= tol
+    mixed = f[plug[f].any(axis=1) & ~plug[f].all(axis=1)]
+    ring = np.zeros(len(V), bool)
+    ring[mixed[~plug[mixed]]] = True
+    cont = f[ring[f].any(axis=1) & ~plug[f].any(axis=1) & ~ring[f].all(axis=1)]
     T = V[cont]
     cr = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     area = 0.5 * np.linalg.norm(cr, axis=1)
     fn = CO._unit(cr)
-    w = (s[cont] <= tol).astype(np.float64)
+    w = ring[cont].astype(np.float64)
     w /= np.maximum(w.sum(axis=1, keepdims=True), 1.0)
     pt = (T * w[:, :, None]).sum(axis=1)
     if len(pt):

@@ -114,11 +114,13 @@ def test_a_tube_on_a_sphere_is_welded_tangentially_into_one_closed_skin(sphere):
     before = W.arrival_report(V, F, wall, centre, 0.6, V0=V)
     after = W.arrival_report(out, F, wall, centre, 0.6, V0=V)
     assert before["p50"] > 70.0
-    assert after["p50"] < 15.0 and after["p90"] < 25.0, after          # measured 11.4 / 18.7 (edge 0.15)
+    assert after["p50"] < 15.0 and after["p90"] < 30.0, after          # measured 11.1 / 25.8 (edge 0.15; the first
+    #                                                                       strip outside the wall, round 7's measure)
     assert after["crossings"] == 0 and after["plug_outside"] == 0
     wp = W.Surface(wall.vertices, wall.faces, centre, 4.0)
     _, _, b_top, _ = wp.closest(out[d["ids"]["top"]])
-    assert np.abs(b_top).max() < 2e-3                                        # the contact polyline is on the wall
+    lift = W.TOP_LIFT * d["edge"]                                            # the last ring: a hair off the wall
+    assert 0.5 * lift < b_top.min() and b_top.max() < 1.5 * lift, (b_top.min(), b_top.max(), lift)
     _, _, b_cap, _ = wp.closest(out[d["ids"]["cap"]])
     assert b_cap.max() < 0.0                                                 # the plug is inside the tube
     _, _, b_sl, _ = wp.closest(out[d["ids"]["sleeve"]])
@@ -309,7 +311,8 @@ def test_the_plug_is_inside_the_root_and_the_last_ring_on_it(world):
     wp = W.Surface(t.wall.vertices, t.wall.faces, t.centre, 5.0)
     _, _, b_top, _ = wp.closest(V1[d["ids"]["top"]])
     _, _, b_cap, _ = wp.closest(V1[d["ids"]["cap"]])
-    assert np.abs(b_top).max() < 3e-3 and b_cap.max() < 0.0
+    lift = W.TOP_LIFT * d["edge"]                                         # the last ring: a hair off the wall, outside
+    assert 0.5 * lift < b_top.min() and b_top.max() < 1.5 * lift and b_cap.max() < 0.0
     moved = np.nonzero(np.any(V1 != V0, axis=1))[0]
     assert np.isin(moved, d["ids"]["region"]).all()                       # nothing outside the region moves
 
@@ -695,3 +698,58 @@ def test_a_cut_to_the_reach_fades_at_a_bounded_slope_and_never_crosses_the_wall(
     among = np.ones(len(ids), bool)
     among[seed] = False
     assert np.all(W._envelope_on(topo, V, ids, x, 0.5, among=among)[among] == 1.0)
+
+
+# --------------------------------------------------------------------------
+# round 7: a clean line where the welded skin meets a root of another colour
+
+
+def test_the_wall_does_not_come_through_the_skin_s_last_strip(sphere):
+    """The skin arrives nearly flat, and a faceted wall bulges between the last ring's vertices: with the ring ON the
+    wall (``TOP_LIFT = 0``) the wall came through the last strip in a row of teeth, a sawtooth line wherever the root
+    is another colour than the skin.  A hair off the wall, every point of the ring's own edges and of the strip
+    behind it is outside the wall."""
+    V, F = sphere
+    d: dict = {}
+    out, wall, centre = _weld_tube(sphere, diag=d)
+    top = np.zeros(len(V), bool)
+    top[d["ids"]["top"]] = True
+    cap = np.zeros(len(V), bool)
+    cap[d["ids"]["cap"]] = True
+    strip = F[top[F].any(axis=1) & ~cap[F].any(axis=1)]
+    T = out[strip]
+    mids = np.concatenate([(T[:, i] + T[:, (i + 1) % 3]) / 2.0 for i in range(3)] + [T.mean(axis=1)])
+    wp = W.Surface(wall.vertices, wall.faces, centre, 4.0)
+    _, _, b, _ = wp.closest(mids)
+    assert len(strip) > 40 and b.min() > 0.0, b.min()                         # measured +0.004 (ON the wall: -0.004)
+
+
+@assets
+def test_a_horn_s_base_is_drawn_in_the_skin_s_colour_past_the_welded_skin(world):
+    """The sheath carries its own albedo: the figure's skin up to where the welded skin ends on it and a little
+    more, keratin above (``kinds.HORN_TINT_*``), so the line that shows is a ring of the sheath's own mesh.  A
+    one-colour view (another material) and a print ignore it; ``collar=0`` (no weld) and the skin-covered
+    ossicone have none."""
+    c, placed, V0, F, targets, V1, diags = _figure(world, "horn:shape=ram")
+    skin = np.asarray(K.material_named("skin").linear_color())
+    for p, t, d in zip(placed, targets, diags):
+        mesh = p.mesh()
+        cols = mesh.colors_for(p.material)
+        assert cols is not None and cols.shape == (len(mesh.vertices), 3)
+        assert mesh.colors_for(K.material_named("skin")) is None
+        is_skin = np.linalg.norm(cols - skin, axis=1) < 1e-9
+        is_horn = np.linalg.norm(cols - np.asarray(p.material.linear_color()), axis=1) < 1e-9
+        assert is_skin.sum() > 50 and is_horn.sum() > 2 * is_skin.sum()        # the base only (measured 612 of 3746)
+        # every vertex of the sheath beside the welded skin's last ring is skin-coloured
+        ring = V1[d["ids"]["top"]]
+        near = np.linalg.norm(np.asarray(mesh.vertices)[:, None, :] - ring[None, :, :], axis=2).min(axis=1) < 0.05
+        assert near.sum() > 20 and is_skin[near].all()
+    base, lib, cat = world
+    for text in ("horn:collar=0", "horn:shape=ossicone"):
+        ch = Character()
+        ch.appendages.append(K.add_from_text(text, ch.appendages, base=base, lib=lib))
+        verts = lib.apply(base.verts, ch.effective_target_weights(cat))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pl = ch.instantiate_appendages(base, verts, lib)
+        assert getattr(pl[0].mesh(), "colors_for", None) is None, text
