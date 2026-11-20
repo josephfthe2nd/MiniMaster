@@ -810,7 +810,7 @@ def wing_arm_axis(style: str, shape: dict) -> np.ndarray:
     feathers' coverts, so a lighter rig gives it)."""
     light = {k: v for k, v in shape.items() if k not in ("sleeve", "root")}
     if style == "feathered":
-        light.update(coverts=False, underwing=False, barbs=False)
+        light.update(coverts=False, underwing=False, barbs=False, grown=0.0)
     try:
         key = (style, tuple(sorted((k, repr(v)) for k, v in light.items())))
     except TypeError:

@@ -252,6 +252,10 @@ fixed mostly by the span axis).
 
 ### The feather itself (round 9)
 
+(`grown=1` replaces what this section describes, the sheet, with a feather grown from its shaft by the hair
+system: the same outline, barbs over the whole vane, fewer triangles. Opt-in; see
+[hair_particles.md](hair_particles.md).)
+
 One function builds every feather (`_blade`); round 9 changed its tip, its shaft, its edge and what a covert is,
 made each flight feather a little its own, and added an opt-in barb detail. Where a feather roots, where it
 points and how long it is did not change (`_feather_layout`): the joints, the span, the poses and the shell count

@@ -1,5 +1,9 @@
 # Hair and scatter: things that grow from many points of the skin
 
+(These two kinds were written before the general hair and particle systems of
+[hair_particles.md](hair_particles.md) and still carry their own emitter and strand code; they are to move
+onto those cores.)
+
 Two kinds of appendage that cover a region of the body instead of standing on one root:
 
 * **`hair`** is a strand system: locks grown from the scalp and combed into a style.

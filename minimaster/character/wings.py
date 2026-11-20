@@ -1829,47 +1829,11 @@ def _vane_columns(m: int, edge_at: float = EDGE_AT) -> np.ndarray:
     return np.concatenate([-side[::-1], [0.0], side])
 
 
-def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
-           lead_frac=0.30, tip=0.74, tip_pow=1.8, emarg=0.0, emarg_in=0.0,
-           calamus=0.10, tip_floor=0.07, root_floor=0.07, n=11, m=8,
-           notch=0.55, rise_at=0.42, ridge=1.35, vane=0.90, ridge_dir=-1.0, butt=0.0,
-           edge=EDGE, cap=TIP_CAP, vee=0.0, splits=(), barbs=0.0, barb_from=0.0) -> Mesh:
-    """One feather: a flat vane with a raised shaft down its middle.
-
-    A bare quill (the calamus) runs the first tenth of the length, then the
-    vane widens to its maximum by ``rise_at`` and holds parallel-sided until the
-    tip, where it closes in an ogive onto a rounded point. ``lead_frac`` is the
-    share of the vane in front of the shaft: the narrow leading vane against
-    the broad trailing one is what makes a flight feather aerodynamic, and it
-    shows in silhouette. ``tip_floor`` is the width (fraction of ``width``) the
-    tip closes down to and ``root_floor`` the width of the quill end (a covert's
-    quill must not shrink to a spearhead that pokes out of the feather in front
-    of it); ``butt`` rounds the quill end over that fraction of the length.
-    Nothing goes below half a ``thickness`` wide in absolute terms, so a tip or a
-    quill never thins to a sliver narrower than the sheet is thick.
-
-    The end itself is rounded in the plan: over the last ``cap`` half-widths of the tip
-    (``TIP_CAP_MAX`` of the length at most) the outline closes in an ellipse. ``cap`` 0:
-    cut square at ``tip_floor``, as every tip was.
-
-    ``emarg`` cuts the leading vane down sharply at ``notch`` (a fraction of the
-    length) and keeps it narrow to the tip, and ``emarg_in`` does the same to
-    the trailing vane a little nearer the root: the slotted look of soaring
-    primaries, where the outer feathers separate into fingers. ``splits`` are
-    places where the trailing vane's barbs have come unzipped: ``(at, depth)``
-    each, a fraction of the length and of the trailing vane's width. The edge
-    steps in there and runs back out along a barb, toward the tip.
-
-    The vane is a flat sheet ``vane`` x ``thickness`` thick (so it never goes
-    thinner than a printer resolves), bevelled over its outer fifth to ``edge`` x
-    ``thickness`` at the edge, with a shaft ridge ``ridge`` x ``thickness``
-    standing off one face only -- up on a dorsal feather (``ridge_dir`` -1),
-    down on a ventral one (+1) -- thinning toward the tip. ``vee`` is the slope
-    of the two vanes away from the shaft (a roof, its ridge toward the face the
-    shaft stands off): what makes the shaft a LINE on a shaded feather. ``barbs``
-    (x ``thickness``) cuts grooves across both vanes, into that same face
-    (``BARB_*``), from ``barb_from`` of the length on.
-    """
+def _blade_rows(length, width, thickness, lead_frac, tip, emarg, emarg_in, tip_floor, n, notch, cap, splits,
+                barbs, barb_from):
+    """Where along its length ``_blade`` samples a feather: ``(t, cap_t, wall, ramps)`` (the rows of its mesh,
+    the length of its rounded end, and each split's wall and ramp).  A sheet of ``len(t) - 1`` rows and ``m``
+    columns is ``4 rows m + 4 (rows + m)`` triangles, which is what a grown feather may spend (``feather.py``)."""
     # Sample the length unevenly: uniform along the body, but dense toward the
     # very tip, where the outline curves hardest, and (on a notched feather) at
     # the notch, whose step must read as a corner and not a ramp. A tip closed in
@@ -1905,6 +1869,92 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
                 rows.append(x)
         rows[-1] = 1.0                           # (the end is the end, whatever was dropped beside it)
         t = np.array(rows)
+    return t, cap_t, wall, ramps
+
+
+class _Grown:
+    """A feather that is to be GROWN (``feather.barbed_blades``: a shaft, barbs, a zipped mesh) and is not
+    built yet: its arguments, and where it has been put so far.  ``_place_feather`` turns a mesh; this takes
+    the same turn and keeps it, so that when a wing's feathers are all known they are grown as one batch
+    (:func:`_grow_pieces`), feathers of one mesh size as one strand system."""
+
+    __slots__ = ("spec", "matrix")
+
+    def __init__(self, spec: dict, matrix=None):
+        self.spec = spec
+        self.matrix = np.eye(4) if matrix is None else matrix
+
+    def transform(self, m) -> "_Grown":
+        return _Grown(self.spec, np.asarray(m, dtype=np.float64) @ self.matrix)
+
+
+def _grow_pieces(parts: list) -> list:
+    """Grow every feather of ``parts`` that is still a :class:`_Grown`, all at once, and put each where it was
+    placed.  (In place; the list is returned.)"""
+    todo = [p for p in parts if isinstance(p.mesh, _Grown)]
+    if todo:
+        from .feather import barbed_blades
+        for p, m in zip(todo, barbed_blades([p.mesh.spec for p in todo])):
+            p.mesh = m.transform(p.mesh.matrix)
+    return parts
+
+
+def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
+           lead_frac=0.30, tip=0.74, tip_pow=1.8, emarg=0.0, emarg_in=0.0,
+           calamus=0.10, tip_floor=0.07, root_floor=0.07, n=11, m=8,
+           notch=0.55, rise_at=0.42, ridge=1.35, vane=0.90, ridge_dir=-1.0, butt=0.0,
+           edge=EDGE, cap=TIP_CAP, vee=0.0, splits=(), barbs=0.0, barb_from=0.0, grown=0.0, seed=0,
+           both=False):
+    """One feather: a flat vane with a raised shaft down its middle.
+
+    ``grown`` above 0: not this sheet but the same feather grown from its shaft by a hair system (``feather.py``:
+    barbs over the whole vane, the same outline, about the same triangles at 1, finer barbs above), frayed by
+    ``seed``, with barbs on its other face too if ``both`` (a flight feather is seen from underneath).  What
+    comes back is then a :class:`_Grown` to be placed and grown with the rest of the wing's.
+
+    A bare quill (the calamus) runs the first tenth of the length, then the
+    vane widens to its maximum by ``rise_at`` and holds parallel-sided until the
+    tip, where it closes in an ogive onto a rounded point. ``lead_frac`` is the
+    share of the vane in front of the shaft: the narrow leading vane against
+    the broad trailing one is what makes a flight feather aerodynamic, and it
+    shows in silhouette. ``tip_floor`` is the width (fraction of ``width``) the
+    tip closes down to and ``root_floor`` the width of the quill end (a covert's
+    quill must not shrink to a spearhead that pokes out of the feather in front
+    of it); ``butt`` rounds the quill end over that fraction of the length.
+    Nothing goes below half a ``thickness`` wide in absolute terms, so a tip or a
+    quill never thins to a sliver narrower than the sheet is thick.
+
+    The end itself is rounded in the plan: over the last ``cap`` half-widths of the tip
+    (``TIP_CAP_MAX`` of the length at most) the outline closes in an ellipse. ``cap`` 0:
+    cut square at ``tip_floor``, as every tip was.
+
+    ``emarg`` cuts the leading vane down sharply at ``notch`` (a fraction of the
+    length) and keeps it narrow to the tip, and ``emarg_in`` does the same to
+    the trailing vane a little nearer the root: the slotted look of soaring
+    primaries, where the outer feathers separate into fingers. ``splits`` are
+    places where the trailing vane's barbs have come unzipped: ``(at, depth)``
+    each, a fraction of the length and of the trailing vane's width. The edge
+    steps in there and runs back out along a barb, toward the tip.
+
+    The vane is a flat sheet ``vane`` x ``thickness`` thick (so it never goes
+    thinner than a printer resolves), bevelled over its outer fifth to ``edge`` x
+    ``thickness`` at the edge, with a shaft ridge ``ridge`` x ``thickness``
+    standing off one face only -- up on a dorsal feather (``ridge_dir`` -1),
+    down on a ventral one (+1) -- thinning toward the tip. ``vee`` is the slope
+    of the two vanes away from the shaft (a roof, its ridge toward the face the
+    shaft stands off): what makes the shaft a LINE on a shaded feather. ``barbs``
+    (x ``thickness``) cuts grooves across both vanes, into that same face
+    (``BARB_*``), from ``barb_from`` of the length on.
+    """
+    if grown:
+        return _Grown(dict(length=length, width=width, thickness=thickness, curl=curl, cup=cup, sweep=sweep,
+                           lead_frac=lead_frac, tip=tip, tip_pow=tip_pow, emarg=emarg, emarg_in=emarg_in,
+                           calamus=calamus, tip_floor=tip_floor, root_floor=root_floor, n=n, m=m, notch=notch,
+                           rise_at=rise_at, ridge=ridge, vane=vane, ridge_dir=ridge_dir, butt=butt, edge=edge,
+                           cap=cap, vee=vee, splits=splits, detail=float(grown), seed=int(seed),
+                           both=bool(both)))
+    t, cap_t, wall, ramps = _blade_rows(length, width, thickness, lead_frac, tip, emarg, emarg_in, tip_floor, n,
+                                        notch, cap, splits, barbs, barb_from)
     n = len(t) - 1
     rise = np.clip((t - calamus) / (rise_at - calamus), 0.0, 1.0) ** 0.8
     ogive = np.clip(1.0 - (np.clip(t - tip, 0.0, None) / (1.0 - tip)) ** tip_pow,
@@ -2009,12 +2059,19 @@ def _along(points, fractions):
 def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
                      primaries=10, secondaries=14, tertials=7, scapulars=7,
                      coverts=True, underwing=True, bones=True, root=None, spec=None, sleeve=None, skin=None,
-                     barbs=False):
+                     barbs=False, grown=0.0, underside=True):
     """A bird wing as skeleton + pieces: every flight feather (and the scapulars
     and alula) has its own root and tip joint, so the fan opens and closes and
     the whole plumage folds together; each covert is bound to the feather it
     lies over. ``barbs`` grooves the free vanes of the slotted outer primaries
-    the way their barbs run (a detail for close renders and large prints)."""
+    the way their barbs run (a detail for close renders and large prints).
+
+    ``grown`` above 0: every feather is grown from its shaft by a hair system instead of drawn as a sheet
+    (``feather.py``: barbs over every vane; 1 for the triangles the sheets take, more for finer barbs).  The
+    layout, the joints, the pieces' names and their outlines are the same; ``barbs`` then means nothing.
+    ``underside``: the grown flight feathers (primaries, secondaries, tertials, scapulars, the alula) have
+    barbs on both faces, since a spread wing shows their undersides from the front; off, the far face is a
+    plain sheet, as every covert's is (a covert's far face lies on the wing)."""
     spec = BIRD_SPEC if spec is None else spec
     # span is the full tip-to-shoulder reach INCLUDING the feathers, so measure
     # the plumage at unit scale and rescale to land on the request.
@@ -2056,14 +2113,17 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
                        root_floor=fe.get("root_floor", 0.07), notch=fe["notch"],
                        rise_at=fe.get("rise_at", 0.42), n=16, ridge=FLIGHT_RIDGE, vee=FLIGHT_VEE,
                        splits=q["splits"], barb_from=fe["notch"],
-                       barbs=FLIGHT_BARBS if (barbs and fe["emarg"] >= BARB_FREE) else 0.0)
+                       barbs=FLIGHT_BARBS if (barbs and fe["emarg"] >= BARB_FREE) else 0.0,
+                       grown=grown, seed=sum(ord(ch) for ch in fe["row"]) + 101 * fe["i"], both=underside)
         parts.append(Piece(f"{fe['row']}{fe['i']:02d}",
                            _place_feather(blade, root_pt, fe["yaw"], fe["roll"] + q["roll"]), bone=tj))
         bone_of[(fe["row"], fe["i"])] = tj
         if fe["row"] == "alula":
             alula_roots.append(root_pt.copy())
     if coverts:
-        parts += _coverts(sk, layout, bone_of, thickness, height, step, underwing, sleeve=sleeve, skin=skin)
+        parts += _coverts(sk, layout, bone_of, thickness, height, step, underwing, sleeve=sleeve, skin=skin,
+                          grown=grown)
+    _grow_pieces(parts)                  # (the feathers that are to be grown: all of them, in one batch)
     if bones:
         parts += _feather_bones(sk, height, s, sleeve)
         parts.append(_alula_mount(sk, alula_roots, height, s))
@@ -2232,7 +2292,7 @@ COVERT_RIDGE = 1.25
 
 
 def _covert_blade(length, wol, thickness, ventral=False, n=10, m=6, tip_floor=0.0,
-                  lead_frac=0.42, curl=0.04) -> Mesh:
+                  lead_frac=0.42, curl=0.04, grown=0.0, seed=0):
     """A covert: a broad vane with a rounded (U-shaped) end that carries full width
     from close to the quill, since the quill end is buried under the row in front.
     A lozenge -- narrow at both ends -- is what made a row of coverts read as grains
@@ -2241,10 +2301,11 @@ def _covert_blade(length, wol, thickness, ventral=False, n=10, m=6, tip_floor=0.
     return _blade(length, wol * length, thickness, curl=curl, cup=COVERT_CUP, sweep=0.06,
                   lead_frac=lead_frac, tip=tip, tip_pow=COVERT_TIP_POW, calamus=0.0, rise_at=0.22,
                   root_floor=0.55, tip_floor=tip_floor, n=n, m=m, ridge=COVERT_RIDGE, vane=0.90,
-                  ridge_dir=1.0 if ventral else -1.0, butt=0.14, vee=COVERT_VEE)
+                  ridge_dir=1.0 if ventral else -1.0, butt=0.14, vee=COVERT_VEE, grown=grown, seed=seed)
 
 
-def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleeve=None, skin=None) -> list[Piece]:
+def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleeve=None, skin=None,
+             grown=0.0) -> list[Piece]:
     """The shingles over the flight feathers' bases. Each covert is welded to the
     bone of the feather it lies beside, so it fans with it; the leading-edge
     rows ride on the nearest secondary or tertial.
@@ -2284,7 +2345,7 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleev
         # wing lays them all parallel, and a lattice of identical round tips reads as armour
         k = 7 * fe["i"] + 3 * tier + (50 if ventral else 0)
         length = length * _jit(fe["i"] + 3 * tier, COVERT_JITTER)
-        blade = _covert_blade(length, wol, thickness, ventral, tip_floor=tip_floor)
+        blade = _covert_blade(length, wol, thickness, ventral, tip_floor=tip_floor, grown=grown, seed=k)
         roll = ((-fe["roll"] + 3.0) if ventral else (fe["roll"] - 3.0)) + 2.5 * float(np.sin(2.9 * k))
         out.append(Piece(name, _place_feather(blade, root, fe["yaw"] + yaw_off + 1.0 * float(np.sin(1.7 * k + 0.4)),
                                               roll, 2.0 * float(np.sin(4.1 * k))), bone=bone))
@@ -2374,7 +2435,8 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleev
                 u = float(np.clip((fr[j] - ROOT_BURIED) / 0.25, 0.0, 1.0))
                 taper = 0.5 + 0.5 * u * u * (3.0 - 2.0 * u)
             blade = _covert_blade(ratio * ref * taper * _jit(j + 5 * r, COVERT_JITTER), wol, thickness, ventral,
-                                  n=10, m=4, lead_frac=0.45, curl=curl)
+                                  n=10, m=4, lead_frac=0.45, curl=curl, grown=grown,
+                                  seed=1000 + 37 * j + 5 * r + (500 if ventral else 0))
             out.append(Piece(f"{tag}{j:02d}", _place_feather(blade, root, 90.0, roll, pitch),
                              bone=bone_of[(hf["row"], hf["i"])]))
 
@@ -2417,7 +2479,7 @@ def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleev
             hf = min(host, key=lambda fe: float(np.linalg.norm(fe["root"] - at)))
             q = 11 * j + 5 * (k + 1) + (40 if ventral else 0)
             blade = _covert_blade(length * _jit(q, COVERT_JITTER), 1.0, thickness, ventral, n=8, m=4,
-                                  lead_frac=0.45, curl=0.0)
+                                  lead_frac=0.45, curl=0.0, grown=grown, seed=3000 + q)
             tag = "under_shoulder" if ventral else "shoulder"
             out.append(Piece(f"{tag}{k}_{j:02d}",
                              _place_feather(blade, at, 90.0, 3.0 * float(np.sin(2.9 * q)),

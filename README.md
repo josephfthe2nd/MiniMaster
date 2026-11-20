@@ -339,7 +339,18 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   instead of a point 0.04-0.07 mm across, so the printability report no longer warns about it
   (`tip_radius=0` is the old point). See the T3 section of
   [docs/appendages_system_design.md](docs/appendages_system_design.md).
-* **Hair and scatter: a strand system and a particle system.** `--add hair:style=swept_back,length=2`
+* **A hair system and a particle system, and feathers grown with the first.** `minimaster/core/hair.py`
+  (strands as data: grow, steer, trim, children, clump, roughen; meshed as tubes or zipped into a sheet) and
+  `minimaster/core/particles.py` (particles on a curve or a mesh, one template instanced on all of them in
+  one pass) know nothing about bodies. The hair system's first use is the feather:
+  `--add wing:style=feathered,grown=1` grows every feather from its shaft (barbs cut at the feather's outline
+  and zipped into one mesh) instead of drawing a sheet. Barbs on the upper face of every feather and on both
+  faces of the flight feathers, the wing built in half the time; 16% more triangles than the sheets, or 5%
+  fewer with `underside=false`. Opt-in; the default wing is unchanged. Nothing uses the particle system
+  yet. See [docs/hair_particles.md](docs/hair_particles.md).
+
+  ![grown feathers](docs/images/wing_grown_close.png)
+* **Hair and scatter on the skin.** `--add hair:style=swept_back,length=2`
   grows about 80 locks from the scalp and combs them into one of six patterns (`natural`, `swept_back`,
   `centre_part`, `side_part`, `spiky`, `mohawk`; length, volume, fall, wave, curl, fringe and colour are
   separate numbers); they lie on the head and drape over the shoulders and the back, each a closed shell

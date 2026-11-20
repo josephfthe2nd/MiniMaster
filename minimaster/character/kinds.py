@@ -1782,6 +1782,16 @@ class WingKind(Kind):
                        "their barbs run: a detail for close renders and large prints (a groove is 0.06 mm deep "
                        "on a 32 mm figure, which a printer does not hold). The feathers that lie on one "
                        "another are left smooth"),
+        ParamSpec("grown", "Grown feathers (barb detail)", "float", 0.0, 0.0, 3.0, 0.5, when=("style", ("feathered",)),
+                  help="0: every feather is a smooth sheet. 1: every feather is grown from its shaft by the hair "
+                       "system (a barb leaves the shaft every so often and is cut at the feather's outline; the "
+                       "barbs are zipped into one mesh), with the same outline and no more triangles than the "
+                       "sheet's. 2 and 3: finer barbs, two and three times the triangles (finer than a 32 mm "
+                       "print resolves: the report warns)"),
+        ParamSpec("underside", "Barbs under the flight feathers", "bool", True, when=("style", ("feathered",)),
+                  help="with grown feathers: the flight feathers have barbs on both faces (a spread wing shows "
+                       "their undersides from the front); the wing then has 16% more triangles than the sheets'. "
+                       "Off: their far face is a plain sheet, and the grown wing has 5% fewer"),
         ParamSpec("bones", "Show the arm bones", "bool", True),
         ParamSpec("muscle", "Upper-arm muscle", "float", 1.0, WING_MUSCLE_RANGE[0], WING_MUSCLE_RANGE[1], 0.05,
                   help="how thick the upper arm is where it leaves the back, as a share of the shoulder "
