@@ -82,12 +82,12 @@ Each value was read off one image by hand-placed pixel landmarks (error 5-10 % o
 
 ### Feathered wing and feathers
 
-Read off the `plume` pictures (pixel landmarks and counts; errors as above). The last column is our feathered wing as built at commit ba659ad, measured on its mesh, for comparison.
+Read off the `plume` pictures (pixel landmarks and counts; errors as above). The last column is our feathered wing as built at commit ba659ad, measured on its mesh (`python tools/wing_check.py section` and `report`), for comparison.
 
 | quantity | reference | ref | ours |
 |---|---|---|---|
 | what the spread wing reads as | one continuous surface; each flight feather shows only as a faint line; one smooth roll along the front edge | plume/P01, plume/W03, plume/W06 | separate feathers with a step between every pair; a row of small feathers standing along the front edge |
-| thickness of a feather / its width | vane under 0.01 | plume/F01, plume/F15 | flat secondary, mid-length: 0.23 (median), 0.32 at the shaft, 0.19 near the edges; at 32 mm that is 0.37, 0.52 and 0.30 mm on a feather 1.63 mm wide. Primary 0.31 / 0.41 / 0.24; covert 0.37 / 0.42 / 0.30 |
+| thickness of a feather / its width | vane under 0.01 | plume/F01, plume/F15 | flat secondary, mid-length: 0.23 (median), 0.32 at the shaft, 0.19 near the edges; at 32 mm that is 0.37, 0.51 and 0.30 mm on a feather 1.63 mm wide. Primary 0.27 / 0.37 / 0.21; covert 0.37 / 0.42 / 0.30 |
 | the same wing with thinner feathers (print check at 32 mm; floor 0.2 mm, fragile under 0.3 mm) | - | - | `thickness` 0.20 (default): passes, 3% of the area under 0.3 mm. 0.16: passes with the thin warning, 46% under 0.3 mm. 0.11: blocked, 50% under 0.2 mm |
 | strip of each secondary left showing / its width | not measured (overlaps too close to read) | plume/P01 | 0.26-0.45 |
 | long feathers on a carved wing | 6-10, with 3-4 rows of scale feathers above; about 30 forms a wing | plume/S01 | 41 long (10 primaries, 14 secondaries, 7 tertials, 7 scapulars, 3 alula) and about 230 small, each a free piece |
