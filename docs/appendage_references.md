@@ -6,11 +6,12 @@ Why it exists: appendages that read as "slapped over the skin" lack the bone, mu
 
 ## How to read it
 
-- Ids are `region/id`; the region names the collection pass (tail, horn, wing, limb, skin, general). The horn and wing passes both use A01.. and H01.., so always include the region.
+- Ids are `region/id`; the region names the collection pass (tail, horn, wing, limb, skin, general, and `plume` for the later pass on feathered wings and single feathers). The horn and wing passes both use A01.. and H01.., so always include the region.
 - Licence is the normalised short form of what the source page said when it was collected (public domain `PD`, `CC0`, `CC-BY-x`, `CC-BY-SA-x`, one `GFDL-1.2`). No NonCommercial or NoDerivatives material is listed. **Re-check the licence on the page URL before ever redistributing an image**; attribution (creator + licence + page) is required for the CC-BY and CC-BY-SA entries and share-alike applies to the CC-BY-SA ones.
 - Images are kept outside the repository. Internal review copies only; do not commit them.
 - Left out because their licence status is unclear: one historical medical photograph of a human caudal appendage (listed as Commons CC-BY-4.0 but the holding collection now says in copyright) and one modern commercial figurine photograph.
 - 328 unique images are listed (357 entries were collected; 27 were the same picture filed under a second region and are noted as "also" on the first entry).
+- The `plume` pass adds 75 more (none of them already listed), 403 in all. Its licences are `PD`, `CC0`, `CC-BY-2.0`, `CC-BY-4.0` and `CC-BY-SA-2.0`.
 
 ## Key numbers
 
@@ -78,6 +79,24 @@ Each value was read off one image by hand-placed pixel landmarks (error 5-10 % o
 | shoulder joint outside the ribcage | about 0.2 rib spans each side; scapula span 1.44 (horse) and 1.50 (dog) x thorax width | limb/limb_042, skin/url_cuyer_fig14_15 |
 | horse shoulder | scapula/humerus 1.77, scapula 48 deg, humerus 66 deg, joint angle 114 deg, joint at 0.63 of withers-to-sternum depth | limb/limb_006 |
 | real extra limbs | root on the nearest girdle, skin continuous | limb/limb_022, limb/limb_023, limb/limb_025 |
+
+### Feathered wing and feathers
+
+Read off the `plume` pictures (pixel landmarks and counts; errors as above). The last column is our feathered wing as built at commit ba659ad, measured on its mesh, for comparison.
+
+| quantity | reference | ref | ours |
+|---|---|---|---|
+| what the spread wing reads as | one continuous surface; each flight feather shows only as a faint line; one smooth roll along the front edge | plume/P01, plume/W03, plume/W06 | separate feathers with a step between every pair; a row of small feathers standing along the front edge |
+| thickness of a feather / its width | vane under 0.01 | plume/F01, plume/F15 | 0.20-0.25 (0.2 units on 0.8-1.0; the print floor at 32 mm) |
+| strip of each secondary left showing / its width | not measured (overlaps too close to read) | plume/P01 | 0.26-0.45 |
+| long feathers on a carved wing | 6-10, with 3-4 rows of scale feathers above; about 30 forms a wing | plume/S01 | 41 long (10 primaries, 14 secondaries, 7 tertials, 7 scapulars, 3 alula) and about 230 small, each a free piece |
+| separate primaries on an eagle; free ends / single wing length | 6-7; about 0.2 | plume/W02 | 6-7; about the same by eye (not measured) |
+| underwing coverts / chord | about half (by eye) | plume/W01 | not measured |
+| flight feather: vane length / width | 6.3 (eagle), about 6.5 (pigeon primary) | plume/F01, plume/P09 | primaries 4.8-9.0, secondaries 3.7 |
+| flight feather: front vane / back vane | about 1/4 on a primary | plume/F01 | 0.37 on a primary (the front vane is set to 0.27 of the width) |
+| bare quill / whole feather | 0.20 | plume/F01 | 0.10 |
+| barbs a side | about 600 on a pigeon's 15 cm wing feather (the book's own count, p. 34) | plume/P11 | 20-25 ridges when grown at detail 1 |
+| body feather: downy part / whole | about half | plume/F07, plume/F11 | none |
 
 ## Sources by region
 
@@ -356,6 +375,90 @@ Columns: ref | title | creator | licence | page | what it shows | numbers record
 | `limb/limb_082` | Animals: ape, skeleton (item 3460445) | unknown | PD | http://hdl.handle.net/1887.1/item:3460445 | Leiden pencil drawing of an ape skeleton (labelled 'ape, skeleton'), front view: broad shoulders with long clavicles, a deep… |  |
 | `limb/limb_083` | Research Focus, Genetic Conservation - Thylacine Skeleton, Thylacinus… | Photographer: Rodney Start | CC-BY-4.0 | https://collections.museumsvictoria.com.au/specimens/131539 | Museums Victoria photograph of a mounted thylacine skeleton: a dog-like quadruped with the scapula lying high on the front… |  |
 | `limb/limb_084` | Articulated Skeleton - American Beaver, Castor canadensis | Photographer: Rodney Start | CC-BY-4.0 | https://collections.museumsvictoria.com.au/specimens/139095 | Museums Victoria mounted beaver skeleton: short humerus, scapula on the front of the thorax, and heavy pelvis/hind legs; a… |  |
+
+### Feathered wings and single feathers (75)
+
+Collected for the question of why the feathered wing and its feathers look wrong. Ids: `W` real wings (W01-W24 spread, W25-W31 folded and close), `P` plates from one public-domain book (C. William Beebe, *The Bird: Its Form and Function*, 1906, scanned at archive.org; the page column links the leaf), `S` sculpted, cast, drawn and painted wings, `F` single feathers. Found through Openverse (Flickr and museum sources), iNaturalist (photographs under CC0, CC-BY and CC-BY-SA only; the search was limited to those licences), the open-access collections of the Cleveland Museum of Art and the Art Institute of Chicago (both CC0), and archive.org.
+
+| ref | title | creator | licence | page | what it shows | numbers |
+|---|---|---|---|---|---|---|
+| `plume/W01` | Golden Eagle 12a | ahisgett | CC-BY-2.0 | https://www.flickr.com/photos/37804979@N00/6027292102 | Golden eagle landing, seen from the front: the underside of both wings. Secondaries make one unbroken curtain with a smooth edge; only the outer primaries separate into fingers; underwing coverts cover about half the chord in shaggy rows. | underwing coverts about half the chord (by eye) |
+| `plume/W02` | Golden Eagle (Aquila chrysaetos) | gilgit2 | CC-BY-SA-2.0 | https://www.flickr.com/photos/68466173@N02/46259621315 | Golden eagle soaring, from below: plank-shaped wing, six to seven fingers at the tip, trailing edge a smooth S that runs into the flank. | 6-7 separate primaries; their free ends about 0.2 of the single wing's length |
+| `plume/W03` | Golden Eagle (Aquila chrysaetos) | gilgit2 | CC-BY-SA-2.0 | https://www.flickr.com/photos/68466173@N02/40025879643 | Golden eagle in flight seen from above: upper surface reads as one sheet, coverts as a paler band along the arm, fingers only at the tip. |  |
+| `plume/W04` | Golden Eagle (Aquila chrysaetos) | sussexbirder | CC-BY-2.0 | https://www.flickr.com/photos/9919745@N03/13667892725 | Golden eagle on snow with both wings raised, from behind: upper surface, the thick leading edge at the wrist, primaries fanned. |  |
+| `plume/W05` | Golden Eagle 8a | ahisgett | CC-BY-2.0 | https://www.flickr.com/photos/37804979@N00/6022365791 | Golden eagle mantling, from the front: wings half open and drooped, the feathers stacked like a closed fan. |  |
+| `plume/W06` | Anhinga anhinga (anhinga) (Sanibel Island, Florida, USA) 1 | James St. John | CC-BY-2.0 | https://www.flickr.com/photos/47445767@N05/17225816749 | Anhinga drying its wings, from behind: rows of coverts drawn clearly by their pale streaks; long pointed scapulars lie from the back onto the wing and hide the root. |  |
+| `plume/W07` | Darter (Anhinga novaehollandiae) | jemasmith | CC-BY-2.0 | https://www.flickr.com/photos/26085795@N02/4381901580 | Darter drying its wings, from behind and to the side: covert rows, the wing as one surface, scapulars over the root. |  |
+| `plume/W08` | Turkey Vulture (Cathartes aura) Preflight Warmup | docentjoyce | CC-BY-2.0 | https://www.flickr.com/photos/99003655@N00/11229178725 | Turkey vulture with wings spread, from behind: the whole upper surface of both wings and the back between them. |  |
+| `plume/W09` | Cormorant drying wings on pontoon in the Yarra River | Rexness | CC-BY-SA-2.0 | https://www.flickr.com/photos/25287507@N02/6059700781 | Cormorant drying its wings on a pontoon: the spread wing from the front, flight feathers overlapping evenly. |  |
+| `plume/W10` | Bald Eagle Wings Spread | Eric Kilby | CC-BY-SA-2.0 | https://www.flickr.com/photos/8749778@N06/6957964415 | Bald eagle perched with wings spread, from the front: thick leading edge, underwing coverts, primaries hanging. |  |
+| `plume/W11` | Clontarf Pelican with Wings spread-1= | Sheba Also 18 Million Views | CC-BY-SA-2.0 | https://www.flickr.com/photos/34534185@N00/7531306246 | Pelican overhead with wings fully spread: underside, long row of secondaries with an even edge, fingered tip. |  |
+| `plume/W12` | Pelican Spreads Its WIngs | donjd2 | CC-BY-2.0 | https://www.flickr.com/photos/28156071@N00/15828647023 | Brown pelican spreading its wings on a rock, seen from the side: the wings half open. |  |
+| `plume/W13` | Swaning | Akulatraxas | CC-BY-2.0 | https://www.flickr.com/photos/42141165@N07/18811613465 | Mute swan rearing with both wings open, from the front: white wings on which every overlap shows as a shallow step. |  |
+| `plume/W14` | Mute Swan Wing flap | Wildlife Boy1 | CC-BY-2.0 | https://www.flickr.com/photos/91677891@N07/16407286359 | Mute swan flapping on the water, wings raised. |  |
+| `plume/W15` | Swan 1 | ahisgett | CC-BY-2.0 | https://www.flickr.com/photos/37804979@N00/3595682374 | Swan taking off: wings at the top of the stroke, primaries spread. |  |
+| `plume/W16` | Snowy Owl Flying Up | Eric Kilby | CC-BY-SA-2.0 | https://www.flickr.com/photos/8749778@N06/12413640084 | Snowy owl flying up, from below: broad rounded wing, every flight feather visible, edge smooth. |  |
+| `plume/W17` | Owl wings 2 | ahisgett | CC-BY-2.0 | https://www.flickr.com/photos/37804979@N00/5634888391 | Eagle owl flying low towards the camera: wings level, seen nearly edge-on. |  |
+| `plume/W18` | Canada Goose Wing flap | Wildlife Boy1 | CC-BY-2.0 | https://www.flickr.com/photos/91677891@N07/16567131006 | Canada goose flapping on the water: the wing half open, from the side. |  |
+| `plume/W19` | Condor underside | USFWS Pacific Southwest Region | PD | https://www.flickr.com/photos/54430347@N04/6391185423 | California condor from below: long fingers at the tip, pale underwing coverts in a band. |  |
+| `plume/W20` | Red-Tailed Hawk Rufous Morph Adult Seedskadee NWR | USFWS Mountain Prairie | CC-BY-2.0 | https://www.flickr.com/photos/51986662@N05/16505967463 | Red-tailed hawk in flight from below, wings raised: translucent flight feathers show how far each overlaps the next. |  |
+| `plume/W21` | owl wings | rachelyra | CC-BY-2.0 | https://www.flickr.com/photos/88578385@N00/1024192572 | Two prepared owl wings spread on a table, upper side. |  |
+| `plume/W22` | owl wings front and back | rachelyra | CC-BY-2.0 | https://www.flickr.com/photos/88578385@N00/1024192222 | Two prepared owl wings on a table (titled front and back), one grey, one barred. |  |
+| `plume/W23` | iNaturalist observation 41748345, photo 1 (Snowy Owl (Bubo scandiacus)) | Safina Rezeda | CC-BY-4.0 | https://www.inaturalist.org/observations/41748345 | Two detached snowy owl wings on the ground, upper side: coverts in rows, flight feathers overlapping. |  |
+| `plume/W24` | Barn Owl Wing | born1945 | CC-BY-2.0 | https://www.flickr.com/photos/12567713@N00/79516151 | Barn owl wing, close: the overlapping flight feathers as parallel bands, each with its shaft line. |  |
+| `plume/W25` | Starling | Bev Goodwin | CC-BY-2.0 | https://www.flickr.com/photos/37390607@N02/10375124546 | Starling at rest, close: the folded wing as tight overlapping rows (coverts, tertials, primaries), every feather outlined by a pale edge. |  |
+| `plume/W26` | Sleeping Giant WSA | mypubliclands | CC-BY-2.0 | https://www.flickr.com/photos/91981596@N06/9474182592 | Bald eagle perched, from behind: back, scapulars and folded wings are one shingled surface of broad rounded feathers; the wing tips reach the tail. |  |
+| `plume/W27` | On the Lookout | GollyGforce - Living My Worst Nightmare | CC-BY-2.0 | https://www.flickr.com/photos/20581458@N00/4829270902 | Bald eagle perched, from the front: folded wings as the outline of the body. |  |
+| `plume/W28` | Egyptian Vulture | Koshyk | CC-BY-2.0 | https://www.flickr.com/photos/97235261@N00/6919230283 | Egyptian vulture standing, side view: folded wing lying along the body. |  |
+| `plume/W29` | Swainson's Thrush | Furryscaly | CC-BY-SA-2.0 | https://www.flickr.com/photos/98528214@N00/3534487277 | Swainson's thrush on white, side view: a small bird's folded wing, primaries projecting beyond the tertials. |  |
+| `plume/W30` | Mute swan cygnet , Workington, Cumbria, UK | gizmo-the-bandit | CC-BY-2.0 | https://www.flickr.com/photos/134832191@N08/37580320921 | Mute swan cygnet from behind with both wings arched up: the wing seen from its trailing edge, thick at the arm and layered. |  |
+| `plume/W31` | Eagle Feathers | Peter Kaminski | CC-BY-2.0 | https://www.flickr.com/photos/35034359460@N01/3164486942 | Eagle body feathers, close: pointed pale-tipped feathers overlapping like tiles, each with its shaft line. |  |
+| `plume/P01` | The Bird: Its Form and Function (1906), leaf n112 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n112 | Fig. 67-69: wing of a pigeon feathered, the same wing plucked, and a man's arm. The feathered wing is one smooth surface; the coverts cover the half next to the arm; the bare arm is a thin Z with the quill sockets along its hind edge. |  |
+| `plume/P02` | The Bird: Its Form and Function (1906), leaf n114 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n114 | Fig. 70-71: wing skeleton of a condor beside the bones of a man's arm. |  |
+| `plume/P03` | The Bird: Its Form and Function (1906), leaf n66 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n66 | Fig. 29: wing of a mallard in moult, flight feathers missing: the covert field alone, dense overlapping scales. |  |
+| `plume/P04` | The Bird: Its Form and Function (1906), leaf n342 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n342 | Fig. 262: wing of a living golden pheasant, spread, underside: rounded wing, feathers as a fan of overlapping blades. |  |
+| `plume/P05` | The Bird: Its Form and Function (1906), leaf n343 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n343 | Fig. 263: wing of a living herring gull: long and narrow. |  |
+| `plume/P06` | The Bird: Its Form and Function (1906), leaf n364 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n364 | Fig. 280: wing of a woodcock, upper side, with the narrowed outer primaries. |  |
+| `plume/P07` | The Bird: Its Form and Function (1906), leaf n336 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n336 | Fig. 256: great white heron stretching one wing: the spread wing in life. |  |
+| `plume/P08` | The Bird: Its Form and Function (1906), leaf n340 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n340 | Fig. 259-260: wing of a hummingbird (16 flight feathers) and of an albatross (50). |  |
+| `plume/P09` | The Bird: Its Form and Function (1906), leaf n54 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n54 | Fig. 22: four feathers: a pigeon's primary, a heron's underwing covert, an owl's wing covert, an ostrich plume. | pigeon primary: length / width about 6.5; heron underwing covert about 3.2; owl wing covert about 2.7 |
+| `plume/P10` | The Bird: Its Form and Function (1906), leaf n55 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n55 | Fig. 23: feathers of a condor and an emu, with the aftershaft. |  |
+| `plume/P11` | The Bird: Its Form and Function (1906), leaf n51 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n51 | Fig. 20: two interlocked barbs of a condor's wing feather, magnified 25 times. | magnified 25 diameters |
+| `plume/P12` | The Bird: Its Form and Function (1906), leaf n52 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n52 | Fig. 21: model of the interlocking barbules. |  |
+| `plume/S01` | Angel wings | quinet | CC-BY-2.0 | https://www.flickr.com/photos/91994044@N00/5997054526 | Marble angel from behind: half-closed wings as solid shields; small scale-like feathers at the top, then two tiers of long broad feathers, every overlap a shallow step. | 6-10 long feathers and 3-4 rows of scale feathers a wing, about 30 forms |
+| `plume/S02` | Boer War memorial in Worcester | ell brown | CC-BY-2.0 | https://www.flickr.com/photos/39415781@N06/3916517097 | Bronze war memorial angel, wings held open behind the figure: thick rounded upper edge, scale feathers above, long feathers below with a shaft line each. |  |
+| `plume/S03` | Winged Victory of Samothrace (Victoire de Samothrace), 1860s | Artist unknown | CC0 | https://www.artic.edu/artworks/212217 | Winged Victory of Samothrace in an 1860s photograph: the wing as one mass, feather rows in relief. |  |
+| `plume/S04` | Cupid (1744) by Edme Bouchardon | nationalgalleryofart | CC0 | https://www.rawpixel.com/image/10018765/cupid-1744-edme-bouchardon | Bouchardon, Cupid (1744), marble: small wings on a figure, feathers as a few broad overlapping forms. |  |
+| `plume/S05` | Altarpiece with Relics - Angel, lower right, c. 1735–1740 | Joseph Matthias Götz (German, 1696–1760); Workshop | CC0 | https://clevelandart.org/art/1964.357.h | Gilded wood angel (c. 1735-40): open wings carved as a few large feathers. |  |
+| `plume/S06` | Lute-playing Angel, made shortly after 1503 | Hans Schnatterpeck (Austrian) | CC0 | https://clevelandart.org/art/1959.340 | Lute-playing angel (after 1503), painted wood: raised wings with long separate feather tips. |  |
+| `plume/S07` | Male Academy with Wings, 1745–50 | François Boucher (French, 1703–1770) | CC0 | https://clevelandart.org/art/2008.350 | Boucher, Male Academy with Wings (1745-50), chalk: a seated nude with wings springing from the shoulder blades. |  |
+| `plume/S08` | Hebe and the Eagle of Jupiter, Modeled c. 1852, cast c. 1860–80 | François Rude (French, 1784–1855) | CC0 | https://www.artic.edu/artworks/48844 | Rude, Hebe and the Eagle of Jupiter, bronze: an eagle's open wing beside a figure. |  |
+| `plume/S09` | King Vulture, 1734 | Meissen Porcelain Manufactory (1710–present) Modeled by Johann Joachim Kändler ( | CC0 | https://www.artic.edu/artworks/189715 | Meissen king vulture (1734), porcelain: a folded wing reduced to a few rows of large scale feathers, at small size. |  |
+| `plume/S10` | Victory with Cornucopia (Chariot Attachment), 40–68 CE | unknown | CC0 | https://clevelandart.org/art/1984.25 | Roman bronze Victory (40-68 CE), a chariot fitting: wings on a small cast figure. |  |
+| `plume/S11` | Winged Figure, 1889 | Abbott Handerson Thayer (American, 1849–1921) | CC0 | https://www.artic.edu/artworks/59798 | Thayer, Winged Figure (1889), painting: large white wings folded behind a seated figure. |  |
+| `plume/S12` | Owl at Library | dyniss | CC-BY-SA-2.0 | https://www.flickr.com/photos/82108446@N00/8193885238 | Stone owl with raised wings: the wing as a slab with the flight feathers cut as parallel bands. |  |
+| `plume/F01` | iNaturalist observation 56419700, photo 3 (Hawks, Eagles, and Kites (Accipitridae)) | Garth Harwood | CC-BY-4.0 | https://www.inaturalist.org/observations/56419700 | Eagle flight feather beside a 15 cm scale, whole: narrow leading vane, wide trailing vane, bare quill about a fifth of the length, downy tuft where the vane starts. | vane length / greatest width 6.3; front vane about 1/4 of the back vane; bare quill 0.20 of the whole length |
+| `plume/F02` | iNaturalist observation 56419700, photo 2 (Hawks, Eagles, and Kites (Accipitridae)) | Garth Harwood | CC-BY-4.0 | https://www.inaturalist.org/observations/56419700 | The same feather, base half close: shaft, the down at the base, the smooth closed vane. |  |
+| `plume/F03` | iNaturalist observation 56419700, photo 4 (Hawks, Eagles, and Kites (Accipitridae)) | Garth Harwood | CC-BY-4.0 | https://www.inaturalist.org/observations/56419700 | The same feather, tip half close. |  |
+| `plume/F04` | iNaturalist observation 328533453, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | paulgraham | CC0 | https://www.inaturalist.org/observations/328533453 | Hawk or eagle flight feather held up: asymmetric vanes, downy base, bare quill. |  |
+| `plume/F05` | iNaturalist observation 241461495, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | Michael O'Loughlin | CC-BY-4.0 | https://www.inaturalist.org/observations/241461495 | Barred flight feather on a table: blunt tip, downy base, bare quill. |  |
+| `plume/F06` | feather | n0rthw1nd | CC-BY-2.0 | https://www.flickr.com/photos/47283421@N02/4418311590 | Flight feather on white: bowed shaft, narrow leading vane with natural splits, loose down at the base. |  |
+| `plume/F07` | iNaturalist observation 223942601, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | Hawk T. | CC-BY-4.0 | https://www.inaturalist.org/observations/223942601 | Body feather on black: curved shaft, closed vane only in the outer half, long loose barbs below. |  |
+| `plume/F08` | iNaturalist observation 223942601, photo 2 (Hawks, Eagles, and Kites (Accipitridae)) | Hawk T. | CC-BY-4.0 | https://www.inaturalist.org/observations/223942601 | The same body feather, closer: the loose barbs of the lower half. |  |
+| `plume/F09` | iNaturalist observation 296946874, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | Miriam Sokhet | CC-BY-4.0 | https://www.inaturalist.org/observations/296946874 | Body feather on white: soft curved vane splitting into locks, downy lower half. |  |
+| `plume/F10` | iNaturalist observation 132996012, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | Rusty | CC-BY-4.0 | https://www.inaturalist.org/observations/132996012 | Body feather with a very large downy base. |  |
+| `plume/F11` | iNaturalist observation 356385791, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | open_a_ir | CC-BY-4.0 | https://www.inaturalist.org/observations/356385791 | Body feather on sand: closed brown tip, white downy base, about half and half. |  |
+| `plume/F12` | iNaturalist observation 356385791, photo 3 (Hawks, Eagles, and Kites (Accipitridae)) | open_a_ir | CC-BY-4.0 | https://www.inaturalist.org/observations/356385791 | The same, closer. |  |
+| `plume/F13` | iNaturalist observation 53914685, photo 1 (Hawks, Eagles, and Kites (Accipitridae)) | Елена Радостева | CC-BY-4.0 | https://www.inaturalist.org/observations/53914685 | Barred body feather with split vanes. |  |
+| `plume/F14` | iNaturalist observation 100464415, photo 2 (Feral Pigeon (Columba livia domestica)) | Jenny Saito | CC-BY-4.0 | https://www.inaturalist.org/observations/100464415 | Pigeon feather on grass in raking light: the cupped vane and its splits. |  |
+| `plume/F15` | He will cover you with his feathers. He will shelter you with his wings. His faithful promises are your armor and protec | J316 | CC0 | https://www.flickr.com/photos/12203485@N05/26786821793 | Blue flight feather, macro: the shaft as a narrow crisp ridge, barbs so fine they read as a grain. |  |
+| `plume/F16` | Pluma - contour feather - Macro - Edwards Garden Botanical - Toronto - Ontario - Canada | Onasill - Bill Badzo - 149 Million Views - Thank Y | PD | https://www.flickr.com/photos/7156765@N05/51487246027 | Contour feather, macro: the loose downy barbs. |  |
+| `plume/F17` | Wren Down Feather | audreyjm529 | CC-BY-2.0 | https://www.flickr.com/photos/98799884@N00/2249862647 | Down feather of a wren, macro. |  |
+| `plume/F18` | Downy microdrops | docoverachiever | CC-BY-2.0 | https://www.flickr.com/photos/90692748@N04/35359411246 | Downy feather with water droplets on black: barbs and barbules of a loose feather. |  |
+| `plume/F19` | Eagle Feather | Umnak | CC-BY-SA-2.0 | https://www.flickr.com/photos/11376383@N00/3907295323 | Eagle feather lying on moss: the whole feather at a distance, vane smooth, shaft a pale line. |  |
+| `plume/F20` | Eagle Feather | Silver The Funky Unicorn | CC-BY-2.0 | https://www.flickr.com/photos/78154062@N02/7422740716 | Eagle feather on shingle: the same at a distance. |  |
+
+Listed by the searches but not downloaded, so not described and not counted (Wikimedia's file host refused nearly every request from this session's network; fetch and look at them before using them). Licences as the search reported them: `Birdwing.svg` (labelled wing topography, CC-BY-SA-2.5), `BirdWingFeatherSketch.svg` (PD), `Wing taxis.jpg` (PD), `Koerperteile der voegel.png` (CC0), `1911 EB Wing muscles of a Goose.png` (PD), `Types de plumes. - Larousse pour tous, -1907-1910-.jpg` (PD), `Feather zipping microstructure.svg` (CC0), `Buteo buteo primary secondary.jpg` (CC-BY-2.5), `Bird wing specimens.jpg` (CC-BY-SA-3.0), `Patagioenas fasciata wing specimens` (CC-BY-2.0), `Miscellaneous bird wings in Biology Preparation Lab - Burke Museum - 01` (CC-BY-SA-3.0), `Swan.spreads.wings.arp.jpg` (PD), all on Wikimedia Commons.
 
 ### Skin transition around a protrusion (38)
 
