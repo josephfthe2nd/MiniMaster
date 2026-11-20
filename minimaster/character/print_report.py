@@ -96,6 +96,8 @@ class PrintRules:
     warn_tube_thin: float = 0.15       # of its length under 2x min_feature_mm -> warn
     below_feet_mm: float = 0.05        # tolerance for "below the standing plane"
     rays_per_shell: int = 200          # thickness probe budget per shell
+    seal_gap_mm: float = 0.06          # between shells that lie on one another (``fused``), an air gap thinner
+                                       # than this is not a gap in a print: the resin bridges it
 
 
 DEFAULT_RULES = PrintRules()
@@ -441,6 +443,140 @@ def thickness_samples(mesh: Mesh, rays: int = 200, chunk: int = 64):
     return out, w
 
 
+FUSED_CAP = 0.6          # units: a wall thicker than this is not measured further (1.1 mm on a 32 mm figure)
+FUSED_BUDGET = 2400      # rays for one fused group in all (a head of hair is 80 shells)
+ROOT_SAMPLE = 8          # of a group's many unnamed root pieces, how many have their embedding measured
+
+
+def fused_thickness_samples(shells, body: Mesh, rays: int = 200, budget: int = FUSED_BUDGET,
+                            cap: float = FUSED_CAP, seal: float = 0.0) -> dict:
+    """``{name: (t, w)}``: the thickness of the PRINTED SOLID at the surface of shells that lie on the body
+    and on one another (hair's locks, scattered scales), with the area each sample stands for.
+
+    :func:`thickness_samples` measures a shell alone, which is right for a wing's membrane (a free wall) and
+    wrong for a lock of hair: half of it is sunk in the head, the slicer unions the two, and what prints
+    there is the head with a ridge on it, not a 0.2 mm wall.  Here a ray goes in from a face of one shell and
+    is followed through every shell of the group and the body until it comes out of ALL of them: that is how
+    much material the printer puts behind that face (up to ``cap``; past it, it is thick).  Faces that are
+    buried (just outside them is the body or another shell) are not surface and are left out.  Where the
+    hair leaves the body and hangs free the answer is the hair's own thickness again, as it should be.
+
+    ``seal`` (units): the ray is not out while the next shell begins within this (a lock's flat underside
+    on a round head leaves a sliver of air under its edges, hundredths of a millimetre that no printer
+    leaves open)."""
+    shells = [(n, m) for n, m in shells if len(m.faces)]
+    out: dict = {}
+    if not shells:
+        return out
+    per = max(8, min(int(rays), int(budget) // len(shells)))
+    lo = np.min([m.vertices.min(axis=0) for _, m in shells], axis=0) - cap
+    hi = np.max([m.vertices.max(axis=0) for _, m in shells], axis=0) + cap
+    bt = body.vertices[body.faces]
+    near = ((bt.max(axis=1) >= lo) & (bt.min(axis=1) <= hi)).all(axis=1)
+    tris = np.concatenate([m.vertices[m.faces] for _, m in shells] + [bt[near]])
+    first = np.cumsum([0] + [len(m.faces) for _, m in shells])
+    own = int(first[-1])                                  # triangles before this are the group's, after it the body's
+    a = tris[:, 0]
+    e1, e2 = tris[:, 1] - a, tris[:, 2] - a
+    fn = np.cross(e1, e2)
+    area2 = np.linalg.norm(fn, axis=1)
+    nrm = fn / np.maximum(area2, 1e-300)[:, None]
+    cen = tris.mean(axis=1)
+    tlo, thi = tris.min(axis=1), tris.max(axis=1)
+    picks = [_sample_faces(area2[first[k]:first[k + 1]] / 2.0, per) for k in range(len(shells))]
+    every = np.concatenate([idx + first[k] for k, (idx, _) in enumerate(picks)])
+    eps = max(1e-4 * float(np.max(hi - lo)), float(seal))
+    # just outside the face (past a gap the print seals): in the body?  (The side of the nearest skin it is
+    # on: a tenth of the cost of the parity test against the whole body, and these points are all within a
+    # lock's thickness of the skin.)
+    from .weld import Surface
+    try:
+        skin = Surface(body.vertices, body.faces, 0.5 * (lo + hi), 0.5 * float(np.linalg.norm(hi - lo)), walk=1)
+        in_body = np.asarray(skin.closest(cen[every] + eps * nrm[every])[2]) < 0.0
+    except ValueError:                  # a body with no vertex near the group (a test's block): the parity test
+        in_body = Solid(body).contains(cen[every] + eps * nrm[every])
+    at = 0
+    for k, (name, _) in enumerate(shells):
+        idx, w = picks[k]
+        idx = idx + first[k]
+        keep = ~in_body[at:at + len(idx)]
+        at += len(idx)
+        idx, w = idx[keep], w[keep]
+        if not len(idx):
+            out[name] = (np.zeros(0), np.zeros(0))
+            continue
+        o, d = cen[idx], -nrm[idx]
+        end = o + cap * d
+        blo, bhi = np.minimum(o, end).min(axis=0) - seal, np.maximum(o, end).max(axis=0) + seal
+        cand = np.nonzero(((thi >= blo) & (tlo <= bhi)).all(axis=1))[0]
+        # each ray against the triangles its own segment's box touches (a long lock's box is most of the
+        # head; one ray's is a sliver of it): Moller-Trumbore on those pairs only
+        rlo, rhi = np.minimum(o, end), np.maximum(o, end)
+        pair = ((thi[cand][None, :, :] >= rlo[:, None, :]) & (tlo[cand][None, :, :] <= rhi[:, None, :])).all(axis=2)
+        ri, ci = np.nonzero(pair)
+        gi = cand[ci]
+        po, pd = o[ri], d[ri]
+        ca, c1, c2 = a[gi], e1[gi], e2[gi]
+        h = np.cross(pd, c2)
+        det = (c1 * h).sum(axis=1)
+        ok = np.abs(det) > 1e-14
+        inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+        sv = po - ca
+        u = (sv * h).sum(axis=1) * inv
+        q = np.cross(sv, c1)
+        v = (pd * q).sum(axis=1) * inv
+        tp = (c2 * q).sum(axis=1) * inv
+        good = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (tp > 1e-7) & (tp <= cap) & (gi != idx[ri])
+        hit = np.zeros(pair.shape, dtype=bool)
+        hit[ri, ci] = good                                          # (never the face the ray starts on)
+        t = np.full(pair.shape, np.inf)
+        t[ri, ci] = np.where(good, tp, np.inf)
+        leaving = np.zeros(pair.shape, dtype=bool)                  # out through a wall: one shell fewer
+        leaving[ri, ci] = (pd * nrm[gi]).sum(axis=1) > 0.0
+        # how many of the group's shells the ray starts inside: what it leaves less what it enters (a shell
+        # it is inside is one it leaves once more than it enters); 1 is its own, more and the face is buried
+        group = hit & (cand[None, :] < own)
+        inside = np.maximum((group & leaving).sum(axis=1) - (group & ~leaving).sum(axis=1), 1)
+        width = min(t.shape[1], 40)
+        order = np.argsort(t, axis=1)[:, :width]
+        ts = np.take_along_axis(t, order, axis=1)
+        step = np.where(np.isfinite(ts), np.where(np.take_along_axis(leaving, order, axis=1), -1, 1), 0)
+        depth = 1 + np.cumsum(step, axis=1)
+        gone = (depth <= 0) & np.isfinite(ts)
+        if seal > 0.0 and ts.shape[1] > 1:
+            # (out of everything, but back in something within ``seal``: not out)
+            nxt = np.concatenate([ts[:, 1:], np.full((len(ts), 1), np.inf)], axis=1)
+            gone &= ~(np.isfinite(nxt) & (nxt <= ts + seal))
+        where = np.argmax(gone, axis=1)
+        thick = np.where(gone.any(axis=1), ts[np.arange(len(ts)), where], cap)
+        surface = inside == 1
+        if seal > 0.0:
+            # a face that looks into a gap the print seals (another shell begins within ``seal`` of it) is
+            # not surface either: a short ray OUT of the face, against the same triangles
+            back = o - seal * d
+            slo, shi = np.minimum(o, back), np.maximum(o, back)
+            sp = ((thi[cand][None, :, :] >= slo[:, None, :]) & (tlo[cand][None, :, :] <= shi[:, None, :])).all(axis=2)
+            si, sj = np.nonzero(sp)
+            g2 = cand[sj]
+            qo, qd = o[si], -d[si]
+            h2 = np.cross(qd, e2[g2])
+            det2 = (e1[g2] * h2).sum(axis=1)
+            ok2 = np.abs(det2) > 1e-14
+            inv2 = np.where(ok2, 1.0 / np.where(ok2, det2, 1.0), 0.0)
+            s2 = qo - a[g2]
+            u2 = (s2 * h2).sum(axis=1) * inv2
+            q2 = np.cross(s2, e1[g2])
+            v2 = (qd * q2).sum(axis=1) * inv2
+            t2 = (e2[g2] * q2).sum(axis=1) * inv2
+            enters = (ok2 & (u2 >= 0) & (v2 >= 0) & (u2 + v2 <= 1) & (t2 > 1e-7) & (t2 <= seal)
+                      & ((qd * nrm[g2]).sum(axis=1) < 0.0) & (g2 != idx[si]))
+            faced = np.zeros(len(o), dtype=bool)
+            np.logical_or.at(faced, si[enters], True)
+            surface &= ~faced
+        out[name] = (thick[surface], w[surface])
+    return out
+
+
 def _share_below(t, w, limit: float) -> float:
     tot = float(w.sum())
     return float(w[t < limit].sum()) / tot if tot > 0 else 0.0
@@ -728,9 +864,13 @@ def _geometry(shells, body: Solid, link_cache: dict, rules: PrintRules) -> _Geom
         names = [n for n, _ in items]
         solids = [Solid(m) for _, m in items]
         zmin[g] = min(float(m.vertices[:, 2].min()) for _, m in items)
-        roots = [k for k, n in enumerate(names) if piece_of(n) in ROOT_PIECES] \
-            or [k for k, n in enumerate(names) if piece_of(n) != COLLAR_PIECE] \
-            or list(range(len(names)))
+        roots = [k for k, n in enumerate(names) if piece_of(n) in ROOT_PIECES]
+        if not roots:
+            roots = [k for k, n in enumerate(names) if piece_of(n) != COLLAR_PIECE] or list(range(len(names)))
+            if len(roots) > ROOT_SAMPLE:
+                # an appendage of many like pieces (a head of hair): the weld is judged by the BEST-buried
+                # root, so a sample of them bounds it from below; measuring all 80 is 5 s for the same answer
+                roots = roots[::-(-len(roots) // ROOT_SAMPLE)]
         root_share[g] = _root_embedding(items, roots, body, rules)
         # the links of a group are shape-only, so a mirrored twin may share them -- but a
         # different pose or placement of the same pieces must not: the signature carries the
@@ -749,7 +889,19 @@ def _geometry(shells, body: Solid, link_cache: dict, rules: PrintRules) -> _Geom
                      root_share, zmin, crossings)
 
 
-def _thickness(shells, rest, rules: PrintRules) -> _Thickness:
+def _thickness(shells, rest, rules: PrintRules, fused=(), body: Mesh | None = None,
+               seal: float = 0.0) -> _Thickness:
+    if fused and body is not None:
+        # shells that lie on the body and one another: measured as part of the printed solid
+        lying = [(n, m) for n, m in shells if group_of(n) in fused and piece_of(n) != COLLAR_PIECE]
+        free = [(n, m) for n, m in shells if group_of(n) not in fused]
+        th = _thickness(free, rest, rules)
+        by_group: dict = {}
+        for n, m in lying:
+            by_group.setdefault(group_of(n), []).append((n, m))
+        for items in by_group.values():
+            th.rest.update(fused_thickness_samples(items, body, rules.rays_per_shell, seal=seal))
+        return th
     rest_by = dict(rest)
     seen: dict = {}                     # a mirrored twin has the same samples
     out_rest, out_posed = {}, {}
@@ -779,13 +931,13 @@ def _memo(cache: dict, key, make):
 
 
 def _measure(app, base, verts, body_solid: Solid, bkey: str, rules: PrintRules,
-             cache: dict, link_cache: dict):
+             cache: dict, link_cache: dict, fused=(), seal: float = 0.0):
     """``(geometry, thickness, kind, params, scale)`` of one appendage, from the cache when
     it has been measured on this body (geometry) / in this shape (thickness)."""
     if pp.ready_made_shells(app) is not None:        # ready-made meshes, MakeHuman frame
         shells = pp.appendage_print_shells([app])
-        return (_geometry(shells, body_solid, link_cache, rules), _thickness(shells, [], rules),
-                None, {}, 1.0)
+        return (_geometry(shells, body_solid, link_cache, rules),
+                _thickness(shells, [], rules, fused, body_solid.mesh, seal), None, {}, 1.0)
     key = spec_key(app)
     rest_app = rest_version(app)
     built: dict = {}
@@ -807,7 +959,7 @@ def _measure(app, base, verts, body_solid: Solid, bkey: str, rules: PrintRules,
 def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0, *,
                      body=None, levels: int = 0, figure_shells=None,
                      rules: PrintRules | None = None, cache: dict | None = None,
-                     min_thickness_mm=None, assembly=None, body_verts=None) -> PrintabilityReport:
+                     min_thickness_mm=None, assembly=None, body_verts=None, fused=()) -> PrintabilityReport:
     """The printability report of ``appendages`` on the body ``verts``, at ``mm_per_unit``.
 
     ``body_verts`` (default ``verts``) are the vertices the printed body is MESHED from: the
@@ -822,6 +974,10 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
     export uses -- and the report names what changed. ``assembly`` is the
     :class:`printprep.PrintReport` of the export, for the base overhang.
 
+    ``fused`` names the appendages (the group part of their shells' names: ``hair-1``) whose shells LIE ON
+    the body and on one another (hair's locks, scattered scales: ``Kind.fused``): their thickness is that of
+    the printed solid behind their surface (:func:`fused_thickness_samples`), not of each shell alone.
+
     ``cache`` is a dict the caller keeps between calls. Thickness is measured once per
     appendage (on the unposed shape, in scene units), connectivity once per appendage and
     body; a different print size or different thresholds re-use both. Cost: a bat wing pair
@@ -830,6 +986,7 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
     """
     rules = DEFAULT_RULES if rules is None else rules
     cache = {} if cache is None else cache
+    fused = frozenset(fused or ())
     apps = list(appendages)
     adjustments = []
     if min_thickness_mm is not None:
@@ -851,7 +1008,8 @@ def appendage_report(appendages, base=None, verts=None, mm_per_unit: float = 1.0
     analyses = []
     for app in apps:
         geo, th, kind, params, scale = _measure(app, base, verts, body_solid, bkey, rules,
-                                                cache, link_cache)
+                                                cache, link_cache, fused,
+                                                rules.seal_gap_mm / max(float(mm_per_unit), 1e-9))
         mapping = {}
         for g in dict.fromkeys(group_of(n) for n, _ in geo.shells):
             new, k = g, 2

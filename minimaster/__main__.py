@@ -640,8 +640,8 @@ def main(argv: list[str] | None = None) -> int:
             figure = list(shells)
             app_shells = []
             if placed:
-                # one named shell per rig piece for a wing (the unit the printability
-                # report names), one per tail/horn; MakeHuman frame in, Z-up out
+                # one named shell per rig piece for a wing or per part of hair / a scatter (the unit
+                # the printability report names), one per tail/horn; MakeHuman frame in, Z-up out
                 # (a tail's root collar is one more piece of its group: unioned with the tail
                 # by the slicer, counted in the connection and the gate, not in the weld or the
                 # thickness of the appendage)
@@ -652,14 +652,7 @@ def main(argv: list[str] | None = None) -> int:
                         enabled=seam == "collar"):
                     collars.setdefault(owner.name, []).append((cname, cmesh))
                 for p in placed:
-                    if p.rig is not None:
-                        ctl = dict(p.controls)
-                        preset = ctl.pop("preset", None)
-                        app_shells.append([(f"{p.name}/{n}", m)
-                                           for n, m in p.rig.piece_meshes(preset, **ctl)]
-                                          + collars.get(p.name, []))
-                    else:
-                        app_shells.append([(p.name, p.mesh())] + collars.get(p.name, []))
+                    app_shells.append(p.shells() + collars.get(p.name, []))
                 shells = shells + printprep.appendage_print_shells(app_shells)
             mesh, rep = printprep.assemble_character(
                 shells, size=args.size, height=args.height,
@@ -678,7 +671,8 @@ def main(argv: list[str] | None = None) -> int:
                 reference=printprep.FIGURE_SHELLS)
             prep = print_report.appendage_report(
                 app_shells, base, body_verts, mm_per_unit, levels=args.subdivide,
-                figure_shells=figure, assembly=rep, body=figure[0][1])
+                figure_shells=figure, assembly=rep, body=figure[0][1],
+                fused=[p.name for p in placed if p.kind.fused])
             report_text = prep.as_text()
             blocked = bool(prep.blocking)
         if blocked and not args.force:

@@ -25,11 +25,14 @@ assets = pytest.mark.skipif(not mh.available(), reason="CC0 MakeHuman assets not
 
 # -- parameters ---------------------------------------------------------------------
 
-def test_the_four_kinds_keep_their_ids():
-    assert set(K.KINDS) == {"wing", "tail", "horn", "harvest"}
-    # creature_anatomy keys its consequences by these ids; renaming one would disable them
+def test_the_kinds_keep_their_ids():
+    assert set(K.KINDS) == {"wing", "tail", "horn", "harvest", "hair", "scatter"}
+    # creature_anatomy keys its consequences by these ids; renaming one would disable them.  The kinds that
+    # cover the skin (hair, a scatter) grow from it and ask nothing of the skeleton: no consequences
     from minimaster.character import creature_anatomy as ca
-    assert set(K.KINDS) == set(ca.CONSEQUENCES)
+    surface = {k for k, kind in K.KINDS.items() if kind.fused}
+    assert surface == {"hair", "scatter"}
+    assert set(K.KINDS) - surface == set(ca.CONSEQUENCES)
     assert {k for k, kind in K.KINDS.items() if kind.paired} == set(ca.PAIRED_KINDS)
 
 

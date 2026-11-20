@@ -1681,14 +1681,10 @@ class Engine:
             for placed in built.placed:
                 if check:
                     check()
-                ctl = dict(self.side_controls(spec, placed))
-                if placed.rig is not None:
-                    preset = ctl.pop("preset", None)
-                    app_shells.append([(f"{placed.name}/{n}", m)
-                                       for n, m in placed.rig.piece_meshes(preset, **ctl)]
-                                      + collars.get(placed.name, []))
-                else:
-                    app_shells.append([(placed.name, placed.mesh())] + collars.get(placed.name, []))
+                # one named shell per rig piece (a wing) or per part (hair's locks, scattered scales): the
+                # units the printability report names; one shell for a tail, a horn, a limb
+                app_shells.append(placed.shells(self.side_controls(spec, placed))
+                                  + collars.get(placed.name, []))
         if app_shells:
             shells = shells + printprep.appendage_print_shells(app_shells)
         try:
@@ -1706,7 +1702,8 @@ class Engine:
                                                  reference=printprep.FIGURE_SHELLS)
             prep = print_report.appendage_report(
                 app_shells, res.base, verts, mm_per_unit, levels=levels, figure_shells=figure,
-                assembly=rep, cache=self.report_cache, body_verts=shaped.verts, body=figure[0][1])
+                assembly=rep, cache=self.report_cache, body_verts=shaped.verts, body=figure[0][1],
+                fused=[p.name for _, built in builts for p in built.placed if p.kind.fused])
             report_text = prep.as_text()
             blocked = bool(prep.blocking)
         result = ExportResult(Path(path) if path else None, False, blocked, report_text,

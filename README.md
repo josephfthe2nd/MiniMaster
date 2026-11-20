@@ -339,6 +339,18 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   instead of a point 0.04-0.07 mm across, so the printability report no longer warns about it
   (`tip_radius=0` is the old point). See the T3 section of
   [docs/appendages_system_design.md](docs/appendages_system_design.md).
+* **Hair and scatter: a strand system and a particle system.** `--add hair:style=swept_back,length=2`
+  grows about 80 locks from the scalp and combs them into one of six patterns (`natural`, `swept_back`,
+  `centre_part`, `side_part`, `spiky`, `mohawk`; length, volume, fall, wave, curl, fringe and colour are
+  separate numbers); they lie on the head and drape over the shoulders and the back, each a closed shell
+  sunk into the skin over an undercoat. `--add scatter:item=scale,region=shoulders` stands instances on
+  points spread over a region of the skin: `feather` (a tract on the back, between the wings), `scale`,
+  `spike` and `plate` (rows down the spine), `stud`, `tuft` (fur). Both ride the body's morphs, are the
+  same on every run (no random state), are mirror images left and right, and are measured by the
+  printability report as part of the printed solid, not as free walls. See
+  [docs/hair_scatter.md](docs/hair_scatter.md).
+
+  ![hair](docs/images/hair_bodies.png)
 * **The skin flows into the roots.** Where an appendage enters the body the skin is moulded around it
   (a fillet that rises up the root, a scapular mass behind a wing's arm ...) instead of the shell simply
   overlapping the skin: `junction.py`, on by default, off with `--no-junction`. See

@@ -168,6 +168,7 @@ PRESET_POINTS = {
     "lower_arms": (1.305, 3.09, 0.443),      # the lateral flank over the lower ribs, 0.85 upper-arm lengths below the shoulder
     "upper_arms": (1.499, 5.356, -0.485),    # the back of the shoulder over the scapular spine (a fan pair shares the primary shoulder)
     "extra_legs": (1.138, 1.95, -0.132),     # the posterolateral pelvis at the iliac crest (a second hip girdle)
+    "hair_crown": (0.08, 8.58, 0.52),        # the top of the head, beside the midline (where a head of hair is "at")
 }
 PRESET_FACES = {
     "shoulder_blades": 10296,
@@ -179,6 +180,7 @@ PRESET_FACES = {
     "lower_arms": 10351,
     "upper_arms": 10747,
     "extra_legs": 10524,
+    "hair_crown": 7343,           # the +x quad beside the midline on top of the head
 }
 # the quads and the sinks the first versions of the extra-limb presets stored (a quad on the front of
 # the flank, the limb sunk 1.8-2.6 units along its own axis): a record that still has them is read
@@ -346,6 +348,8 @@ class Placed:
     root_depth: float = 0.0        # how far the root is sunk below the skin (units): the junction
                                    # takes the centreline from there to a few fillet widths out
     model: object = None           # a kind's own anatomy (a tailrig.PlacedTail for a tail)
+    parts: list | None = None      # [(piece, Mesh)] of a kind built of many closed shells (hair's locks,
+                                   # scattered scales): what it prints as, ``static`` being all of them merged
     _junctions: dict = field(default_factory=dict, repr=False, compare=False)   # controls -> spec
 
     def mesh(self, controls: dict | None = None) -> Mesh:
@@ -390,6 +394,19 @@ class Placed:
                 spec = spec.with_(shell=J.ShellRef(lambda self=self, ctl=ctl: self.mesh(ctl)))
             self._junctions[key] = spec
         return self._junctions[key]
+
+    def shells(self, controls: dict | None = None) -> list:
+        """``[(shell name, Mesh)]``: the closed shells this appendage is printed as (MakeHuman frame), under
+        ``controls`` (default: the spec's own for this side).  One per rig piece for a wing
+        (``wing-1.l/arm``), one per part for a kind built of many (``hair-1/lock012``), else the one mesh
+        under the appendage's name.  These are the units a printability report names."""
+        if self.rig is not None:
+            ctl = dict(self.controls if controls is None else controls)
+            preset = ctl.pop("preset", None)
+            return [(f"{self.name}/{n}", m) for n, m in self.rig.piece_meshes(preset, **ctl)]
+        if self.parts:
+            return [(f"{self.name}/{n}", m) for n, m in self.parts]
+        return [(self.name, self.mesh())]
 
     @property
     def joint_prefix(self) -> str:
@@ -478,6 +495,9 @@ class Kind:
     fillet_default = 1.0               # the ``fillet`` parameter's default (width, in root radii)
     fillet_height = 0.6                # how high the skin climbs the root, over the fillet width
     junction_owner = None              # the part of the body the root belongs to (junction.JunctionSpec.owner)
+    fused = False                      # do its shells lie ON the body and one another (hair, scattered scales)?
+                                       # Then a print's thickness there is the solid's, not each shell's alone
+                                       # (print_report.fused_thickness_samples)
 
     # -- parameters ---------------------------------------------------------------------
 
@@ -2335,6 +2355,239 @@ class HarvestKind(_NumericControls, Kind):
 _MATERIALS: dict = {}
 
 
+# --------------------------------------------------------------------------
+# hair and scatter: things that grow from MANY points of the skin (scatter.py, strands.py, hair.py)
+
+HAIR_COLORS = {"brown": "#3b2a1e", "black": "#1b1614", "chestnut": "#5c3521", "blonde": "#b59657",
+               "red": "#8c3c1d", "grey": "#8b8884", "white": "#d8d5ce"}
+
+
+class _SurfaceKind(Kind):
+    """A kind that covers a region of the skin instead of standing on one root: no junction, no collar, no
+    weld, no pose; one record, both sides of the body (the region is symmetric)."""
+
+    default_side = "center"
+    allowed_sides = ("center",)
+    placement_keys = ()
+    fused = True
+
+    def side_hint(self, side):
+        return (f"{self.id} covers a region of the body, both sides at once: its side is 'center' "
+                f"(not {side!r})")
+
+    def sides(self, spec):
+        return "center"
+
+    def _placed(self, spec, values, pieces, anchor) -> list:
+        from ..core.mesh import Mesh as _Mesh
+        if not pieces:
+            raise SpecError("nothing could be grown there (the region is empty on this body)")
+        return [Placed(name=spec.id, spec_id=spec.id, kind=self, side="", anchor=np.asarray(anchor, dtype=float),
+                       matrix=None, params=values, controls={},
+                       static=_Mesh.merge([m for _, m in pieces]), parts=list(pieces))]
+
+
+def _hair_lengths() -> tuple:
+    per = {"natural": 1.0, "swept_back": 0.9, "centre_part": 2.4, "side_part": 0.7, "spiky": 0.5, "mohawk": 1.0}
+    return tuple(ParamSpec("length", "Length", "float", v, 0.1, 7.0, 0.1, when=("style", (k,)),
+                           help="how long a lock is, in body units (the head is about 2.2 tall): 0.3 cropped, "
+                                "1 to the jaw, 2.5 to the shoulders, 5 to the waist")
+                 for k, v in per.items())
+
+
+class HairKind(_SurfaceKind):
+    """Head hair: locks grown from the scalp and combed into a style (hair.py)."""
+
+    id = "hair"
+    label = "Hair"
+    presets = {"scalp": {"label": "Scalp", "face": "hair_crown", "side": "center"}}
+    params = (
+        ParamSpec("style", "Style", "choice", "natural",
+                  choices=("natural", "swept_back", "centre_part", "side_part", "spiky", "mohawk"), essential=True,
+                  help="the comb pattern: natural (falls from the crown, with a fringe), swept back, parted "
+                       "in the middle or at the side, spiky, or a mohawk crest"),
+        *_hair_lengths(),
+        ParamSpec("locks", "Locks", "int", 80, 12, 240, 1,
+                  help="how many locks the hair is made of. A lock is the smallest thing a print holds: at "
+                       "32 mm about 80 cover the head; more are finer and need a bigger figure"),
+        ParamSpec("width", "Lock width", "float", 0.30, 0.10, 0.80, 0.01),
+        ParamSpec("thickness", "Lock thickness", "float", 0.17, 0.06, 0.40, 0.01,
+                  help="0.17 is 0.3 mm on a 32 mm figure, the thinnest a resin print holds safely"),
+        ParamSpec("volume", "Volume", "float", 0.3, 0.0, 1.0, 0.05,
+                  help="how far the hair stands off the head"),
+        ParamSpec("droop", "Fall", "float", 2.5, 0.0, 6.0, 0.1,
+                  help="how quickly a lock turns towards the ground: 0 stands straight out, 2.5 falls like "
+                       "hair, 5 hangs like wet hair"),
+        ParamSpec("wave", "Wave", "float", 0.0, 0.0, 0.25, 0.01),
+        ParamSpec("curl", "Curl", "float", 0.0, 0.0, 0.20, 0.01),
+        ParamSpec("fringe", "Fringe", "float", 0.8, 0.0, 1.6, 0.05, when=("style", ("natural",)),
+                  help="where the hair combed forwards is cut: 1 at the brows, less is shorter, 0 none"),
+        ParamSpec("undercoat", "Undercoat", "bool", True,
+                  help="a thin layer of hair over the whole scalp under the locks, so no skin shows between "
+                       "them and every lock has something to fuse to in a print"),
+        ParamSpec("color", "Colour", "choice", "brown", choices=tuple(HAIR_COLORS)),
+        ParamSpec("seed", "Variation", "int", 0, 0, 999, 1,
+                  help="another arrangement of the same hair"),
+    )
+
+    def material(self, params):
+        return material_named("hair:" + str(params.get("color", "brown")))
+
+    def build(self, spec, side, values, build_values, pl, ctx):
+        from . import hair as HR
+        v = build_values
+        r = HR.build_hair(ctx.base, ctx.verts, lib=ctx.lib, style=v["style"], length=v["length"],
+                          locks=v["locks"], width=v["width"], thickness=v["thickness"], volume=v["volume"],
+                          droop=v["droop"], wave=v["wave"], curl=v["curl"], fringe=v.get("fringe", 0.8),
+                          seed=v["seed"], cap=v["undercoat"])
+        return self._placed(spec, values, r["pieces"], r["anchor"])
+
+
+# per item: region, count, size (length), aspect (width over length), thickness, lift (degrees off the skin),
+# how deep the root is sunk (in thicknesses for the flat items, in widths for the round ones), material
+_SCATTER = {
+    "feather": dict(region="upper_back", count=44, size=0.95, aspect=0.50, thickness=0.17, lift=7.0,
+                    sink=0.55, material="feathered", flat=True),
+    "scale":   dict(region="back", count=150, size=0.42, aspect=0.95, thickness=0.17, lift=5.0,
+                    sink=0.60, material="skin", flat=True),
+    "spike":   dict(region="spine", count=9, size=0.75, aspect=0.45, thickness=0.17, lift=72.0,
+                    sink=0.35, material="bone", flat=False),
+    "plate":   dict(region="spine", count=7, size=0.95, aspect=0.85, thickness=0.20, lift=80.0,
+                    sink=0.20, material="bone", flat=False),
+    "stud":    dict(region="shoulders", count=40, size=0.12, aspect=2.0, thickness=0.17, lift=90.0,
+                    sink=0.20, material="skin", flat=False),
+    "tuft":    dict(region="forearms", count=110, size=0.42, aspect=0.50, thickness=0.17, lift=18.0,
+                    sink=0.40, material="hair:brown", flat=True),
+}
+_SCATTER_COLORS = ("auto", "skin", "bone", "feathered", "dragon", "hair")
+
+
+def _scatter_specs() -> tuple:
+    from . import scatter as SC
+    regions = tuple(r for r in SC.region_names())
+    out = []
+    for key, label, typ, lo, hi, step, hlp in (
+            ("region", "Region", "choice", None, None, None, "the part of the skin they cover"),
+            ("count", "Count", "int", 1, 400, 1, "how many (both sides together)"),
+            ("size", "Size", "float", 0.05, 3.0, 0.01, "the length of one, in body units"),
+            ("aspect", "Width", "float", 0.1, 3.0, 0.01, "its width over its length"),
+            ("thickness", "Thickness", "float", 0.05, 0.6, 0.01,
+             "0.17 is 0.3 mm on a 32 mm figure, the thinnest a resin print holds safely"),
+            ("lift", "Lift", "float", 0.0, 90.0, 1.0, "degrees it stands off the skin")):
+        for item, d in _SCATTER.items():
+            if key == "region":
+                out.append(ParamSpec(key, label, "choice", d[key], choices=regions, when=("item", (item,)), help=hlp))
+            else:
+                out.append(ParamSpec(key, label, typ, d[key], lo, hi, step, when=("item", (item,)), help=hlp))
+    return tuple(out)
+
+
+class ScatterKind(_SurfaceKind):
+    """Instances scattered over a region of the skin: a feather tract, scales, a row of spikes or plates
+    down the spine, studs, tufts of fur (scatter.py; the tufts are strands.py's locks)."""
+
+    id = "scatter"
+    label = "Scatter"
+    presets = {"region": {"label": "Region", "face": "shoulder_blades", "side": "center"}}
+    params = (
+        ParamSpec("item", "Item", "choice", "feather", choices=tuple(_SCATTER), essential=True,
+                  help="what is scattered: feathers, scales, spikes, dorsal plates, studs or tufts of fur"),
+        *_scatter_specs(),
+        ParamSpec("vary", "Variation", "float", 0.3, 0.0, 1.0, 0.05,
+                  help="how much they differ in size and direction (0: all alike)"),
+        ParamSpec("grade", "Grading", "float", 0.5, 0.0, 1.0, 0.05, when=("item", ("spike", "plate")),
+                  help="along the spine: 0 all one size, 1 tall in the middle of the row and small at its ends"),
+        ParamSpec("color", "Material", "choice", "auto", choices=_SCATTER_COLORS,
+                  help="auto: feathers as the wing's feathers, scales and studs as the skin, spikes and plates "
+                       "as horn, tufts as hair"),
+        ParamSpec("seed", "Arrangement", "int", 0, 0, 999, 1),
+    )
+
+    def material(self, params):
+        name = str(params.get("color", "auto"))
+        if name == "auto":
+            name = _SCATTER.get(params.get("item", "feather"), _SCATTER["feather"])["material"]
+        return material_named("hair:brown" if name == "hair" else name)
+
+    def draft_params(self, values):
+        return {"count": min(int(values.get("count", 40)), 60)}
+
+    def build(self, spec, side, values, build_values, pl, ctx):
+        from . import hair as HR
+        from . import scatter as SC
+        from . import strands as ST
+        v = build_values
+        item, region = v["item"], v["region"]
+        cfg = _SCATTER[item]
+        bv, bq = ctx.cage
+        bv = np.asarray(bv, dtype=np.float64)
+        line = region == "spine"
+        if line:
+            samples = SC.emit_line(ctx.base, region, int(v["count"]), lib=ctx.lib)
+        else:
+            samples = SC.emit(ctx.base, region, int(v["count"]), seed=int(v["seed"]), lib=ctx.lib, symmetric=True)
+        if not len(samples):
+            raise SpecError(f"the region {region!r} is empty on this body")
+        P, N = samples.positions(bv), samples.normals(SC.vertex_normals(bv, bq))
+        T = SC.region_flow(ctx.base, ctx.verts, region, P, N)
+        n = len(P)
+        idx = np.arange(n)
+        # the two of a mirrored pair vary alike: a point and its mirror image are told by their place on the
+        # unmorphed base (which is symmetric to rounding; the neutral body is only nearly so)
+        rest = samples.positions(ctx.base.body_cage(None)[0])
+        pair = idx if line else np.unique(np.round(np.abs(rest), 7), axis=0, return_inverse=True)[1].reshape(-1)
+        right = rest[:, 0] < -1e-9
+        side_sign = np.where(right, -1.0, np.where(rest[:, 0] > 1e-9, 1.0, 0.0))      # (0: on the midline)
+        vary, seed = float(v["vary"]), int(v["seed"])
+        size = float(v["size"]) * (1.0 + vary * 0.5 * (HR._hash01(pair, 5 + seed) - 0.5))
+        if line:
+            u = (idx + 0.5) / n
+            size = size * (1.0 - float(v.get("grade", 0.5)) * (1.0 - np.sin(np.pi * u ** 0.8) ** 0.8))
+        thick = float(v["thickness"])
+        lift = float(v["lift"]) + vary * 14.0 * (HR._hash01(pair, 7 + seed) - 0.5) * (0.0 if line else 1.0)
+        yaw = None if line else vary * 26.0 * (HR._hash01(pair, 9 + seed) - 0.5) * side_sign
+        from .appendages import SkinProbe
+        reach = float(np.linalg.norm(P - P.mean(axis=0), axis=1).max()) + float(size.max()) + 1.0
+        probe = SkinProbe(np.eye(4), bv, bq, P.mean(axis=0), reach)
+        pieces = []
+        if item == "tuft":
+            growth = ST.Growth(segments=6, lift=float(v["lift"]), droop=1.6,
+                               clearance=max(ST.UNDER * thick - 0.05, 0.0))
+            if yaw is not None:
+                a = np.radians(yaw)[:, None]
+                T = np.cos(a) * T + np.sin(a) * np.cross(N, T)
+            paths, ups, height = ST.grow(P, N, T, size, growth, probe)
+            shape = ST.LockShape(width=float(v["aspect"]) * float(v["size"]), thickness=thick,
+                                 sink=cfg["sink"] * thick, tip=0.15)
+            meshes = ST.lock_meshes(paths, ups, shape, width=float(v["aspect"]) * size, root_normals=N,
+                                    free=ST.free_of_skin(height, thick))
+        elif cfg["flat"]:
+            # flat things lie ON the skin, bent over it (scatter.wrap); a smaller one is not a thinner one
+            # (the thickness is the print's floor), so each size is its own mesh
+            width = float(v["aspect"])
+            units = [SC.item_mesh(item, float(z), width * float(z), thick, symmetric=bool(mid))
+                     for z, mid in zip(size, side_sign == 0.0)]
+            meshes = SC.wrap(units, P, SC.instance_frames(P, N, T, 0.0, yaw, mirror=right), probe, lift,
+                             cfg["sink"] * thick)
+        else:
+            frames = SC.instance_frames(P, N, T, lift, yaw, roll=np.full(n, 90.0) if item == "plate" else None)
+            unit = SC.item_mesh(item, float(v["size"]), float(v["aspect"]) * float(v["size"]), thick)
+            sink = cfg["sink"] * (size if item == "plate" else float(v["aspect"]) * size)
+            origin = P - sink[:, None] * N
+            meshes = [SC.place(unit, origin[i], frames[i], float(size[i] / float(v["size"]))) for i in range(n)]
+        if not line and A._is_symmetric(ctx.base, bv):
+            # on a symmetric body the right side IS the left side's mirror image: the skin is read once (two
+            # readings of one skin differ by a hair where the nearest quad is a toss-up, round 8)
+            from ..core.mesh import Mesh as _Mesh
+            twin = {int(k): i for i, k in enumerate(pair) if side_sign[i] > 0}
+            for i in np.nonzero(right)[0]:
+                j = twin.get(int(pair[i]))
+                if j is not None:
+                    meshes[i] = _Mesh(meshes[j].vertices * np.array([-1.0, 1.0, 1.0]), meshes[j].faces[:, ::-1].copy())
+        pieces = [(f"i{i:03d}", m) for i, m in enumerate(meshes)]
+        return self._placed(spec, values, pieces, P.mean(axis=0))
+
+
 def material_named(name: str):
     """The :class:`~minimaster.character.shading.Material` a kind renders with (``skin``,
     ``bone``, or a wing style). Built on first use so importing this module stays cheap."""
@@ -2350,6 +2603,9 @@ def material_named(name: str):
                                f0=0.035, wrap=0.40, scatter="#8a3b2c", rim=0.26),
             feathered=sh.Material(base_color="#cdc4b6", roughness=0.55, specular=0.42,
                                   f0=0.040, wrap=0.26, scatter="#9a8f80", rim=0.20))
+        for color, rgb in HAIR_COLORS.items():
+            _MATERIALS["hair:" + color] = sh.Material(base_color=rgb, roughness=0.50, specular=0.38, f0=0.045,
+                                                     wrap=0.22, rim=0.30)
     return _MATERIALS.get(name, _MATERIALS["skin"])
 
 
@@ -2367,7 +2623,7 @@ def register(kind: Kind) -> Kind:
     return kind
 
 
-for _k in (WingKind(), TailKind(), HornKind(), HarvestKind()):
+for _k in (WingKind(), TailKind(), HornKind(), HarvestKind(), HairKind(), ScatterKind()):
     register(_k)
 del _k
 
