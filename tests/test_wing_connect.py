@@ -246,8 +246,8 @@ def test_the_sheets_inner_edge_is_under_the_skin_all_along(world, body, style):
 @pytest.mark.parametrize("body", list(BODIES))
 def test_the_sheet_leaves_the_back_in_a_fillet(world, body):
     """A blade stood on the back, 0.17-0.21 thick where it met the skin.  Each face leaves the sheet's plane along
-    a quarter circle now: the sheet is 0.22-0.40 thick where its middle meets the skin on the four middle columns
-    of the edge (their median 0.32-0.36; the fillet runs out toward the waist corner and the shoulder), and under
+    a quarter circle now: the sheet is 0.22-0.41 thick where its middle meets the skin on the four middle columns
+    of the edge (their median 0.29-0.35; the fillet runs out toward the waist corner and the shoulder), and under
     the skin it is four to five times its own thickness (the lip, which is the figure's own flesh once the shells are joined).  (A small
     fillet: the faces still cross the skin at 55-65 degrees, against the blade's 68-82.  A larger one, 0.14 of the
     wing's scale for 0.10, notched the line where the sheet meets the back.)"""
@@ -262,7 +262,7 @@ def test_the_sheet_leaves_the_back_in_a_fillet(world, body):
         assert i > 0 and d[i] < 0.0, (c, np.round(d, 2))
         t = d[i - 1] / (d[i - 1] - d[i])
         at_skin.append(thick[i - 1, c] + t * (thick[i, c] - thick[i - 1, c]))
-    assert np.median(at_skin) > 0.29, np.round(at_skin, 2)       # a7f84cd: 0.17 .. 0.21
+    assert np.median(at_skin) > 0.26, np.round(at_skin, 2)       # a7f84cd: 0.17 .. 0.21
     assert thick[:, cols].max() > 3.0 * 0.22 * (0.8 if body == "child" else 1.0)
 
 
@@ -272,8 +272,9 @@ def test_the_sheet_leaves_the_back_in_a_fillet(world, body):
 def test_no_lip_of_the_fillet_comes_back_out_of_the_skin(world, body, style):
     """What is under the skin stays under it.  A sheet meets the back at a slant, so the face that leans away from
     it is higher over the skin than the sheet's middle: sized by the middle's distance, its lip stood 0.14 over the
-    heavy man's skin and came out of his back in torn flaps (22 vertices of it and more, up to 0.2 out).  Each face
-    is sized by its own height, and a lip the plane-under-each-point estimate still leaves out is drawn in."""
+    heavy man's skin and came out of his back in torn flaps.  Each face is sized by its own height, read from the
+    skin under its own lip.  (With both faces sized by the middle's height -- the mutant -- seven of these eight
+    cases fail.)"""
     f = figure(world, body, style)
     top, bottom, cols = _sheet(f, style)
     near = np.arange(cols[0] - 5, cols[-1] + 1)                    # the root's columns and the corner's
@@ -282,6 +283,55 @@ def test_no_lip_of_the_fillet_comes_back_out_of_the_skin(world, body, style):
     out = np.concatenate([f.distance(top[:, near].reshape(-1, 3))[under],
                           f.distance(bottom[:, near].reshape(-1, 3))[under]])
     assert (out > 0.01).sum() <= 8 and out.max() < 0.09, ((out > 0.01).sum(), out.max())
+
+
+def _thinning_rows(f: Figure, style):
+    """Rows of the sheet's root columns where, coming in toward the skin (the middle between 0.4 over it and 0.1
+    under it), the sheet is a fifth or more THINNER than on the row before."""
+    top, bottom, cols = _sheet(f, style)
+    thick = np.linalg.norm(top - bottom, axis=2)
+    mid = 0.5 * (top + bottom)
+    found = []
+    for c in cols:
+        d = f.distance(mid[:, c])
+        found += [(int(c), i) for i in range(len(d) - 1)
+                  if -0.1 < d[i + 1] < 0.4 and thick[i, c] > 0.3 and thick[i + 1, c] < 0.8 * thick[i, c]]
+    return found
+
+
+@assets
+@pytest.mark.parametrize("body", list(BODIES))
+def test_the_fillet_only_widens_toward_the_skin(world, body):
+    """The first version drew in, vertex by vertex, every lip that still stood out of the skin where the sheet's
+    middle was under it: it took the fillet away row by row, at a different row on every column (the sheet half as
+    thick on one row as on the one before, once or twice a wing) -- notches along the root, and saw teeth on a
+    rolled wing.  The skin under each lip is read instead; toward the skin the sheet only widens."""
+    assert _thinning_rows(figure(world, body, "membrane"), "membrane") == []
+
+
+@assets
+@pytest.mark.parametrize("name", ["wing_hint.mmchar", "wing_offset.mmchar", "wing_dragon_offset.mmchar"])
+def test_an_old_documents_edited_wing_has_no_saw_teeth_at_its_root(world, name):
+    """The documents that change: a wing whose placement a person edited (rolled 95 degrees with a hint, sunk, a
+    sunk dragon's) is fitted to the back like any other -- its edge under the skin all along, its fillet whole."""
+    import pathlib
+    from minimaster.character.sliders import Character
+    base, lib, cat = world
+    c = Character.load(pathlib.Path(__file__).parent / "fixtures" / "wing_c808d60" / name)
+    style = c.appendages[0].params.get("style", "membrane")
+    f = Figure.__new__(Figure)
+    f.verts = lib.apply(base.verts, c.effective_target_weights(cat))
+    f.placed = c.instantiate_appendages(base, f.verts, lib)
+    f.left = next(p for p in f.placed if p.side == "l")
+    f.wing = f.left.rig
+    sv, sf = CO.shaped_skin(base, c.shaped_body(base, f.verts, f.placed), 1)
+    f.skin = WE.Surface(np.asarray(sv), np.asarray(sf), f.left.anchor, 9.0, walk=1)
+    f.V, f.F = np.asarray(f.left.mesh().vertices), np.asarray(f.left.mesh().faces)
+    f.ranges = f.wing.rig.ranges
+    assert _thinning_rows(f, style) == []
+    top, bottom, cols = _sheet(f, style)
+    d = f.distance(0.5 * (top[-1, cols] + bottom[-1, cols]))
+    assert d.max() < -0.04 and d.min() > -0.7, np.round(d, 2)
 
 
 @assets

@@ -1072,7 +1072,6 @@ ROOT_FADE = 3.0
 
 
 ROOT_FOOT = 0.4                 # of a fillet: where a tilted sheet's far lip stands beside its middle
-ROOT_TUCK = 0.12                # of a fillet: how far under the skin a buried lip is drawn
 
 
 def _foot_distance(skin, pts, normal, rho, within=None):
@@ -1158,13 +1157,14 @@ def _root_fillet(grid, thick, skin, bury, rho, weight=None):
     ``weight`` (per column): how much of the fillet a column carries (a free edge hanging beside the body has
     none).
 
-    Each face is sized by ITS OWN height over the skin.  A sheet meets the back at a slant (50-60 degrees on the
-    heavy man), so the face that leans away from the back is higher over it than the sheet's middle by its own
-    lip's width times the cosine of that slant: sized by the middle, its lip stood 0.14 over the skin and came
-    out of the heavy man's back in torn flaps.  With the skin taken as a plane under each point the face's lip
-    ``w`` solves ``w = g(d + c w)`` (``g`` the quarter circle, ``c`` the cosine, + for the face that leans away):
-    one root by bisection for the face that leans away; for the one that leans in, the smallest (it grows from
-    nothing as the sheet nears the skin, and jumps to the full lip only where the face is already under it).
+    Each face is sized by ITS OWN height over the skin (``lip``).  A sheet meets the back at a slant (50-60 degrees
+    on the heavy man), so the face that leans away from the back is higher over it than the sheet's middle by its
+    own lip's width times the cosine of that slant: sized by the middle, its lip stood 0.14 over the skin and came
+    out of the heavy man's back in torn flaps.
+
+    (Tried and dropped: drawing in, vertex by vertex, every lip that still stood out of the skin where the sheet's
+    middle was under it.  It took the fillet away row by row, at a different row on every column: saw teeth along
+    the root of a rolled wing.  Reading the skin under each lip, as ``lip`` does, leaves as few of them out.)
 
     Under the skin the slab keeps its width for ``ROOT_KEEL[0]`` fillets and narrows again over the next
     ``ROOT_KEEL[1]``: what is buried is a keel, not a slab that comes out of the back somewhere else.  (Measuring
@@ -1181,55 +1181,52 @@ def _root_fillet(grid, thick, skin, bury, rho, weight=None):
         x = np.clip(h / rho, 0.0, 1.0)
         return rho * (1.0 - np.sqrt(np.clip(1.0 - (1.0 - x) ** 2, 0.0, 1.0)))
 
-    def lip(c):
-        near = np.isfinite(d)
+    flat, nrm = grid.reshape(-1, 3), grid_normals(grid).reshape(-1, 3)
+    half = 0.5 * np.asarray(thick, dtype=np.float64).reshape(-1)
+
+    def lip(sign):
+        """A face's lip (``sign``: +1 the top face, -1 the bottom).  The face that leans away from the skin: the
+        root of ``w = g(d + c w)`` by bisection, the skin taken as a plane under the sheet's middle -- and then
+        twice more with the plane moved to where the skin IS under the lip (one reading of the skin there each
+        time): a back falls away beside a sheet that runs along a ridge of it, and the plane alone left such lips
+        standing out of the skin.  The face that leans in: by the middle's height (it is nearer the skin than the
+        middle is, so its lip is under the skin when the middle's would be)."""
+        near = np.nonzero(np.isfinite(d))[0]
         w = np.zeros(len(d))
-        if not near.any():
+        if not len(near):
             return w
-        dn, cn = d[near], c[near]
+        dn, cn = d[near], sign * c[near]
         away = cn >= 0.0
-        lo, hi = np.zeros(len(dn)), np.full(len(dn), rho)
-        for _ in range(26):                                         # leaning away: the one root
-            mid = 0.5 * (lo + hi)
-            more = g(dn + cn * mid) >= mid
-            lo, hi = np.where(more, mid, lo), np.where(more, hi, mid)
-        grow = np.zeros(len(dn))
-        for _ in range(60):                                         # leaning in: the smallest, from nothing up
-            grow = g(dn + cn * grow)
-        w[near] = np.where(away, lo, grow)
+
+        def solve(off):
+            lo, hi = np.zeros(len(dn)), np.full(len(dn), rho)
+            for _ in range(26):
+                mid = 0.5 * (lo + hi)
+                more = g(dn + off + cn * mid) >= mid
+                lo, hi = np.where(more, mid, lo), np.where(more, hi, mid)
+            return lo
+
+        wn = solve(np.zeros(len(dn)))
+        for _ in range(2):
+            k = np.nonzero(away & (wn > 1e-6))[0]
+            if not len(k):
+                break
+            at = flat[near[k]] + sign * nrm[near[k]] * (half[near[k]] + wn[k])[:, None]
+            off = np.zeros(len(dn))
+            off[k] = skin.distance(at) + bury - (dn[k] + cn[k] * wn[k])
+            wn = np.where(away, solve(np.maximum(off, 0.0)), wn)
+        w[near] = np.where(away, wn, g(dn))
         return w
 
     keel = np.clip(1.0 + (d / rho + ROOT_KEEL[0]) / ROOT_KEEL[1], 0.0, 1.0)
     keel[~np.isfinite(d)] = 0.0
-    flat, nrm = grid.reshape(-1, 3), grid_normals(grid).reshape(-1, 3)
-    half = 0.5 * np.asarray(thick, dtype=np.float64).reshape(-1)
-
-    def tuck(w, sign):
-        """A lip that still stands out of the skin where the sheet's middle is under it (the back is not a plane:
-        it falls away at a shoulder blade's edge, and the figure's skin is the cage's moulded and rounded) is
-        drawn in until it is ``ROOT_TUCK`` under it too."""
-        sel = np.nonzero(np.isfinite(d) & (d < bury) & (w > 1e-6))[0]
-        if not len(sel):
-            return w
-        out = skin.distance(flat[sel] + sign * nrm[sel] * (half[sel] + w[sel])[:, None]) > 0.0
-        sel = sel[out]                                              # (a lip that is under the skin stays as it is)
-        if not len(sel):
-            return w
-        steps = np.linspace(0.9, 0.0, 10)
-        pts = flat[sel][None] + sign * nrm[sel][None] * (half[sel][None] + steps[:, None] * w[sel][None])[:, :, None]
-        under = skin.distance(pts.reshape(-1, 3)).reshape(len(steps), len(sel)) <= -ROOT_TUCK * rho
-        keep = np.where(under.any(axis=0), steps[np.argmax(under, axis=0)], 0.0)
-        w = w.copy()
-        w[sel] = w[sel] * keep
-        return w
-
     # a column of the sheet that never comes out of the skin (between the arm and the back, next to the shoulder)
     # has nothing to grow out of: no fillet on it (lips a fillet wide, folded through one another inside the body)
     out = np.where(np.isfinite(d), d - bury, np.inf).reshape(shape).max(axis=0)
     shows = np.clip(out / (0.5 * rho), 0.0, 1.0)
     shows = np.broadcast_to((shows * shows * (3.0 - 2.0 * shows))[None, :], shape).reshape(-1)
-    top = tuck(lip(c) * keel * shows, 1.0).reshape(shape)
-    bottom = tuck(lip(-c) * keel * shows, -1.0).reshape(shape)
+    top = (lip(1.0) * keel * shows).reshape(shape)
+    bottom = (lip(-1.0) * keel * shows).reshape(shape)
     if weight is not None:
         top = top * np.asarray(weight, dtype=np.float64)[None, :]
         bottom = bottom * np.asarray(weight, dtype=np.float64)[None, :]
