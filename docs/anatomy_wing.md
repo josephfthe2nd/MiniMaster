@@ -724,3 +724,32 @@ python tools/wing_root_view.py OUT.png "wing" 180,10 140,20 90,5 --layers muscle
 python tools/wing_root_report.py --bodies neutral,child,heavy --styles membrane,dragon --poses "rest;preset=folded"  # incl. the seen join
 minimaster character --add wing --subdivide 2 -o x.png          # the collar needs --subdivide 1 or 2
 ```
+
+## 11. Where the joints go when the wing folds
+
+The humeral head of the feathered wing leaves its socket as the wing closes. The stock wing and the relief
+study use the same rig and shoulder anatomy. The relief covers the arm, so the gap is easiest to see with
+the skin hidden. The membrane and dragon rigs also move the head, but it still touches the socket rim in
+all nine poses sampled from spread to folded on the reference figure.
+
+![The three wings spread, half folded and folded, with their joint positions and an enlarged view of the folded humeral head and socket rim.](images/wing_joint_comparison.png)
+
+| Wing | Folded elbow angle | Folded wrist angle | Head travel from rest | Gap between head and socket rim |
+| --- | ---: | ---: | ---: | ---: |
+| Membrane | 20° | 17° | 0.32 mm | 0 mm |
+| Dragon | 20° | 19° | 0.32 mm | 0 mm |
+| Feathered | 14° | 7° | 1.73 mm | 1.15 mm |
+
+Each measurement uses one left wing on the same body (`gender=1, muscle=0.55`) at the 32 mm figure scale
+of 32 / 17.5 mm per model unit. The angles are the interior angles of the posed shoulder–elbow–wrist chain
+and the elbow–wrist–third metacarpal chain. A straight joint is 180°. Head travel is the distance between
+the rest and posed shoulder centres. The gap is the minimum distance between the modeled humeral head
+from `WingRoot.sleeve_meshes` and the rim from `WingRoot.glenoid`. At half fold the feathered gap is
+already 0.36 mm. The membrane and dragon head and rim meshes intersect at both half and full fold.
+
+The socket rim is built on the shoulder blade at the rest joint. In `WingSkeleton.controls_to_pose`,
+the feathered wing turns about its root to lie against the back. The shoulder is a child of that root,
+so the rotation carries the head away from the fixed rim. Removing only the root rotation from a copy
+of the folded pose returned the head to its rest centre and preserved the elbow and wrist angles on
+the reference, child and heavy bodies. A change to the pivot would also need to preserve the wing's
+clearance against the back.
