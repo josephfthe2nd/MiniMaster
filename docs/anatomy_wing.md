@@ -780,3 +780,31 @@ feather roots also inherit the thumb rotation. With the wing folded, the first t
 lies 0.98, 0.53 and 0.09 mm from the rod, respectively. Each complete feather still overlaps other
 plumage. In a diagnostic copy, binding the rod to the moving thumb (`thumb_tip` in this child-keyed
 rig) kept it in contact with the hand and all three quills at all nine fold settings.
+
+### Folding the relief wing about the shoulder
+
+The lower row turns the upper arm about the glenoid on the blade. The existing rig puts part of
+the rotation on the root, which carries the shoulder sideways. In the experiment the shoulder takes
+the combined rotation of the root and upper arm. The head stays at its rest centre while the elbow,
+wrist and hand keep their orientations. Both rows use the relief wing on the same reference figure.
+
+![Rear and side views of one feathered shoulder at half fold, with the existing pivot above and the seated pivot below.](images/wing_shoulder_pivot.png)
+
+| On a 32 mm figure | Existing half fold | Seated half fold | Existing full fold | Seated full fold |
+| --- | ---: | ---: | ---: | ---: |
+| Gap from humeral head to socket rim | 0.36 mm | 0 mm | 1.15 mm | 0 mm |
+| Clearance from the wrist knob to the body | 6.50 mm | 5.77 mm | 1.22 mm | 0.37 mm |
+
+At all nine sampled folds the head touched the socket, the wing formed a closed solid, and its
+intersection with the body was one connected region at the attachment. At half fold the elbow was
+84° and the wrist 85.9° in both rows. The small line between the modeled humeral head and shaft in
+the side view is a separate 0.02 mm gap in both versions.
+
+The skin transition still needs a closer look at five-eighths fold. The weld guard could fit 61% of
+its ring there and kept the moulded shoulder surface. The wing still overlapped the body at its root.
+Bone and muscle vertices were enclosed by the wing or body at spread, half fold and full fold.
+These measurements cover one reference figure. The pivot lives in the comparison tool.
+
+```
+python tools/wing_shoulder_study.py out/shoulder.png --sweep
+```
