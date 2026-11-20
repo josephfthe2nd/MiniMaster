@@ -11,7 +11,7 @@ Why it exists: appendages that read as "slapped over the skin" lack the bone, mu
 - Images are kept outside the repository. Internal review copies only; do not commit them.
 - Left out because their licence status is unclear: one historical medical photograph of a human caudal appendage (listed as Commons CC-BY-4.0 but the holding collection now says in copyright) and one modern commercial figurine photograph.
 - 328 unique images are listed (357 entries were collected; 27 were the same picture filed under a second region and are noted as "also" on the first entry).
-- The `plume` pass adds 75 more (none of them already listed), 403 in all. Its licences are `PD`, `CC0`, `CC-BY-2.0`, `CC-BY-4.0` and `CC-BY-SA-2.0`.
+- The `plume` pass adds 75 more (none of them already listed), 403 in all. Its licences are `PD`, `PD-US` (the twelve book plates: public domain in the United States, published 1906; their author died in 1962, so check before use where the term runs from the author's death), `CC0`, `CC-BY-2.0`, `CC-BY-4.0` and `CC-BY-SA-2.0`.
 
 ## Key numbers
 
@@ -87,7 +87,8 @@ Read off the `plume` pictures (pixel landmarks and counts; errors as above). The
 | quantity | reference | ref | ours |
 |---|---|---|---|
 | what the spread wing reads as | one continuous surface; each flight feather shows only as a faint line; one smooth roll along the front edge | plume/P01, plume/W03, plume/W06 | separate feathers with a step between every pair; a row of small feathers standing along the front edge |
-| thickness of a feather / its width | vane under 0.01 | plume/F01, plume/F15 | 0.20-0.25 (0.2 units on 0.8-1.0; the print floor at 32 mm) |
+| thickness of a feather / its width | vane under 0.01 | plume/F01, plume/F15 | flat secondary, mid-length: 0.23 (median), 0.32 at the shaft, 0.19 near the edges; at 32 mm that is 0.37, 0.52 and 0.30 mm on a feather 1.63 mm wide. Primary 0.31 / 0.41 / 0.24; covert 0.37 / 0.42 / 0.30 |
+| the same wing with thinner feathers (print check at 32 mm; floor 0.2 mm, fragile under 0.3 mm) | - | - | `thickness` 0.20 (default): passes, 3% of the area under 0.3 mm. 0.16: passes with the thin warning, 46% under 0.3 mm. 0.11: blocked, 50% under 0.2 mm |
 | strip of each secondary left showing / its width | not measured (overlaps too close to read) | plume/P01 | 0.26-0.45 |
 | long feathers on a carved wing | 6-10, with 3-4 rows of scale feathers above; about 30 forms a wing | plume/S01 | 41 long (10 primaries, 14 secondaries, 7 tertials, 7 scapulars, 3 alula) and about 230 small, each a free piece |
 | separate primaries on an eagle; free ends / single wing length | 6-7; about 0.2 | plume/W02 | 6-7; about the same by eye (not measured) |
@@ -95,7 +96,7 @@ Read off the `plume` pictures (pixel landmarks and counts; errors as above). The
 | flight feather: vane length / width | 6.3 (eagle), about 6.5 (pigeon primary) | plume/F01, plume/P09 | primaries 4.8-9.0, secondaries 3.7 |
 | flight feather: front vane / back vane | about 1/4 on a primary | plume/F01 | 0.37 on a primary (the front vane is set to 0.27 of the width) |
 | bare quill / whole feather | 0.20 | plume/F01 | 0.10 |
-| barbs a side | about 600 on a pigeon's 15 cm wing feather (the book's own count, p. 34) | plume/P11 | 20-25 ridges when grown at detail 1 |
+| barbs a side | about 600 on a pigeon's 15 cm wing feather (the book's own count, p. 34, leaf n53 of the scan) | text beside plume/P11 | 20-25 ridges when grown at detail 1, each standing 0.22 of the feather's thickness (about 0.08 mm at 32 mm) |
 | body feather: downy part / whole | about half | plume/F07, plume/F11 | none |
 
 ## Sources by region
@@ -378,7 +379,7 @@ Columns: ref | title | creator | licence | page | what it shows | numbers record
 
 ### Feathered wings and single feathers (75)
 
-Collected for the question of why the feathered wing and its feathers look wrong. Ids: `W` real wings (W01-W24 spread, W25-W31 folded and close), `P` plates from one public-domain book (C. William Beebe, *The Bird: Its Form and Function*, 1906, scanned at archive.org; the page column links the leaf), `S` sculpted, cast, drawn and painted wings, `F` single feathers. Found through Openverse (Flickr and museum sources), iNaturalist (photographs under CC0, CC-BY and CC-BY-SA only; the search was limited to those licences), the open-access collections of the Cleveland Museum of Art and the Art Institute of Chicago (both CC0), and archive.org.
+Collected for the question of why the feathered wing and its feathers look wrong. Ids: `W` real wings (W01-W24 spread, W25-W31 folded and close), `P` plates from one book in the public domain in the United States (C. William Beebe, *The Bird: Its Form and Function*, 1906, scanned at archive.org; the page column links the leaf), `S` sculpted, cast, drawn and painted wings, `F` single feathers. Found through Openverse (Flickr and museum sources), iNaturalist (photographs under CC0, CC-BY and CC-BY-SA only; the search was limited to those licences), the open-access collections of the Cleveland Museum of Art and the Art Institute of Chicago (both CC0), and archive.org.
 
 | ref | title | creator | licence | page | what it shows | numbers |
 |---|---|---|---|---|---|---|
@@ -413,18 +414,18 @@ Collected for the question of why the feathered wing and its feathers look wrong
 | `plume/W29` | Swainson's Thrush | Furryscaly | CC-BY-SA-2.0 | https://www.flickr.com/photos/98528214@N00/3534487277 | Swainson's thrush on white, side view: a small bird's folded wing, primaries projecting beyond the tertials. |  |
 | `plume/W30` | Mute swan cygnet , Workington, Cumbria, UK | gizmo-the-bandit | CC-BY-2.0 | https://www.flickr.com/photos/134832191@N08/37580320921 | Mute swan cygnet from behind with both wings arched up: the wing seen from its trailing edge, thick at the arm and layered. |  |
 | `plume/W31` | Eagle Feathers | Peter Kaminski | CC-BY-2.0 | https://www.flickr.com/photos/35034359460@N01/3164486942 | Eagle body feathers, close: pointed pale-tipped feathers overlapping like tiles, each with its shaft line. |  |
-| `plume/P01` | The Bird: Its Form and Function (1906), leaf n112 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n112 | Fig. 67-69: wing of a pigeon feathered, the same wing plucked, and a man's arm. The feathered wing is one smooth surface; the coverts cover the half next to the arm; the bare arm is a thin Z with the quill sockets along its hind edge. |  |
-| `plume/P02` | The Bird: Its Form and Function (1906), leaf n114 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n114 | Fig. 70-71: wing skeleton of a condor beside the bones of a man's arm. |  |
-| `plume/P03` | The Bird: Its Form and Function (1906), leaf n66 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n66 | Fig. 29: wing of a mallard in moult, flight feathers missing: the covert field alone, dense overlapping scales. |  |
-| `plume/P04` | The Bird: Its Form and Function (1906), leaf n342 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n342 | Fig. 262: wing of a living golden pheasant, spread, underside: rounded wing, feathers as a fan of overlapping blades. |  |
-| `plume/P05` | The Bird: Its Form and Function (1906), leaf n343 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n343 | Fig. 263: wing of a living herring gull: long and narrow. |  |
-| `plume/P06` | The Bird: Its Form and Function (1906), leaf n364 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n364 | Fig. 280: wing of a woodcock, upper side, with the narrowed outer primaries. |  |
-| `plume/P07` | The Bird: Its Form and Function (1906), leaf n336 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n336 | Fig. 256: great white heron stretching one wing: the spread wing in life. |  |
-| `plume/P08` | The Bird: Its Form and Function (1906), leaf n340 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n340 | Fig. 259-260: wing of a hummingbird (16 flight feathers) and of an albatross (50). |  |
-| `plume/P09` | The Bird: Its Form and Function (1906), leaf n54 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n54 | Fig. 22: four feathers: a pigeon's primary, a heron's underwing covert, an owl's wing covert, an ostrich plume. | pigeon primary: length / width about 6.5; heron underwing covert about 3.2; owl wing covert about 2.7 |
-| `plume/P10` | The Bird: Its Form and Function (1906), leaf n55 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n55 | Fig. 23: feathers of a condor and an emu, with the aftershaft. |  |
-| `plume/P11` | The Bird: Its Form and Function (1906), leaf n51 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n51 | Fig. 20: two interlocked barbs of a condor's wing feather, magnified 25 times. | magnified 25 diameters |
-| `plume/P12` | The Bird: Its Form and Function (1906), leaf n52 | C. William Beebe | PD | https://archive.org/details/birditsformfunct00beeb/page/n52 | Fig. 21: model of the interlocking barbules. |  |
+| `plume/P01` | The Bird: Its Form and Function (1906), leaf n112 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n112 | Fig. 67-69: wing of a pigeon feathered, the same wing plucked, and a man's arm. The feathered wing is one smooth surface (its dark and white halves are the bird's colouring, not the edge of the coverts); the bare arm is a thin Z with the quill sockets along its hind edge. |  |
+| `plume/P02` | The Bird: Its Form and Function (1906), leaf n114 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n114 | Fig. 70-71: wing skeleton of a condor beside the bones of a man's arm. |  |
+| `plume/P03` | The Bird: Its Form and Function (1906), leaf n66 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n66 | Fig. 29: wing of a mallard in moult, flight feathers missing: the covert field alone, dense overlapping scales. |  |
+| `plume/P04` | The Bird: Its Form and Function (1906), leaf n342 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n342 | Fig. 262: wing of a living golden pheasant, spread, underside: rounded wing, feathers as a fan of overlapping blades. |  |
+| `plume/P05` | The Bird: Its Form and Function (1906), leaf n343 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n343 | Fig. 263: wing of a living herring gull: long and narrow. |  |
+| `plume/P06` | The Bird: Its Form and Function (1906), leaf n364 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n364 | Fig. 280: wing of a woodcock, upper side, with the narrowed outer primaries. |  |
+| `plume/P07` | The Bird: Its Form and Function (1906), leaf n336 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n336 | Fig. 256: great white heron stretching one wing: the spread wing in life. |  |
+| `plume/P08` | The Bird: Its Form and Function (1906), leaf n340 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n340 | Fig. 259-260: wing of a hummingbird (16 flight feathers) and of an albatross (50). |  |
+| `plume/P09` | The Bird: Its Form and Function (1906), leaf n54 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n54 | Fig. 22: four feathers: a pigeon's primary, a heron's underwing covert, an owl's wing covert, an ostrich plume. | pigeon primary: length / width about 6.5; heron underwing covert about 3.2; owl wing covert about 2.7 |
+| `plume/P10` | The Bird: Its Form and Function (1906), leaf n55 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n55 | Fig. 23: feathers of a condor and an emu, with the aftershaft. |  |
+| `plume/P11` | The Bird: Its Form and Function (1906), leaf n51 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n51 | Fig. 20: two interlocked barbs of a condor's wing feather, magnified 25 times. | magnified 25 diameters |
+| `plume/P12` | The Bird: Its Form and Function (1906), leaf n52 | C. William Beebe | PD-US | https://archive.org/details/birditsformfunct00beeb/page/n52 | Fig. 21: model of the interlocking barbules. |  |
 | `plume/S01` | Angel wings | quinet | CC-BY-2.0 | https://www.flickr.com/photos/91994044@N00/5997054526 | Marble angel from behind: half-closed wings as solid shields; small scale-like feathers at the top, then two tiers of long broad feathers, every overlap a shallow step. | 6-10 long feathers and 3-4 rows of scale feathers a wing, about 30 forms |
 | `plume/S02` | Boer War memorial in Worcester | ell brown | CC-BY-2.0 | https://www.flickr.com/photos/39415781@N06/3916517097 | Bronze war memorial angel, wings held open behind the figure: thick rounded upper edge, scale feathers above, long feathers below with a shaft line each. |  |
 | `plume/S03` | Winged Victory of Samothrace (Victoire de Samothrace), 1860s | Artist unknown | CC0 | https://www.artic.edu/artworks/212217 | Winged Victory of Samothrace in an 1860s photograph: the wing as one mass, feather rows in relief. |  |
