@@ -753,3 +753,30 @@ so the rotation carries the head away from the fixed rim. Removing only the root
 of the folded pose returned the head to its rest centre and preserved the elbow and wrist angles on
 the reference, child and heavy bodies. A change to the pivot would also need to preserve the wing's
 clearance against the back.
+
+### The joints on the original feathered wing
+
+The views below use the stock builder from `ba659ad`, with one left wing on the reference figure and
+the same 32 mm scale as above. The intact wing has its original coverts and flight feathers. The other
+columns isolate the posed meshes so the feathers cannot hide what happens at a joint.
+
+![The original wing spread, half folded and fully folded, beside its shoulder socket, elbow sleeve and three thumb-feather roots.](images/stock_feathered_wing_joints.png)
+
+| At 32 mm figure scale | Spread | Half folded | Fully folded |
+| --- | ---: | ---: | ---: |
+| Gap from humeral head to socket rim | 0 mm | 0.36 mm | 1.15 mm |
+| Narrow diameter of the sleeve at the elbow | 0.97 mm | 0.79 mm | 0.33 mm |
+| Pairs of crossing triangles within the arm sleeve | 0 | 0 | 75 |
+| Thumb-feather roots separated from their mount | 0 of 3 | 2 of 3 | 3 of 3 |
+| Largest gap from a thumb-feather root to its mount | 0 mm | 0.61 mm | 0.98 mm |
+
+The elbow is the middle ring of a single tube from the shoulder to the wrist. The ring flattens as
+the two arm segments fold together. Its narrow diameter is the vertex span along its shorter in-plane
+principal axis. Of nine equally spaced fold settings, the first to show any sleeve crossings was
+0.875, with 21 pairs. The folded wrist still has direct overlap between the forearm and hand.
+
+The three thumb feathers form the alula. Their supporting rod follows the wrist transform, while the
+feather roots also inherit the thumb rotation. With the wing folded, the first tenth of each feather
+lies 0.98, 0.53 and 0.09 mm from the rod, respectively. Each complete feather still overlaps other
+plumage. In a diagnostic copy, binding the rod to the moving thumb (`thumb_tip` in this child-keyed
+rig) kept it in contact with the hand and all three quills at all nine fold settings.

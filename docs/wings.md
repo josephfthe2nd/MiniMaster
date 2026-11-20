@@ -230,8 +230,9 @@ feather 0.08 units higher than the one below). Stacked that way the three roots 
 clear of the hand tube and of every covert, so the alula was a **floating island** (the watertight
 gate cannot see it; a slicer prints it as a speck or loses it): the **alula mount**, a thin rod
 (`_alula_mount`, radius 0.03 → 0.02 of the wing scale) from inside the hand at the wrist up through the
-three alula roots, is the thumb that carries them. It is rigid with the alula's own joint (`thumb_cmc`),
-whose pivot is the wrist, so it stays welded to the hand when the thumb swings in a fold. Nothing the
+three alula roots, carries them when spread. Its `thumb_cmc` binding follows the wrist as the thumb
+swings. The rod stays in contact with the hand, but the three quills lift away during the fold.
+The [original wing joint views](anatomy_wing.md#the-joints-on-the-original-feathered-wing) show the gap. Nothing the
 alula tests pin moves (roots, 26° / 18° / 10°, 26-32% of the longest primary, the stacking); the rod is
 hidden under the plumage in every view, it is only built with the bones (the draft preview has none) and
 `tests/test_print_report.py` holds the whole spread wing to **one overlap-connected component** in the
