@@ -1757,6 +1757,11 @@ class WingKind(Kind):
         ParamSpec("scapulars", "Scapulars", "int", 7, 0, 14, 1, when=("style", ("feathered",))),
         ParamSpec("coverts", "Coverts", "bool", True, when=("style", ("feathered",))),
         ParamSpec("underwing", "Underwing coverts", "bool", True, when=("style", ("feathered",))),
+        ParamSpec("barbs", "Feather barbs (fine detail)", "bool", False, when=("style", ("feathered",)),
+                  help="grooves the free vanes of the outer primaries (the fingers of the wing tip) the way "
+                       "their barbs run: a detail for close renders and large prints (a groove is 0.06 mm deep "
+                       "on a 32 mm figure, which a printer does not hold). The feathers that lie on one "
+                       "another are left smooth"),
         ParamSpec("bones", "Show the arm bones", "bool", True),
         ParamSpec("muscle", "Upper-arm muscle", "float", 1.0, WING_MUSCLE_RANGE[0], WING_MUSCLE_RANGE[1], 0.05,
                   help="how thick the upper arm is where it leaves the back, as a share of the shoulder "
@@ -1872,7 +1877,7 @@ class WingKind(Kind):
         if values.get("style") == "feathered":
             # the arm stays: it is the sleeve the body's skin flows into (wingroot.py), a few hundred
             # triangles, and the draft's skin must have the same junction as the final's
-            return {"coverts": False, "underwing": False}
+            return {"coverts": False, "underwing": False, "barbs": False}
         return {}
 
     def material(self, params):

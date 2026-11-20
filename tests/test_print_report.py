@@ -287,6 +287,27 @@ def test_the_default_angel_is_one_welded_component_with_no_blocking_finding(figu
 
 
 @needs_assets
+def test_the_reshaped_feathers_print_better_than_the_ones_they_replace(figure):
+    """Round 9 (rounded tips, a taller shaft on a shallow roof, a bevelled edge, pointed coverts, splits).  The
+    sheet is whole to the line where its edge's bevel starts (it thinned by a parabola from the shaft out) and
+    the shaft's ridge is never narrower than a printer resolves: 3% of the default angel's area reads under
+    0.3 mm for 10%, and a half-size wing floored to 0.3 mm 16% for 49% -- it warned of thin walls, and does not.
+    The opt-in barbs (grooves no deeper than the edge's bevel) change neither."""
+    base, v, _, _ = figure
+    rep = pr.appendage_report([A.back_wings("feathered")], base, v, REF_MM)
+    g = rep.groups["wing_l"]
+    assert rep.ok and g.thin_below_thin < 0.06 and g.thin_below_min < 0.02, (g.thin_below_thin, g.thin_below_min)
+    half = pr.appendage_report([A.back_wings("feathered", scale=0.5)], base, v, REF_MM, min_thickness_mm=0.3)
+    g = half.groups["wing_l"]
+    assert [f for f in half.findings if f.code == "thin"] == [], half.as_text()
+    assert g.thin_below_thin < 0.19 and g.thin_below_min < 0.06, (g.thin_below_thin, g.thin_below_min)
+    barbed = pr.appendage_report([A.back_wings("feathered", barbs=True)], base, v, REF_MM)
+    g = barbed.groups["wing_l"]
+    assert barbed.ok and [f for f in barbed.findings if f.level != "info"] == []
+    assert g.thin_below_thin < 0.06 and g.components == 1 and g.shells == 275
+
+
+@needs_assets
 def test_a_part_floating_clear_of_the_body_blocks_and_a_speck_only_warns(figure):
     base, v, _, body = figure
     chest = body.vertices[(body.vertices[:, 2] > 3) & (body.vertices[:, 2] < 5)].mean(axis=0)

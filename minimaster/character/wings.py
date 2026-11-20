@@ -1780,10 +1780,60 @@ def _step(x, a, b):
     return u * u * (3.0 - 2.0 * u)
 
 
+# -- one feather ---------------------------------------------------------------
+# The sheet a vane is made of keeps its thickness to ``EDGE_AT`` of the way from the shaft to its edge and is
+# bevelled from there down to ``EDGE`` x the feather's thickness AT the edge.  There is little room: on the 32 mm
+# figure the sheet prints 0.33 mm and anything under 0.30 counts as fragile; where the export floors a small wing's
+# thickness to 0.30 mm the edge prints 0.72 x 0.30 = 0.22, over the 0.20 a printer resolves.  (The sheet thinned by
+# a parabola from the shaft out before, to 0.79 at the edge: its outer 14% read under 0.30 mm, the outer 11% now.)
+EDGE = 0.72
+EDGE_AT = 0.80
+# A feather's end is closed in the plan over this many of its tip's own half-widths (an ogive that stops at
+# ``tip_floor`` of the width is a strap cut square, however the sheet is bevelled there).
+TIP_CAP = 1.0
+TIP_CAP_MAX = 0.085                # ... of the length, at most
+# The shaft's ridge: its half-width as a share of the half-vane, and how much of its height is gone at the tip
+SHAFT_WIDTH = 0.16
+SHAFT_MIN = 0.6                    # ... and x the thickness, at least
+SHAFT_FADE = 0.6
+# Barbs (an opt-in detail): grooves that leave the shaft at ``BARB_ANGLE`` toward the tip, ``BARB_PITCH`` x the
+# thickness apart along the shaft, cut ``barbs`` x the thickness into the face the shaft's ridge stands off --
+# never deeper than the edge's own bevel (``vane - edge``), so a grooved vane is no thinner than its edge is.
+# (Raised ribs were tried first: on both faces, and then on one, they came through the feather that lies on
+# each one as flecks and blobs -- the top faces of two shingled feathers are a hair apart where they cross.)
+# They need four rows of the mesh to a groove, and twelve columns.
+# Only a FREE vane is grooved: the slotted outer primaries (``emarg`` of ``BARB_FREE`` or more) from their notch
+# out.  Where one feather lies on the next the two top faces are a hair apart over a whole band, and a groove in
+# the upper one showed the lower one through it in blotches.
+BARB_FREE = 0.5
+BARB_ANGLE = 38.0
+BARB_PITCH = 2.0
+BARB_ROWS = 4.0
+SPLIT_WALL = 0.35                  # the step of a split in the trailing vane, x the thickness along the feather
+# A flight feather's shaft: its ridge stands (FLIGHT_RIDGE - 0.9) x the thickness off the sheet at the quill
+# (0.45 before: 0.16 mm on the 32 mm figure, and gone by the tip), and the vanes slope away from it by FLIGHT_VEE
+# (6 degrees), so the shaft is the ridge of a shallow roof and reads as a line under any light.
+FLIGHT_RIDGE = 1.6
+FLIGHT_VEE = 0.10
+
+
+def _vane_columns(m: int, edge_at: float = EDGE_AT) -> np.ndarray:
+    """Where the columns of a feather's mesh lie across it, -1 (leading edge) .. 0 (shaft) .. 1 (trailing edge):
+    bunched toward the shaft, so the ridge has a column of its own on either side, and one ON the line where the
+    edge's bevel starts."""
+    if m % 2 or m < 4:
+        u = np.linspace(-1.0, 1.0, m + 1)
+        return np.sign(u) * np.abs(u) ** 1.4
+    h = m // 2
+    side = np.concatenate([edge_at * np.linspace(0.0, 1.0, h)[1:] ** 1.5, [1.0]])
+    return np.concatenate([-side[::-1], [0.0], side])
+
+
 def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
            lead_frac=0.30, tip=0.74, tip_pow=1.8, emarg=0.0, emarg_in=0.0,
            calamus=0.10, tip_floor=0.07, root_floor=0.07, n=11, m=8,
-           notch=0.55, rise_at=0.42, ridge=1.35, vane=0.90, ridge_dir=-1.0, butt=0.0) -> Mesh:
+           notch=0.55, rise_at=0.42, ridge=1.35, vane=0.90, ridge_dir=-1.0, butt=0.0,
+           edge=EDGE, cap=TIP_CAP, vee=0.0, splits=(), barbs=0.0, barb_from=0.0) -> Mesh:
     """One feather: a flat vane with a raised shaft down its middle.
 
     A bare quill (the calamus) runs the first tenth of the length, then the
@@ -1798,15 +1848,27 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
     Nothing goes below half a ``thickness`` wide in absolute terms, so a tip or a
     quill never thins to a sliver narrower than the sheet is thick.
 
+    The end itself is rounded in the plan: over the last ``cap`` half-widths of the tip
+    (``TIP_CAP_MAX`` of the length at most) the outline closes in an ellipse. ``cap`` 0:
+    cut square at ``tip_floor``, as every tip was.
+
     ``emarg`` cuts the leading vane down sharply at ``notch`` (a fraction of the
     length) and keeps it narrow to the tip, and ``emarg_in`` does the same to
     the trailing vane a little nearer the root: the slotted look of soaring
-    primaries, where the outer feathers separate into fingers.
+    primaries, where the outer feathers separate into fingers. ``splits`` are
+    places where the trailing vane's barbs have come unzipped: ``(at, depth)``
+    each, a fraction of the length and of the trailing vane's width. The edge
+    steps in there and runs back out along a barb, toward the tip.
 
     The vane is a flat sheet ``vane`` x ``thickness`` thick (so it never goes
-    thinner than a printer resolves) with a shaft ridge ``ridge`` x ``thickness``
+    thinner than a printer resolves), bevelled over its outer fifth to ``edge`` x
+    ``thickness`` at the edge, with a shaft ridge ``ridge`` x ``thickness``
     standing off one face only -- up on a dorsal feather (``ridge_dir`` -1),
-    down on a ventral one (+1) -- thinning toward the tip.
+    down on a ventral one (+1) -- thinning toward the tip. ``vee`` is the slope
+    of the two vanes away from the shaft (a roof, its ridge toward the face the
+    shaft stands off): what makes the shaft a LINE on a shaded feather. ``barbs``
+    (x ``thickness``) cuts grooves across both vanes, into that same face
+    (``BARB_*``), from ``barb_from`` of the length on.
     """
     # Sample the length unevenly: uniform along the body, but dense toward the
     # very tip, where the outline curves hardest, and (on a notched feather) at
@@ -1815,18 +1877,42 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
     n_tip = max(6, n // 2)
     t = np.concatenate([np.linspace(0.0, tip, max(n - n_tip, 4), endpoint=False),
                         tip + (1.0 - tip) * np.sin(np.linspace(0.0, np.pi / 2.0, n_tip + 1))])
+    extra_t = []
     if emarg or emarg_in:
-        t = np.union1d(t, np.clip([notch - 0.12, notch - 0.075, notch - 0.05, notch - 0.03,
-                                   notch - 0.005, notch + 0.04], 0.05, tip))
+        extra_t += [notch - 0.12, notch - 0.075, notch - 0.05, notch - 0.03, notch - 0.005, notch + 0.04]
+    # the rounded end: how long it is, and rows of its own
+    end_w = max(float(tip_floor) * width, 0.5 * thickness)
+    cap_t = float(np.clip(cap * 0.5 * end_w / max(length, 1e-9), 0.0, TIP_CAP_MAX)) if (cap and tip_floor) else 0.0
+    if cap_t > 0.0:
+        extra_t += list(1.0 - cap_t * np.array([1.0, 0.8, 0.6, 0.42, 0.27, 0.15, 0.06]))
+    # a split: the trailing edge steps in by ``depth`` of the vane over ``SPLIT_WALL`` thicknesses, and comes back
+    # out along a barb (``BARB_ANGLE`` off the shaft, toward the tip)
+    wall = SPLIT_WALL * thickness / max(length, 1e-9)
+    ramps = [depth * (1.0 - lead_frac) * width / (np.tan(np.radians(BARB_ANGLE)) * max(length, 1e-9))
+             for _, depth in splits]
+    for (at, _), ramp in zip(splits, ramps):
+        extra_t += [at - wall, at] + list(at + ramp * np.array([0.25, 0.5, 0.75, 1.0]))
+    if barbs:
+        rows = int(np.ceil(BARB_ROWS * length * (1.0 - barb_from) / (BARB_PITCH * thickness)))
+        extra_t += list(np.linspace(float(barb_from), 1.0, rows + 1))
+    if extra_t:
+        t = np.union1d(t, np.clip(extra_t, 0.05, 1.0))
         # union1d only drops EXACT duplicates: a notch sample 1e-16 from a grid row
         # left a sliver quad band and ~20 flipped-normal creases per feather
-        t = t[np.concatenate([[True], np.diff(t) > 3e-3])]
+        rows = [t[0]]
+        for x in t[1:]:
+            if x - rows[-1] > 3e-3:
+                rows.append(x)
+        rows[-1] = 1.0                           # (the end is the end, whatever was dropped beside it)
+        t = np.array(rows)
     n = len(t) - 1
     rise = np.clip((t - calamus) / (rise_at - calamus), 0.0, 1.0) ** 0.8
     ogive = np.clip(1.0 - (np.clip(t - tip, 0.0, None) / (1.0 - tip)) ** tip_pow,
                     0.0, 1.0) ** 0.5
     floor = np.where(t > 0.5, tip_floor, root_floor)
     W = width * np.maximum(rise * ogive, floor)
+    if cap_t > 0.0:
+        W = W * np.sqrt(np.clip(1.0 - (np.clip(t - (1.0 - cap_t), 0.0, None) / cap_t) ** 2, 0.0, 1.0))
     if butt > 0.0:
         # a rounded butt: the quill end of a covert closes in a quarter-ellipse
         # instead of a squared-off stub that reads as a tooth on the row's edge
@@ -1835,28 +1921,49 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
 
     wl = lead_frac * W * (1.0 - emarg * _step(t, notch - 0.05, notch + 0.04))
     wt = (1.0 - lead_frac) * W * (1.0 - emarg_in * _step(t, notch - 0.12, notch - 0.03))
+    for (at, depth), ramp in zip(splits, ramps):
+        cut = np.where(t < at, np.clip(1.0 - (at - t) / wall, 0.0, 1.0),
+                       np.clip(1.0 - (t - at) / max(ramp, 1e-9), 0.0, 1.0))
+        wt = wt * (1.0 - depth * cut)
     # columns bunch toward the shaft, so the ridge has a column of its own on
-    # either side of it
-    u = np.linspace(-1.0, 1.0, m + 1)
-    v = np.sign(u) * np.abs(u) ** 1.4
+    # either side of it, and one lies where the edge's bevel starts
+    if barbs and m < 12:
+        m = 12
+    v = _vane_columns(m)
     z = np.where(v[None, :] < 0, v[None, :] * wl[:, None], v[None, :] * wt[:, None])
     av = np.abs(v)
-    # a sheet, thinning slightly to its edge, plus a ridge along the shaft that
-    # fades to half toward the tip
-    flat = vane * (1.0 - 0.12 * av ** 2)[None, :] * np.ones((n + 1, 1))
-    extra = (ridge - vane) * np.exp(-(av / 0.20) ** 2)[None, :] * (1.0 - 0.5 * t)[:, None]
+    # a sheet, bevelled over its outer fifth, plus a ridge along the shaft that
+    # fades toward the tip
+    bevel_at = (av - EDGE_AT) / (1.0 - EDGE_AT)
+    flat = (vane - (vane - min(edge, vane)) * _step(bevel_at, 0.0, 1.0))[None, :] * np.ones((n + 1, 1))
+    # (the ridge is never narrower than a printer resolves: on a narrow vane -- the leading one of a slotted
+    # primary -- a ridge a sixth of the vane wide was a fin 0.15 mm thick on the 32 mm figure)
+    half = np.where(v[None, :] < 0, wl[:, None], wt[:, None])
+    reach = np.maximum(SHAFT_WIDTH * half, SHAFT_MIN * thickness)
+    extra = (ridge - vane) * np.exp(-(np.abs(z) / reach) ** 2) * (1.0 - SHAFT_FADE * t)[:, None]
+    rib = 0.0
+    if barbs:
+        # ribs that leave the shaft toward the tip, on both vanes; none on the quill, the tip's cap or the shaft
+        along = length * t[:, None] - np.abs(z) / np.tan(np.radians(BARB_ANGLE))
+        wave = 0.5 + 0.5 * np.cos(2.0 * np.pi * along / (BARB_PITCH * thickness))
+        start = max(float(barb_from), calamus)
+        on = (_step(t, start, start + 0.08) * (1.0 - _step(t, 0.93, 0.99)))[:, None] \
+            * (_step(av, 0.10, 0.30) * (1.0 - _step(av, 0.85, 1.0)))[None, :]
+        rib = -min(float(barbs), vane - edge) * wave ** 2 * on
     # the very end of the feather is bevelled to 60% of the sheet, so the tip closes
     # in a rounded end instead of a flat wall (which reads as a spike on every tip)
     bevel = 1.0 - 0.4 * _step(t, 0.965, 1.0)
-    th = thickness * (flat + extra) * bevel[:, None]
+    th = thickness * (flat + extra + rib) * bevel[:, None]
     grid = np.zeros((n + 1, m + 1, 3))
     grid[:, :, 0] = (length * t)[:, None]
     grid[:, :, 2] = z + (sweep * length * t ** 2)[:, None]
     # the shaft droops along its length and the vanes cup away from it, each vane
     # curling down in proportion to its own width (so a notched, narrow vane keeps
-    # a gentle slope instead of a cliff)
+    # a gentle slope instead of a cliff); ``vee`` slopes them away from the face the
+    # shaft stands off, as a roof
+    # (both away from the face the shaft stands off: a ventral covert is domed toward the ground)
     grid[:, :, 1] = ((curl * length * t ** 2)[:, None]
-                     + cup * np.abs(z) * av[None, :] ** 0.5)
+                     - ridge_dir * (cup * np.abs(z) * av[None, :] ** 0.5 + vee * np.abs(z)))
     slab = _slab_from_grid(grid, th)
     # The ridge stands off one face only, so the other stays a clean sheet. It is a
     # plain vertical offset of both faces applied AFTER the slab is built: folding it
@@ -1864,7 +1971,7 @@ def _blade(length, width, thickness, curl=0.10, cup=0.16, sweep=0.08,
     # puts adjacent columns a hair apart, and the sheet would twist.
     nv = (n + 1) * (m + 1)
     verts = slab.vertices.copy()
-    shift = (ridge_dir * 0.5 * thickness * extra).ravel()
+    shift = (ridge_dir * 0.5 * thickness * (extra + rib)).ravel()
     verts[:nv, 1] += shift
     verts[nv:, 1] += shift
     return Mesh(verts, slab.faces)
@@ -1901,11 +2008,13 @@ def _along(points, fractions):
 
 def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
                      primaries=10, secondaries=14, tertials=7, scapulars=7,
-                     coverts=True, underwing=True, bones=True, root=None, spec=None, sleeve=None, skin=None):
+                     coverts=True, underwing=True, bones=True, root=None, spec=None, sleeve=None, skin=None,
+                     barbs=False):
     """A bird wing as skeleton + pieces: every flight feather (and the scapulars
     and alula) has its own root and tip joint, so the fan opens and closes and
     the whole plumage folds together; each covert is bound to the feather it
-    lies over."""
+    lies over. ``barbs`` grooves the free vanes of the slotted outer primaries
+    the way their barbs run (a detail for close renders and large prints)."""
     spec = BIRD_SPEC if spec is None else spec
     # span is the full tip-to-shoulder reach INCLUDING the feathers, so measure
     # the plumage at unit scale and rescale to land on the request.
@@ -1937,13 +2046,19 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
         sk.add_joint(rj, root_pt, fe["parent"])
         sk.add_joint(tj, tip, rj)
         sk.add_feather(fe["row"], rj, tj, fe["parent"], fe["yaw"], fe["fold_to"])
-        blade = _blade(fe["length"], fe["width"], thickness, curl=fe["curl"], cup=fe["cup"],
-                       lead_frac=fe["lead"], tip=fe["tip_at"], tip_pow=fe["tip_pow"],
+        # each feather is its own: a little broader or narrower, drooping a little more or less, rolled a degree
+        # either way, and now and then its trailing vane has come unzipped (``_feather_quirks``).  Its root, its
+        # aim and its length are the layout's: the joints, the span and every pose stand as they did.
+        q = _feather_quirks(fe["row"], fe["i"], fe["length"], fe["emarg"])
+        blade = _blade(fe["length"], fe["width"] * q["width"], thickness, curl=fe["curl"] * q["curl"],
+                       cup=fe["cup"], lead_frac=fe["lead"], tip=fe["tip_at"], tip_pow=fe["tip_pow"],
                        emarg=fe["emarg"], emarg_in=fe["emarg_in"], tip_floor=fe["tip_floor"],
                        root_floor=fe.get("root_floor", 0.07), notch=fe["notch"],
-                       rise_at=fe.get("rise_at", 0.42), n=16)
+                       rise_at=fe.get("rise_at", 0.42), n=16, ridge=FLIGHT_RIDGE, vee=FLIGHT_VEE,
+                       splits=q["splits"], barb_from=fe["notch"],
+                       barbs=FLIGHT_BARBS if (barbs and fe["emarg"] >= BARB_FREE) else 0.0)
         parts.append(Piece(f"{fe['row']}{fe['i']:02d}",
-                           _place_feather(blade, root_pt, fe["yaw"], fe["roll"]), bone=tj))
+                           _place_feather(blade, root_pt, fe["yaw"], fe["roll"] + q["roll"]), bone=tj))
         bone_of[(fe["row"], fe["i"])] = tj
         if fe["row"] == "alula":
             alula_roots.append(root_pt.copy())
@@ -1953,6 +2068,44 @@ def feathered_pieces(span=13.0, thickness=0.20, sweep=0.0, droop=0.10,
         parts += _feather_bones(sk, height, s, sleeve)
         parts.append(_alula_mount(sk, alula_roots, height, s))
     return sk, parts
+
+
+# How unlike its neighbours a flight feather is: its width, its droop (x), its roll (degrees) -- and how often a
+# row's feather has a split in its trailing vane, where on its length and how deep (of the trailing vane).
+QUIRK_WIDTH = 0.04
+QUIRK_CURL = 0.12
+QUIRK_ROLL = 1.5
+SPLIT_SHARE = {"secondary": 0.36, "primary": 0.30, "tertial": 0.30}
+SPLIT_AT = (0.52, 0.80)
+SPLIT_DEPTH = (0.22, 0.38)
+FLIGHT_BARBS = 0.16                # how deep a barb's groove is cut into a vane, x the thickness (``barbs``)
+
+
+def _hash01(*key) -> float:
+    """A repeatable number in [0, 1) for a key of small integers (no random state: a wing is the same wing
+    every time it is built)."""
+    x = 0.0
+    for k, v in enumerate(key):
+        x += (12.9898 + 4.1414 * k) * float(v)
+    return float((np.sin(x) * 43758.5453) % 1.0)
+
+
+def _feather_quirks(row: str, i: int, length: float, emarg: float = 0.0) -> dict:
+    """What makes flight feather ``i`` of ``row`` its own: ``width`` and ``curl`` factors, a ``roll`` offset
+    (degrees) and its ``splits`` (:func:`_blade`).  The slotted outer primaries (``emarg`` of a half or more) are
+    cut already and get no split; scapulars and the alula get none either."""
+    r = sum(ord(ch) for ch in row)
+    out = dict(width=1.0 + QUIRK_WIDTH * (2.0 * _hash01(r, i, 1) - 1.0),
+               curl=1.0 + QUIRK_CURL * (2.0 * _hash01(r, i, 2) - 1.0),
+               roll=QUIRK_ROLL * (2.0 * _hash01(r, i, 3) - 1.0), splits=())
+    if _hash01(r, i, 4) < SPLIT_SHARE.get(row, 0.0) and emarg < 0.5:
+        at = SPLIT_AT[0] + (SPLIT_AT[1] - SPLIT_AT[0]) * _hash01(r, i, 5)
+        depth = SPLIT_DEPTH[0] + (SPLIT_DEPTH[1] - SPLIT_DEPTH[0]) * _hash01(r, i, 6)
+        splits = [(at, depth)]
+        if _hash01(r, i, 7) < 0.3:                                      # now and then a second, shallower one
+            splits.append((at - 0.15 if at > 0.7 else at + 0.15, 0.7 * depth))
+        out["splits"] = tuple(sorted(splits))
+    return out
 
 
 def _feather_layout(sk: WingSkeleton, n_pri: int, n_sec: int, n_ter: int, n_sca: int = 10):
@@ -2067,17 +2220,28 @@ def _jit(i, amount=0.08):
     return 1.0 + amount * float(np.sin(7.3 * i + 1.1))
 
 
+# A covert: where its outline starts to close (the wider it is for its length, the sooner), how sharply, the
+# dome of its vanes, the slope of the two away from its shaft and the shaft's own ridge.  It was a flat oval of one
+# thickness with a square rim (a pill): it closes sooner onto a blunter point now, its rim is bevelled like any
+# vane's, and it is a shallow roof with a low ridge.
+COVERT_TIP = 0.80
+COVERT_TIP_POW = 1.7
+COVERT_CUP = 0.05
+COVERT_VEE = 0.08
+COVERT_RIDGE = 1.25
+
+
 def _covert_blade(length, wol, thickness, ventral=False, n=10, m=6, tip_floor=0.0,
                   lead_frac=0.42, curl=0.04) -> Mesh:
     """A covert: a broad vane with a rounded (U-shaped) end that carries full width
     from close to the quill, since the quill end is buried under the row in front.
     A lozenge -- narrow at both ends -- is what made a row of coverts read as grains
     of rice. ``wol`` is width over length."""
-    tip = float(np.clip(1.0 - 0.62 * wol, 0.45, 0.88))
-    return _blade(length, wol * length, thickness, curl=curl, cup=0.0, sweep=0.06,
-                  lead_frac=lead_frac, tip=tip, tip_pow=2.0, calamus=0.0, rise_at=0.22,
-                  root_floor=0.55, tip_floor=tip_floor, n=n, m=m, ridge=1.15, vane=0.90,
-                  ridge_dir=1.0 if ventral else -1.0, butt=0.14)
+    tip = float(np.clip(1.0 - COVERT_TIP * wol, 0.40, 0.86))
+    return _blade(length, wol * length, thickness, curl=curl, cup=COVERT_CUP, sweep=0.06,
+                  lead_frac=lead_frac, tip=tip, tip_pow=COVERT_TIP_POW, calamus=0.0, rise_at=0.22,
+                  root_floor=0.55, tip_floor=tip_floor, n=n, m=m, ridge=COVERT_RIDGE, vane=0.90,
+                  ridge_dir=1.0 if ventral else -1.0, butt=0.14, vee=COVERT_VEE)
 
 
 def _coverts(sk, layout, bone_of, thickness, height, step, underwing=True, sleeve=None, skin=None) -> list[Piece]:

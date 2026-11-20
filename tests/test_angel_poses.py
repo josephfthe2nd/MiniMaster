@@ -153,7 +153,7 @@ def test_the_outer_primaries_roll_about_their_shaft_as_the_hand_curls(feathered)
     assert angle == pytest.approx(30.0, abs=1.0)
     assert about > 0.99                                                # ... about its own shaft
     assert roll_of("primary01", curl=100.0)[0] < 0.5
-    assert roll_of("primary10")[0] < 1e-6                               # no curl, no roll
+    assert roll_of("primary10")[0] < 1e-5                               # no curl, no roll (the fit's own noise)
 
 
 # -- feather details ---------------------------------------------------------------------------

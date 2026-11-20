@@ -602,17 +602,29 @@ def _sheet_thickness(mesh, n_cols):
 def test_a_feather_is_a_flat_printable_sheet_with_a_shaft_ridge():
     """Regression: the vane was a lens (full thickness only on the shaft, 0.4x at the
     edge and tip), so the outer half of every vane was 0.08 units -- thinner than a
-    printer resolves -- and the whole feather read as a rice grain. The vane is now a
-    sheet of nearly constant thickness with a ridge standing proud of it."""
+    printer resolves -- and the whole feather read as a rice grain. The vane is a
+    sheet of constant thickness with a ridge standing proud of it.
+
+    Round 9 revisits the edge, not the sheet: from the shaft's ridge out to ``EDGE_AT``
+    (0.8) of each vane the sheet is whole (0.9x; it thinned by a parabola before, to
+    0.79x at the edge), and only the outer fifth is bevelled, to ``EDGE`` (0.72x) at the
+    edge itself -- 0.22 mm where the export floors a small wing's thickness to 0.3 mm."""
     t = 0.2
     blade = W._blade(5.0, 1.0, t, n=16)
     th = _sheet_thickness(blade, 9)
     along = blade.vertices[: len(blade.vertices) // 2].reshape(-1, 9, 3)[:, 4, 0] / 5.0
-    assert th[along < 0.96].min() >= 0.75 * t             # printable all along, edge included
+    cols = W._vane_columns(8)
+    assert cols[1] == -W.EDGE_AT and cols[7] == W.EDGE_AT           # a column ON the line where the bevel starts
+    body = along < 0.96
+    assert th[body][:, 1:8].min() >= 0.88 * t             # a whole sheet from bevel line to bevel line
+    assert th[body][:, [0, 8]].min() >= 0.70 * t          # ... and a printable edge: never under EDGE
+    wide = (along > 0.45) & (along < 0.9)                 # (the narrow quill end is all ridge: thicker)
+    assert th[wide][:, [0, 8]].max() <= 0.75 * t          # ... which IS thinner than the sheet now
+    assert W.EDGE * 0.30 >= 0.20                          # the edge at the export's floor, in mm
     assert th.min() >= 0.45 * t                           # only the last 3% is bevelled, to 60%
     mid = th[len(th) // 2]
-    assert mid[0] >= 0.85 * mid[2]                        # the edge is a sheet, not a taper to nothing
-    assert mid[4] >= 1.15 * mid[2]                        # ... and the shaft is a ridge on it
+    assert mid[7] >= 0.99 * mid[6]                        # the (broad, trailing) sheet is not a taper toward its edge
+    assert mid[4] >= 1.15 * mid[6]                        # ... and the shaft is a ridge on it
 
 
 def test_the_shaft_ridge_stands_off_one_face_only():
@@ -628,10 +640,190 @@ def test_the_shaft_ridge_stands_off_one_face_only():
     assert np.ptp(top) < 0.02 and bot[4] > bot[0] + 0.05
 
 
+# -- round 9: tips, shafts, edges, coverts, each feather its own ---------------------------------
+
+
+def _blade_grid(blade, n_cols=9):
+    """``(middle, thickness)`` of a ``_blade`` slab, per row and column."""
+    nv = len(blade.vertices) // 2
+    mid = (0.5 * (blade.vertices[:nv] + blade.vertices[nv:])).reshape(-1, n_cols, 3)
+    return mid, np.linalg.norm(blade.vertices[:nv] - blade.vertices[nv:], axis=1).reshape(-1, n_cols)
+
+
+def test_a_feathers_end_is_rounded_in_the_plan():
+    """An outer primary's tip closed in an ogive onto HALF its width and stopped: a strap cut square (only the
+    sheet's thickness was bevelled there).  The end closes in the plan now, over as much of the length as the
+    tip is half wide (``TIP_CAP``), onto a point half a thickness across."""
+    kw = dict(curl=0.0, cup=0.0, sweep=0.0, tip_floor=0.5, tip=0.84, tip_pow=2.4, n=16)
+    square, _ = _blade_grid(W._blade(6.0, 0.8, 0.2, cap=0.0, **kw))
+    round_, _ = _blade_grid(W._blade(6.0, 0.8, 0.2, **kw))
+
+    def width(mid):
+        return mid[:, 8, 2] - mid[:, 0, 2]
+    assert width(square)[-1] == pytest.approx(0.5 * 0.8, rel=1e-6)             # as every tip was
+    w, x = width(round_), round_[:, 4, 0] / 6.0
+    cap = W.TIP_CAP * 0.5 * (0.5 * 0.8) / 6.0                                   # the cap's share of the length
+    assert w[-1] == pytest.approx(0.5 * 0.2, rel=1e-6)                         # half a thickness across
+    inside = x >= 1.0 - cap - 1e-9
+    assert inside.sum() >= 7 and (np.diff(w[inside]) < 0.0).all()              # it only closes, on rows of its own
+    # ... as an ellipse does: three quarters of the tip's width is still there half way along the cap
+    assert np.interp(1.0 - 0.5 * cap, x, w) > 0.80 * 0.4
+    assert np.interp(1.0 - cap, x, w) == pytest.approx(
+        np.interp(1.0 - cap, square[:, 4, 0] / 6.0, width(square)), rel=0.02)   # ... and where it starts, it is the tip
+    # a feather whose tip closes to nothing already (a covert) has no cap
+    assert len(W._blade(1.0, 0.5, 0.2, tip_floor=0.0).vertices) == len(W._blade(1.0, 0.5, 0.2, tip_floor=0.0,
+                                                                              cap=0.0).vertices)
+
+
+def test_the_shaft_is_the_ridge_of_a_shallow_roof():
+    """The shaft's ridge stood 0.45 of a thickness off the sheet (0.16 mm on the 32 mm figure) and faded to half
+    by the tip: no line at all on a shaded feather.  The two vanes slope away from the shaft now (``vee``): the
+    shaft is the ridge of a roof, toward the face it stands off -- up on a dorsal feather, down on a ventral
+    one.  ``vee`` 0 (the default of ``_blade``) is the flat feather."""
+    kw = dict(curl=0.0, cup=0.0, sweep=0.0, n=16)
+    for ridge_dir in (-1.0, 1.0):
+        flat, _ = _blade_grid(W._blade(5.0, 1.0, 0.2, ridge_dir=ridge_dir, **kw))
+        roof, _ = _blade_grid(W._blade(5.0, 1.0, 0.2, vee=0.10, ridge_dir=ridge_dir, **kw))
+        assert np.allclose(roof[:, :, [0, 2]], flat[:, :, [0, 2]], atol=1e-12)   # the same plan
+        row = len(roof) // 2
+        drop = (roof[row, :, 1] - flat[row, :, 1]) * -ridge_dir                  # y is DOWN: what ``vee`` adds
+        assert abs(drop[4]) < 1e-12 and (drop[[0, 1, 2, 3, 5, 6, 7, 8]] > 0.0).all()
+        assert drop[8] == pytest.approx(0.10 * abs(roof[row, 8, 2] - roof[row, 4, 2]), rel=1e-6)
+    assert W.FLIGHT_VEE == pytest.approx(np.tan(np.radians(5.7)), abs=0.002)   # six degrees
+    assert W.FLIGHT_RIDGE > 1.35
+
+
+def test_the_shafts_ridge_is_never_a_fin():
+    """The ridge was a sixth of its vane wide: on the cut-back leading vane of a slotted primary (0.06 units) a
+    taller one was a fin 0.15 mm thick on the 32 mm figure, and the print report said so (2.6% of the wing's area
+    under 0.2 mm for 1.6%).  It is at least ``SHAFT_MIN`` thicknesses to either side, so a narrow vane is all
+    ridge: thicker, not finer."""
+    t = 0.2
+    slotted = W._blade(6.0, 0.8, t, curl=0.0, cup=0.0, sweep=0.0, n=16, lead_frac=0.27, emarg=0.85, notch=0.6,
+                       tip=0.84, tip_floor=0.5, ridge=W.FLIGHT_RIDGE)
+    mid, th = _blade_grid(slotted)
+    x = mid[:, 4, 0] / 6.0
+    row = int(np.argmin(np.abs(x - 0.75)))                                      # beyond the notch
+    lead = abs(mid[row, 0, 2] - mid[row, 4, 2])
+    assert lead < 0.5 * W.SHAFT_MIN * t * 2                                     # the whole vane is within its reach
+    assert th[row, :4].min() > 0.9 * t                                          # ... so all of it is thicker than a vane
+    front = int(np.argmin(np.abs(x - 0.45)))                                    # in front of the notch: a vane
+    assert th[front, 7] == pytest.approx(0.9 * t, abs=0.02 * t)               # (the broad trailing one's bevel line)
+
+
+def test_a_covert_is_a_shallow_roof_with_a_bevelled_rim():
+    """A covert was a flat oval of one thickness with a square rim: a pill.  It closes sooner, onto a blunter
+    point (77% of its width at four fifths of its length for 88%, 56% at nine tenths for 68%); its rim is
+    bevelled like any vane's; and it is a shallow roof -- away from the face its shaft stands off, so an
+    underwing covert is domed toward the ground."""
+    t = 0.2
+    for ventral, sign in ((False, 1.0), (True, -1.0)):
+        mid, th = _blade_grid(W._covert_blade(1.0, 0.6, t, ventral=ventral, n=10, m=6), 7)
+        x, w = mid[:, 3, 0], mid[:, 6, 2] - mid[:, 0, 2]
+        assert np.interp(0.8, x, w) < 0.82 * w.max() and np.interp(0.9, x, w) < 0.62 * w.max()
+        assert np.interp(0.8, x, w) > 0.6 * w.max()                             # ... a blunt point, not a lozenge's
+        row = int(np.argmin(np.abs(x - 0.5)))
+        assert th[row, [0, 6]].max() < 0.75 * t and th[row, [1, 5]].min() > 0.88 * t
+        assert th[row, 3] > 1.1 * th[row, 1]
+        assert sign * (mid[row, [0, 6], 1] - mid[row, 3, 1]).min() > 0.04      # y is DOWN: a dorsal one's rim is lower
+
+
+def test_a_split_steps_into_the_trailing_vane_and_runs_back_out_along_a_barb():
+    kw = dict(curl=0.0, cup=0.0, sweep=0.0, n=16, tip_floor=0.2)
+    whole, _ = _blade_grid(W._blade(5.0, 1.0, 0.2, **kw))
+    split, _ = _blade_grid(W._blade(5.0, 1.0, 0.2, splits=((0.6, 0.3),), **kw))
+    x = split[:, 4, 0] / 5.0
+
+    def trailing(mid):
+        return mid[:, 8, 2] - mid[:, 4, 2]
+
+    def at(mid, frac):
+        return float(np.interp(frac, mid[:, 4, 0] / 5.0, trailing(mid)))
+    assert at(split, 0.6) == pytest.approx(0.7 * at(whole, 0.6), rel=0.01)       # 0.3 of the vane gone AT the split
+    assert at(split, 0.55) == pytest.approx(at(whole, 0.55), rel=1e-6)           # ... nothing before it
+    ramp = 0.3 * 0.7 * 1.0 / np.tan(np.radians(W.BARB_ANGLE)) / 5.0             # back out along a barb
+    assert at(split, 0.6 + 0.5 * ramp) == pytest.approx(0.85 * at(whole, 0.6 + 0.5 * ramp), rel=0.02)
+    assert at(split, 0.6 + ramp + 0.01) == pytest.approx(at(whole, 0.6 + ramp + 0.01), rel=1e-6)
+    lead = split[:, 4, 2] - split[:, 0, 2]                                       # the leading vane is whole
+    assert np.interp(0.6, x, lead) == pytest.approx(0.3 * 1.0, rel=0.02)
+    assert W._blade(5.0, 1.0, 0.2, splits=((0.6, 0.3), (0.75, 0.2)), **kw).integrity_report()["watertight"]
+
+
+def test_each_flight_feather_is_its_own_and_the_skeleton_does_not_know(monkeypatch, plumage):
+    """A feather's width, droop and roll differ from its neighbours' by a few percent and a degree or so, and one
+    secondary in three has a split in its trailing vane -- the same ones every time the wing is built.  Where a
+    feather roots, where it points and how long it is are the layout's: the joints, the span and every pose are
+    what they were."""
+    sk, pieces = plumage
+    quirks = {(row, i): W._feather_quirks(row, i, 5.0) for row, n in (("primary", 10), ("secondary", 14),
+                                                                      ("tertial", 7), ("scapular", 7))
+              for i in range(1, n + 1)}
+    assert quirks == {k: W._feather_quirks(k[0], k[1], 5.0) for k in quirks}     # no random state
+    widths = np.array([q["width"] for q in quirks.values()])
+    assert np.abs(widths - 1.0).max() <= W.QUIRK_WIDTH and np.ptp(widths) > W.QUIRK_WIDTH
+    assert max(abs(q["roll"]) for q in quirks.values()) <= W.QUIRK_ROLL
+    split = [k for k, q in quirks.items() if q["splits"]]
+    assert 3 <= sum(k[0] == "secondary" for k in split) <= 7
+    assert not [k for k in split if k[0] == "scapular"]
+    assert all(0.5 < at < 0.97 and 0.15 <= depth <= 0.4 for k in split for at, depth in quirks[k]["splits"])
+    assert W._feather_quirks("primary", 9, 5.0, emarg=0.85)["splits"] == ()      # a slotted primary is cut already
+    # the same wing with every feather alike: other meshes, the very same skeleton
+    monkeypatch.setattr(W, "_feather_quirks", lambda *a, **k: dict(width=1.0, curl=1.0, roll=0.0, splits=()))
+    sk0, parts0 = W.feathered_pieces()
+    assert sk0.scale == sk.scale and set(sk0.joints) == set(sk.joints)
+    assert all(np.array_equal(sk0.joints[j], sk.joints[j]) for j in sk.joints)
+    plain = {p.name: p for p in parts0}
+    assert list(plain) == list(pieces)                                           # the same 275 solids
+    changed = [n for n in pieces if pieces[n].mesh.vertices.shape != plain[n].mesh.vertices.shape
+               or not np.array_equal(pieces[n].mesh.vertices, plain[n].mesh.vertices)]
+    assert changed and all(n.rstrip("0123456789") in ("primary", "secondary", "tertial", "scapular", "alula")
+                           for n in changed)
+
+
+def test_barbs_groove_the_free_vanes_of_the_outer_primaries_only(plumage):
+    """An opt-in detail.  Grooves, into the face the shaft stands off, never deeper than the edge's own bevel;
+    and only where a vane is free -- the slotted primaries from their notch out.  (Raised ribs, and grooves on
+    every flight feather, were tried: where one feather lies on the next the two top faces are a hair apart
+    over a whole band, and either showed through the other in blotches.)"""
+    sk, pieces = plumage
+    sk1, parts1 = W.feathered_pieces(barbs=True)
+    barbed = {p.name: p for p in parts1}
+    assert list(barbed) == list(pieces) and all(np.array_equal(sk1.joints[j], sk.joints[j]) for j in sk.joints)
+    changed = sorted(n for n in pieces if pieces[n].mesh.vertices.shape != barbed[n].mesh.vertices.shape)
+    assert changed == [f"primary{i:02d}" for i in range(6, 11)]                  # emarg of a half or more
+    t = 0.2
+    kw = dict(curl=0.0, cup=0.0, sweep=0.0, vee=0.0, emarg=0.85, notch=0.6, lead_frac=0.27, tip_floor=0.5,
+              tip=0.84, n=16)
+    b = W._blade(6.0, 0.8, t, barbs=W.FLIGHT_BARBS, barb_from=0.6, **kw)
+    nv = len(b.vertices) // 2
+    cols = len(W._vane_columns(12))
+    top = b.vertices[:nv].reshape(-1, cols, 3) if b.vertices[:nv, 1].mean() < b.vertices[nv:, 1].mean() \
+        else b.vertices[nv:].reshape(-1, cols, 3)
+    bot = b.vertices[nv:].reshape(-1, cols, 3) if top is not b.vertices[nv:].reshape(-1, cols, 3) \
+        and b.vertices[:nv, 1].mean() < b.vertices[nv:, 1].mean() else b.vertices[:nv].reshape(-1, cols, 3)
+    th = np.linalg.norm(top - bot, axis=2)
+    x = top[:, cols // 2, 0] / 6.0
+    body = (x > 0.7) & (x < 0.9)
+    col = cols - 4                                                               # well out on the trailing vane
+    ripple = th[body, col]
+    assert ripple.max() == pytest.approx(0.9 * t, abs=0.01 * t)                 # the sheet, between grooves
+    assert ripple.min() == pytest.approx((0.9 - W.FLIGHT_BARBS) * t, abs=0.02 * t)
+    assert ripple.min() >= W.EDGE * t - 1e-9                                     # no thinner than the edge is
+    assert (np.diff(np.sign(np.diff(ripple))) != 0).sum() >= 4                   # several grooves along it
+    assert np.ptp(bot[body, col, 1]) < 1e-9 and np.ptp(top[body, col, 1]) > 0.1 * t   # one face only
+    assert np.ptp(th[(x > 0.42) & (x < 0.55), col]) < 0.02 * t                   # none before the notch
+    from minimaster.character import kinds as K
+    spec = next(p for p in K.KINDS["wing"].params if p.key == "barbs")
+    assert spec.default is False and spec.when == ("style", ("feathered",))
+    assert K.KINDS["wing"].draft_params({"style": "feathered"})["barbs"] is False
+
+
 def test_every_feather_in_the_wing_is_a_printable_sheet(plumage):
     """Every flight feather and covert (not the arm tube or the wrist knob) keeps the
     sheet thickness the shaft is made from: nowhere under 0.45x (the bevelled end of a
-    tip) and, over most of its area, at least 0.75x. The old lens went down to 0.03."""
+    tip) and, over most of it, at least 0.75x. The old lens went down to 0.03.
+    (Half of its mesh's points now, for seven tenths: a small covert's mesh has five
+    columns across it and the two at its edges are bevelled to 0.72x, round 9.)"""
     sk, pieces = plumage
     for n, p in pieces.items():
         if n in ("arm", "hand", "wrist_knob"):
@@ -640,7 +832,7 @@ def test_every_feather_in_the_wing_is_a_printable_sheet(plumage):
         nv = len(v) // 2
         th = np.linalg.norm(v[:nv] - v[nv:], axis=1)
         assert th.min() >= 0.45 * 0.20, (n, th.min())
-        assert np.percentile(th, 30) >= 0.75 * 0.20, (n, np.percentile(th, 30))
+        assert np.percentile(th, 50) >= 0.75 * 0.20, (n, np.percentile(th, 50))
 
 
 def test_the_outer_primaries_are_slotted_and_the_inner_ones_a_closed_sheet(plumage):
@@ -667,12 +859,16 @@ def test_the_outer_primaries_are_slotted_and_the_inner_ones_a_closed_sheet(pluma
 
 def test_the_notch_cuts_the_leading_vane_back_sharply(plumage):
     """Read straight off the slab's columns (0 = leading edge, 4 = shaft): behind the
-    notch the leading vane of P8-P10 is under a third of what it was in front of it."""
+    notch the leading vane of P8-P10 is under a third of what it was in front of it.
+    (Off the sheet's MIDDLE, between its two faces: a face stands half a thickness off it
+    along a normal that leans where the vane slopes away from the shaft, which adds the
+    same 0.02 to the broad vane and to the cut one.)"""
     sk, pieces = plumage
     for i in (8, 9, 10):
         r, d, n, length = _plan_frame(sk, f"primary{i:02d}")
         v = pieces[f"primary{i:02d}"].mesh.vertices
-        top = (v[: len(v) // 2][:, [0, 2]] - r).reshape(-1, 9, 2)
+        nv = len(v) // 2
+        top = (0.5 * (v[:nv] + v[nv:])[:, [0, 2]] - r).reshape(-1, 9, 2)
         s, l = top @ d, top @ n
 
         def lead_half(frac):

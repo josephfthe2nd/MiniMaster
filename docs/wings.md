@@ -250,6 +250,70 @@ scapula instead of the two wings' edges nearly meeting at buttock height (that e
 height 1.9 and now sits at 2.4; raising the root alone moves it by only 0.2-0.3, because the wing plane is
 fixed mostly by the span axis).
 
+### The feather itself (round 9)
+
+One function builds every feather (`_blade`); round 9 changed its tip, its shaft, its edge and what a covert is,
+made each flight feather a little its own, and added an opt-in barb detail. Where a feather roots, where it
+points and how long it is did not change (`_feather_layout`): the joints, the span, the poses and the shell count
+(275) are what they were.
+
+![feathers before and after](images/feathers_r9.png)
+
+![shoulder and whole wing before and after](images/feathers_r9_wing.png)
+
+* **Tips.** An outer primary's outline closed onto half its width and stopped: a strap cut square, only its
+  thickness bevelled. The end closes in the plan now, in an ellipse as long as the tip is half wide (`TIP_CAP`,
+  at most `TIP_CAP_MAX` of the length), onto a point half a thickness across. Every flight feather with a
+  `tip_floor` gets it; a covert's outline closes to nothing already.
+* **Shaft.** The ridge stood 0.45 of a thickness off the sheet (0.16 mm on the 32 mm figure) and no line showed
+  on a shaded feather. Two changes: the vanes slope away from the shaft by `FLIGHT_VEE` (6 degrees), so the
+  shaft is the ridge of a shallow roof, which costs nothing to print; and the ridge is taller (`FLIGHT_RIDGE`
+  1.6, 0.59 mm at the quill) but never narrower than `SHAFT_MIN` (0.6) thicknesses to either side. *A taller
+  ridge a sixth of its vane wide was tried first: on the cut-back leading vane of a slotted primary it was a fin
+  0.15 mm thick, and the print report's share of area under 0.2 mm went from 1.6% to 2.6%.* A narrow vane is
+  all ridge now: thicker, not finer.
+* **Edge.** There is very little room to thin a vane's edge: on the 32 mm figure the sheet prints 0.33 mm, the
+  report calls anything under 0.30 fragile and a printer resolves 0.20. What changed is the *shape*: the sheet
+  thinned by a parabola from the shaft out (to 0.79x at the edge, its outer 14% under 0.30 mm); it is whole
+  (0.9x) out to `EDGE_AT` (0.8) of each vane now and bevelled over the outer fifth to `EDGE` (0.72x: 0.26 mm,
+  and 0.22 where the export floors a small wing's thickness to 0.30). This revisits the earlier fix that
+  replaced a lens-shaped vane ("rice grains", 0.4x at the edge): the inner vane is still a full sheet, and the
+  test that guards it says so. Edge-on a feather looks much as it did.
+* **Coverts** (`_covert_blade`, which the shoulder's small coverts use too). A flat oval of one thickness with a
+  square rim -- a pill -- is now a shallow roof with a low ridge and a bevelled rim, closing sooner onto a blunter
+  point (77% of its width at four fifths of its length, for 88%); an underwing covert is domed toward the ground.
+* **Each feather its own** (`_feather_quirks`, repeatable: no random state). The flight feathers already
+  differed in length (2.5%) and aim (a degree), and the coverts by 6%. Added: width (4%), droop (12%), roll
+  (1.5 degrees), and a **split** in the trailing vane of about one secondary in three and the inner primaries
+  (five secondaries and one primary on the default wing): the edge steps in by 22-38% of the vane and runs back
+  out along a barb. They show mostly from below; from above the next feather covers them. *A symmetric nick
+  across the vane was tried first and read as a square notch.*
+* **Barbs** (the wing option `barbs`, "Feather barbs (fine detail)", off by default and off in drafts): grooves
+  along the barb direction (`BARB_ANGLE` 38 degrees, `BARB_PITCH` two thicknesses apart), cut `FLIGHT_BARBS`
+  (0.16) of a thickness into the upper face, never deeper than the edge's own bevel -- and only on a FREE vane:
+  the five slotted outer primaries from their notch out. *Raised ribs were tried on both faces and then on one,
+  and grooves on every flight feather: where one feather lies on the next the two top faces are a hair apart
+  over a whole band, and either showed through the other in flecks and blotches.* 7% more triangles; a groove is
+  0.06 mm deep on the 32 mm figure, which a printer does not hold: it is for close renders and large prints.
+
+What it measures (the default pair on the neutral man, `print_report.appendage_report`):
+
+| | before | now |
+|---|---|---|
+| area under 0.3 mm, 32 mm figure | 10.1% | 3.0% |
+| area under 0.2 mm, 32 mm figure | 1.6% | 1.2% |
+| half-size wing floored to 0.3 mm: area under 0.3 mm | 48.8% (a thin-wall warning) | 16.1% (none) |
+| ... under 0.2 mm, folded | 4.7% | 4.2% |
+| vertices / triangles of a wing alone | 43,466 / 85,832 | 46,490 / 91,880 |
+
+What it does not do: the feathers are as thick edge-on as they were; the folded wing is the same lumpy pack; there
+are no feathers on the back beside the wing and the wing is still flat from above (items 2-4 of the round-8 list).
+Tests: `tests/test_wings.py` (seven new: the tip's cap, the roof, the ridge's width, the covert, the split, the
+quirks against the skeleton, the barbs; one of them fails on 7750521 on what it measures and six because what they
+test did not exist), the two printable-sheet tests rewritten for the bevel, and
+`tests/test_print_report.py::test_the_reshaped_feathers_print_better_than_the_ones_they_replace`.
+On this tree every test file runs green: 2624 passed and 29 skipped outside the two Tk files, 183 passed in them.
+
 **Where the arm leaves the body** (round 8): on a body with a muscular sleeve the nose rows are not built where the sleeve is
 fat; rings of small coverts (`shoulder_scales`) lie on it there, above and below, up to the skin (`docs/anatomy_wing.md`,
 "Round 8").
@@ -798,7 +862,7 @@ the pose controls are per side (`{"*": {...}, "l": {...}, "r": {...}}`).
 ## Printing
 
 `thickness` is in wing units. A 32 mm figure makes one unit ≈ 1.9 mm: the 0.16 membrane is
-≈ 0.30 mm (right at what a resin printer resolves), feathers 0.27 ≈ 0.51 mm at the shaft ridge and 0.18 ≈ 0.34 mm across the vane; the measured minimum vane thickness is 0.095 ≈ 0.18 mm (at the bevelled edge of an underwing covert); 16% of feather vertices are under 0.15 ≈ 0.29 mm because the tip rows are dense. Bones are inflated
+≈ 0.30 mm (right at what a resin printer resolves), feathers 0.32 ≈ 0.59 mm at the shaft's ridge by the quill, 0.18 ≈ 0.33 mm across the vane and 0.144 ≈ 0.26 mm at its bevelled edge (round 9); the measured minimum is 0.10 ≈ 0.18 mm (the bevelled end of an underwing covert's tip); 29% of the feathers' mesh points are under 0.15 ≈ 0.27 mm, the edge columns and the dense tip rows, but 3% of their AREA is under 0.30 mm. Bones are inflated
 to stay thicker than the sheet. Every piece — membrane, each bone, each feather — is its own
 closed solid, merged into one mesh; overlapping closed shells still use every edge exactly twice,
 so the mesh passes the watertight gate as-is and the slicer unions them. Print a wing spread (or
