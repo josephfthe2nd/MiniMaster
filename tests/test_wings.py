@@ -693,6 +693,25 @@ def test_the_shaft_is_the_ridge_of_a_shallow_roof():
     assert W.FLIGHT_RIDGE > 1.35
 
 
+def test_the_wings_own_flight_feathers_have_the_roof_and_the_taller_shaft(plumage):
+    """... on the wing, not only in ``_blade``: with ``feathered_pieces`` passing neither, every other test
+    passed.  Read off the placed feathers, whatever their roll: the outer parts of the two vanes are 147-150
+    degrees apart (160-164 with their cup alone) and the shaft is 0.32 thick by the quill (0.27)."""
+    sk, pieces = plumage
+    for name in ("secondary05", "secondary09", "primary03", "tertial03"):
+        v = pieces[name].mesh.vertices
+        nv = len(v) // 2
+        mid = (0.5 * (v[:nv] + v[nv:])).reshape(-1, 9, 3)
+        th = np.linalg.norm(v[:nv] - v[nv:], axis=1).reshape(-1, 9)
+        r, t = sk.joints[f"{name}_r"], sk.joints[f"{name}_t"]
+        s = ((mid[:, 4] - r) @ (t - r)) / np.linalg.norm(t - r) ** 2
+        row = int(np.argmin(np.abs(s - 0.55)))
+        a, b = mid[row, 7] - mid[row, 6], mid[row, 1] - mid[row, 2]             # trailing vane out, leading vane out
+        angle = np.degrees(np.arccos(a @ b / np.linalg.norm(a) / np.linalg.norm(b)))
+        assert angle < 155.0, (name, angle)
+        assert th[s < 0.4].max() > 0.30, (name, th[s < 0.4].max())
+
+
 def test_the_shafts_ridge_is_never_a_fin():
     """The ridge was a sixth of its vane wide: on the cut-back leading vane of a slotted primary (0.06 units) a
     taller one was a fin 0.15 mm thick on the 32 mm figure, and the print report said so (2.6% of the wing's area

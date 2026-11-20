@@ -296,23 +296,28 @@ points and how long it is did not change (`_feather_layout`): the joints, the sp
   over a whole band, and either showed through the other in flecks and blotches.* 7% more triangles; a groove is
   0.06 mm deep on the 32 mm figure, which a printer does not hold: it is for close renders and large prints.
 
-What it measures (the default pair on the neutral man, `print_report.appendage_report`):
+What it measures (the default pair on the neutral man, `print_report.appendage_report`; the first two rows and the
+last three are `appendages.back_wings`, a wing without the body's muscular sleeve, 275 shells):
 
 | | before | now |
 |---|---|---|
 | area under 0.3 mm, 32 mm figure | 10.1% | 3.0% |
 | area under 0.2 mm, 32 mm figure | 1.6% | 1.2% |
-| half-size wing floored to 0.3 mm: area under 0.3 mm | 48.8% (a thin-wall warning) | 16.1% (none) |
+| the same on the figure the app builds (340 shells with the shoulder's coverts), 32 mm | 9.7% | 3.0% |
+| ... printed 26 mm tall (the app's export applies no floor: a thin-wall warning either way) | 54.4% | 34.3% |
+| `back_wings(scale=0.5)` floored to 0.3 mm by `min_thickness_mm`: area under 0.3 mm | 48.8% (a thin-wall warning) | 16.1% (none) |
 | ... under 0.2 mm, folded | 4.7% | 4.2% |
+| a pair on the body, built | 0.43 s | 0.50 s |
 | vertices / triangles of a wing alone | 43,466 / 85,832 | 46,490 / 91,880 |
 
 What it does not do: the feathers are as thick edge-on as they were; the folded wing is the same lumpy pack; there
 are no feathers on the back beside the wing and the wing is still flat from above (items 2-4 of the round-8 list).
-Tests: `tests/test_wings.py` (seven new: the tip's cap, the roof, the ridge's width, the covert, the split, the
-quirks against the skeleton, the barbs; one of them fails on 7750521 on what it measures and six because what they
-test did not exist), the two printable-sheet tests rewritten for the bevel, and
+Tests: `tests/test_wings.py` (eight new: the tip's cap, the roof, the roof and the shaft ON THE WING, the ridge's
+width, the covert, the split, the quirks against the skeleton, the barbs; two of them fail on 7750521 on what they
+measure and six because what they test did not exist; with `feathered_pieces` passing neither roof nor ridge -- a
+mutant -- only the one on the wing fails), the two printable-sheet tests rewritten for the bevel, and
 `tests/test_print_report.py::test_the_reshaped_feathers_print_better_than_the_ones_they_replace`.
-On this tree every test file runs green: 2624 passed and 29 skipped outside the two Tk files, 183 passed in them.
+On this tree every test file runs green: 2625 passed and 29 skipped outside the two Tk files, 183 passed in them.
 
 **Where the arm leaves the body** (round 8): on a body with a muscular sleeve the nose rows are not built where the sleeve is
 fat; rings of small coverts (`shoulder_scales`) lie on it there, above and below, up to the skin (`docs/anatomy_wing.md`,
