@@ -465,9 +465,10 @@ def test_the_hair_keeps_its_roots_and_follows_the_head_on_other_bodies(world):
         assert all(m.is_watertight and m.volume() > 0 for _, m in r["pieces"])
         seen.append(P)
     assert not np.allclose(seen[0], seen[1])                            # another head: the roots moved with it
-    # the same samples on every body: the same cage vertices and weights (checked through a second emission)
+    # ... the SAME roots: one emission (cage vertices and weights), read on each body's own cage
     a = SC.emit(base, "scalp", 80, lib=lib)
-    assert np.allclose(a.positions(base.body_cage(v0)[0]), seen[0] if False else a.positions(base.body_cage(v0)[0]))
+    for macro, roots in zip(({}, {"gender": 0.0, "age": 0.3}), seen):
+        assert np.allclose(a.positions(base.body_cage(_verts(world, **macro))[0]), roots)
 
 
 @assets
@@ -542,7 +543,7 @@ def test_scales_lie_on_the_skin_they_cover_on_a_round_limb(world):
 
 
 @assets
-def test_the_feather_tract_closes_the_bare_back_between_the_wings(world):
+def test_the_feather_tract_covers_the_upper_back_with_a_row_down_the_spine(world):
     c, verts, placed = _placed(world, "scatter", gender=1.0, muscle=0.55)
     cen = np.array([m.vertices.mean(axis=0) for _, m in placed[0].parts])
     assert (cen[:, 2] < 0).all()                                        # on the back
@@ -645,8 +646,7 @@ def test_the_lab_and_the_command_line_export_hair_as_named_pieces_measured_with_
         assert main(["character", "--character", str(doc), "-o", str(tmp_path / "cli.stl"),
                      "--size", "medium"]) == 0
         assert (tmp_path / "lab.stl").read_bytes() == (tmp_path / "cli.stl").read_bytes()
-        img = lb.render_now() if hasattr(lb, "render_now") else None
-        del img
+        assert lb.final_levels() == 1                                   # (the picture is tests/test_character_panel.py's)
     finally:
         lb.close()
 
@@ -662,3 +662,64 @@ def test_the_command_line_adds_hair_and_a_scatter_by_name(tmp_path, capsys):
     assert c.appendages[0].params == {"style": "mohawk", "length": 1.2}
     assert main(["character", "--add", "hair:style=no_such_style", "-o", str(tmp_path / "x.png")]) != 0
     assert "natural" in capsys.readouterr().err                        # the error names the styles there are
+
+
+@assets
+@pytest.mark.parametrize("text", ["hair:style=mohawk", "hair:style=mohawk,length=2.0", "hair:style=spiky",
+                                  "scatter:item=spike", "scatter:item=plate", "scatter:item=stud",
+                                  "scatter:item=tuft"])
+def test_every_piece_that_stands_on_its_own_root_is_welded_not_only_the_best_one(world, text):
+    """The print report judges an appendage's weld by its BEST-buried root (of a sample, for an appendage of
+    many pieces).  For a crest or a row of spikes each piece's root is its whole weld, so here it is every
+    piece: over 5% of its volume in the body, the report's own floor (a quarter of a mohawk's locks had 3-5%
+    of it at the first root depth while the report passed it)."""
+    base, lib, _ = world
+    for macro in ({}, {"gender": 1.0, "muscle": 0.55}):
+        c, verts, placed = _placed(world, text, **macro)
+        level = 1 if text.startswith("hair") else 0
+        body = PR.Solid(pp.character_print_shells(base, verts, levels=level, with_eyes=False, with_teeth=False)[0][1])
+        shells = pp.appendage_print_shells([placed[0].shells()])
+        # (8192 points a piece: a lock fills a twentieth of its own box, and 1024 put three of them in the body)
+        shares = np.array([PR.embedded_volume_share(m, body, 8192) for n, m in shells if not n.endswith("/cap")])
+        assert shares.min() > PR.DEFAULT_RULES.min_root_embed, (text, macro, shares.min())
+
+
+@assets
+def test_a_character_with_hair_is_meshed_at_the_level_its_undercoat_is_fitted_to(world):
+    from minimaster.character import weld as W
+    base, lib, _ = world
+
+    def levels(*texts):
+        c = Character()
+        for t in texts:
+            c.appendages.append(K.add_from_text(t, c.appendages, base=base, lib=lib))
+        return W.default_levels(c)
+
+    assert levels("hair") == 1 and levels("hair:style=mohawk", "scatter:item=spike") == 1
+    assert levels("scatter") == 0 and levels("scatter:item=scale") == 0      # they are welded to the cage itself
+    assert K.KINDS["hair"].fitted_level({}) == 1 and K.KINDS["scatter"].fitted_level({}) == 0
+
+
+@assets
+def test_an_angel_with_the_feather_tract_and_hair_exports_with_nothing_detached(tmp_path):
+    """The kinds together, through the app's own export (the body moulded round the wings, the skin welded
+    onto their roots, level 1): feathered wings, the feather tract between them, hair."""
+    from minimaster.character import lab as L
+    lb = L.Lab(L.Resources.shared(), size=(96, 96), threaded=False)
+    try:
+        lb.doc.set_macro("gender", 1.0)
+        lb.doc.add_appendage("wing", params={"style": "feathered"})
+        lb.doc.add_appendage("scatter")
+        lb.doc.add_appendage("hair", params={"style": "swept_back"})
+        r = lb.export_stl(tmp_path / "angel.stl", size="medium")
+        assert r.written and not r.blocked, r.report
+        g = r.printability.groups
+        assert set(g) == {"wing-1.l", "wing-1.r", "scatter-1", "hair-1"}
+        assert not any(x.detached for x in g.values())
+        assert g["scatter-1"].shells == 44 and g["scatter-1"].thin_below_thin < 0.2
+        assert not any(f.level == "block" for f in r.printability.findings)
+        # the tract and the wings meet: the report says which pieces intersect, and that is all it says of them
+        notes = [f for f in r.printability.findings if "scatter-1" in str(f.message)]
+        assert notes and all(f.code == "overlap" and f.level == "warn" for f in notes)
+    finally:
+        lb.close()

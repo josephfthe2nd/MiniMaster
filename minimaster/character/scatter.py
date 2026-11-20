@@ -8,8 +8,9 @@ the skin's normal there.  Nothing here is random: the candidates are a Halton se
 chosen farthest-first, so
 
 * a seed gives the same points on every run and every machine,
-* the first ``n`` points of a longer emission are themselves evenly spread (raising the count ADDS points,
-  the ones already there stay where they are), and
+* the first ``n`` points of one emission are themselves evenly spread, wider than all of them (``take`` a
+  prefix and it is still an even cover; a different COUNT is a different emission, the candidates are
+  drawn per count), and
 * a symmetric emission is sampled on the left half and mirrored through the cage's own mirror map, vertex
   for vertex, so the two sides are exact mirror images on a symmetric body.
 

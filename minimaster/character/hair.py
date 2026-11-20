@@ -28,7 +28,10 @@ __all__ = ["STYLES", "build_hair", "head_landmarks"]
 
 SUNK = 0.05          # how deep a lock's underside lies under the CAGE where it lies on the skin (units): the
                      # weld.  (The skin that is drawn and printed lies 0.01-0.02 inside the cage on a head.)
-STAND_SINK = 0.16    # a lock that stands on its root (a spike, a crest) is sunk this share of its length
+STAND_SINK = 0.25    # a lock that stands on its root (a spike, a crest) is sunk this share of its length, at
+                     # its full width and thickness: EVERY lock of a crest has 6-7% or more of its volume in the
+                     # head.  (At 0.16 with a root as slim as a lying lock's some had under 5%, and the print
+                     # report, which judges an appendage by its best-buried piece, did not see it.)
 
 STYLES = ("natural", "swept_back", "centre_part", "side_part", "spiky", "mohawk")
 
@@ -141,7 +144,8 @@ def build_hair(base, verts, *, style: str = "natural", length: float = 1.2, lock
         probe = SkinProbe(np.eye(4), bv, bq, centre, 1.6 * h["span"] + 0.75 * reach)
     standing = growth.lift > 45.0
     shape = ST.LockShape(width=float(width), thickness=float(thickness), tip_floor=float(tip_floor),
-                         sink=max(0.05, 0.35 * float(thickness)), root=0.9 if standing else 0.55)
+                         sink=max(0.05, 0.35 * float(thickness)), root=1.0 if standing else 0.55,
+                         root_thick=1.0 if standing else 0.6)
     pieces = []
     paths = np.zeros((0, growth.segments + 1, 3))
     if len(P):

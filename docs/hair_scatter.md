@@ -62,8 +62,9 @@ the path afterwards and pushed out of the body again.
   on the head, and one lock reads as several strands;
 * where it **hangs clear of the body** the same twelve points become an oval as thick as the lock from
   every side, with no taper to a film, because nothing backs it there;
-* a lock that **stands on its root** (a spike, a crest) is sunk 16% of its length into the head: its root
-  is its whole weld.
+* a lock that **stands on its root** (a spike, a crest) is sunk a quarter of its length into the head at
+  its full width and thickness: its root is its whole weld, and every lock of a crest has 6 - 7% or more of
+  its volume in the head.
 
 `cap_mesh` is the undercoat: the scalp's own skin (one subdivision level, the skin that is drawn and
 printed) thickened outwards, thinning to a fifth at its edge so the hairline is a line and not the rim of a
@@ -155,8 +156,8 @@ under 0.2 mm and warns "fragile" when over 20% is under 0.3 mm):
 | hair, `natural`, each shell alone (the old measure) | 9% | 48% | warns |
 | hair, `natural` | 4% | 18% | passes |
 | hair, `centre_part`, length 4 | 5% | 13% | passes |
-| hair, `spiky` | 1% | 30% | warns (it stands free) |
-| hair, `mohawk` | 15% | 38% | warns (it stands free) |
+| hair, `spiky` | 0.4% | 24% | warns (it stands free) |
+| hair, `mohawk` | 14% | 36% | warns (it stands free) |
 | feather tract | 0.3% | 9% | passes |
 | scales on the back | 5% | 6% | passes |
 | spikes down the spine | 14% | 38% | warns (their tips) |
@@ -164,7 +165,24 @@ under 0.2 mm and warns "fragile" when over 20% is under 0.3 mm):
 | studs | 1% | 12% | passes |
 | tufts on the forearms | 7% | 50% | warns |
 
-Nothing blocks. Across five bodies (default, man, woman, heavy, child) the four styles that lie on the head
+Nothing blocks, alone or together: an angel (feathered wings, the feather tract, swept-back hair), a
+scaled figure (scales on the back, shoulders and forearms, spikes, a mohawk), a furred one (tufts on chest,
+forearms and shins, spiky hair, a tail) and horns with hair all export from the Character tab with no piece
+detached; what the report adds for them is notes that two appendages intersect (a wing's tertial and a
+feather of the tract, a horn and the undercoat), which the slicer unions. The six scatter items pass on the
+woman, the heavy man and the child as well.
+
+Two things the report does not do for these kinds, which the tests do instead:
+
+* It judges an appendage's root weld by its **best-buried** piece (of a sample of eight, for an appendage of
+  many pieces). For pieces that each stand on their own root (a mohawk's locks, spikes, plates, studs,
+  tufts) `tests/test_hair_scatter.py` checks every piece: over 5% of its volume in the body.
+* A character with hair is meshed at **level 1** by default (`HairKind.fitted_level`), like one with a
+  skin-covered ossicone: the undercoat is the drawn skin thickened, 0.03 thick at the hairline, and the bare
+  cage (level 0, 0.01 - 0.02 outside it on a head) would cut that edge ragged. A scatter alone stays at
+  level 0: it is welded to the cage itself.
+
+Across five bodies (default, man, woman, heavy, child) the four styles that lie on the head
 have 14 - 21% of their area under 0.3 mm at 32 mm, either side of the line where the report starts to warn
 (what is thin is the free ends of the locks). At 54 mm the same heads have at most 8% under 0.3 mm and the
 report says nothing.

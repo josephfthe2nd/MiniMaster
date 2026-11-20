@@ -9,6 +9,7 @@ document and the same STL as the same sequence through the headless core.
 """
 
 import json
+import os
 import time
 
 import numpy as np
@@ -372,6 +373,36 @@ class TestPanel:
         panel.add_menu.invoke(labels.index("Tail"))            # the real menu command
         assert list(panel.tree.get_children()) == ["wing-1", "tail-1"]
         assert panel.tree.selection() == ("tail-1",)
+
+    def test_hair_and_a_scatter_are_added_from_the_menu_and_drawn(self, panel, tmp_path):
+        """The kinds that cover the skin go through the same tab as a wing: the Add menu, the tree, the
+        parameter rows, a draft and a final picture (at level 1: the undercoat is fitted to the drawn skin),
+        and an export that names their pieces."""
+        settled(panel, panel)
+        bare = panel.view.frame.image.copy()
+        labels = [e.label for e in panel._menu_entries]
+        panel.add_menu.invoke(labels.index("Hair (swept_back)"))
+        panel.add_menu.invoke(labels.index("Scatter (spike)"))
+        assert list(panel.tree.get_children()) == ["hair-1", "scatter-1"]
+        assert panel.lab.doc.spec("hair-1").side == "center"
+        assert panel.lab.final_levels() == 1
+        settled(panel, panel)
+        with_hair = panel.view.frame.image.copy()
+        assert with_hair.shape == bare.shape and (with_hair != bare).any(axis=2).mean() > 0.002
+        panel.lab.doc.set_param("hair-1", "length", 2.5)
+        panel.lab.doc.set_param("hair-1", "color", "red")
+        settled(panel, panel)
+        longer = panel.view.frame.image
+        assert (longer != with_hair).any(axis=2).mean() > 0.002
+        red = longer[..., 0].astype(int) - longer[..., 2].astype(int)
+        assert (red > 90).mean() > (with_hair[..., 0].astype(int) - with_hair[..., 2].astype(int) > 90).mean()
+        r = panel.lab.export_stl(tmp_path / "h.stl", size="medium")
+        assert r.written and not r.blocked
+        assert r.printability.groups["hair-1"].shells == 81 and r.printability.groups["scatter-1"].shells == 9
+        shot = os.environ.get("MINIMASTER_SHOT")
+        if shot:
+            from minimaster.character import portrait as po
+            po.write_png(shot, longer)
 
     def test_remove_duplicate_rename_enable(self, panel):
         panel.add(kind="horn")

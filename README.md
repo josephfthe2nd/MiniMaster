@@ -345,9 +345,9 @@ placed[0].mesh(), placed[0].control_range("swing")        # MakeHuman frame; ran
   separate numbers); they lie on the head and drape over the shoulders and the back, each a closed shell
   sunk into the skin over an undercoat. `--add scatter:item=scale,region=shoulders` stands instances on
   points spread over a region of the skin: `feather` (a tract on the back, between the wings), `scale`,
-  `spike` and `plate` (rows down the spine), `stud`, `tuft` (fur). Both ride the body's morphs, are the
-  same on every run (no random state), are mirror images left and right, and are measured by the
-  printability report as part of the printed solid, not as free walls. See
+  `spike` and `plate` (rows down the spine), `stud`, `tuft` (fur); a scatter's two sides are mirror
+  images. Both ride the body's morphs, are the same on every run (no random state), and are measured by
+  the printability report as part of the printed solid, not as free walls. See
   [docs/hair_scatter.md](docs/hair_scatter.md).
 
   ![hair](docs/images/hair_bodies.png)

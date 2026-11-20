@@ -2433,6 +2433,12 @@ class HairKind(_SurfaceKind):
     def material(self, params):
         return material_named("hair:" + str(params.get("color", "brown")))
 
+    def fitted_level(self, params, record=None):
+        # the undercoat is the DRAWN skin thickened (level 1), 0.03 thick at the hairline, and the locks' welds
+        # are counted from it: on the bare cage (level 0, which stands 0.01-0.02 outside it on a head) the
+        # hairline is cut ragged by the cage's facets, as the ossicone's foot was
+        return 1
+
     def build(self, spec, side, values, build_values, pl, ctx):
         from . import hair as HR
         v = build_values

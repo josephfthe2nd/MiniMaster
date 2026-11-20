@@ -61,6 +61,8 @@ class LockShape:
     thickness: float = 0.17     # crest to underside, at its thickest
     sides: int = 12             # vertices round the section (12: the grooved section; fewer: a plain oval)
     root: float = 0.55          # the width at the root over the widest
+    root_thick: float = 0.6     # the thickness at the root over the thickest (a lock that lies on the skin
+                                # comes out of it thin; one that STANDS on its root needs all of it there)
     tip: float = 0.20           # the width at the tip over the widest
     taper: float = 2.2          # how late the taper comes (1: a straight wedge)
     tip_floor: float = 0.14     # no part of a lock is narrower or thinner than this (0.26 mm at 32 mm)
@@ -199,7 +201,7 @@ def _profiles(shape: LockShape, m: int, width, thickness):
     grow_in = np.clip(t / 0.22, 0.0, 1.0)
     grow_in = grow_in * grow_in * (3.0 - 2.0 * grow_in)
     w = (shape.root + (1.0 - shape.root) * grow_in) * (1.0 - (1.0 - shape.tip) * t ** shape.taper)
-    h = (0.6 + 0.4 * grow_in) * (1.0 - (1.0 - max(shape.tip, 0.6)) * t ** shape.taper)
+    h = (shape.root_thick + (1.0 - shape.root_thick) * grow_in) * (1.0 - (1.0 - max(shape.tip, 0.6)) * t ** shape.taper)
     a = np.maximum(0.5 * np.asarray(width, dtype=np.float64)[:, None] * w[None, :], 0.5 * shape.tip_floor)
     b = np.maximum(np.asarray(thickness, dtype=np.float64)[:, None] * h[None, :], shape.tip_floor)
     return a, b
