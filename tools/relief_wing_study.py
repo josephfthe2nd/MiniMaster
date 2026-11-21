@@ -151,12 +151,45 @@ def section(u, t, closed):
     return front[:, None], rear[:, None], along[:, :, None], np.stack((dorsal, ventral))
 
 
+def elbow_pad(radius, ring):
+    """A rounded envelope for the bent elbow, sized from its spread skin section."""
+    centre = ring.mean(axis=0)
+    radial = ring - centre
+    short_radius = np.linalg.norm(radial, axis=1).min()
+    # A linearly skinned ring narrows roughly as cos(half the bend). Grow the
+    # longitudinal axis of the pad as sin(half the bend) while keeping its girth.
+    flex = np.sqrt(np.clip(1 - (short_radius / radius) ** 2, 0, 1))
+    if flex < 1e-6:
+        return None
+    normal = np.linalg.svd(radial, full_matrices=False)[2][-1]
+    across = radial[0] - normal * (radial[0] @ normal)
+    across /= np.linalg.norm(across)
+    sphere = md.Manifold.sphere(radius, 32).to_mesh64().vert_properties[:, :3]
+    return centre + sphere @ np.array([across, np.cross(normal, across), flex * normal])
+
+
+def section_hulls(contours, pad=None):
+    """Envelope each pair of skin sections and carry both sides of the elbow over its pad."""
+    middle = len(contours) // 2
+    hulls = []
+    for i, (a, b) in enumerate(zip(contours, contours[1:])):
+        points = (a, b, pad) if pad is not None and i in (middle - 1, middle) else (a, b)
+        hulls.append(md.Manifold.hull_points(np.vstack(points)))
+    return hulls
+
+
 class ReliefWing:
     """One surface whose span stations gather into the folded pose on the reference shoulder."""
 
-    def __init__(self, placed):
+    def __init__(self, placed, round_elbow=False):
         self.arm_sides = placed.model.profile.sides
         self.rig = placed.rig.rig
+        self.elbow_radius = None
+        if round_elbow:
+            start, end = self.rig.ranges["arm"]
+            rings = self.rig.rest_mesh.vertices[start:end - 2].reshape(-1, self.arm_sides, 3)
+            middle = rings[len(rings) // 2]
+            self.elbow_radius = np.linalg.norm(middle - middle.mean(axis=0), axis=1).mean()
         u, t = np.meshgrid(np.linspace(0, 1, 181), .5 - .5 * np.cos(np.linspace(0, np.pi, 89)), indexing="ij")
         self.spread = section(u, t, False)
         self.folded = section(u, t, True)
@@ -238,9 +271,10 @@ class ReliefWing:
         planes[1] += np.maximum(depth_shift, 1.20 * depth_shift)[:, :, None] * normal
         bed = planes.mean(axis=0)
         solids = [md.Manifold(md.Mesh64(vertices, self.faces.astype(np.uint64)))]
-        for rings, along_span, along_chord, width in [
-            (arm_rings, (.10, .35, .69), (.15, .16 + .44 * f, .15), .13),
-            (hand_rings, (.69, .84, .98), (.15, .14, .19), .085),
+        pad = elbow_pad(self.elbow_radius, arm_rings[len(arm_rings) // 2]) if self.elbow_radius is not None else None
+        for rings, along_span, along_chord, width, joint_pad in [
+            (arm_rings, (.10, .35, .69), (.15, .16 + .44 * f, .15), .13, pad),
+            (hand_rings, (.69, .84, .98), (.15, .14, .19), .085, None),
         ]:
             frac = np.linspace(0, 1, len(rings))
             rows = np.rint(np.interp(frac, [0, .5, 1], along_span) * (bed.shape[0] - 1)).astype(int)
@@ -249,8 +283,7 @@ class ReliefWing:
             cols = np.arccos(1 - 2 * np.clip(chord[:, None] + [-width, 0, width], 0, 1))
             cols = np.rint(cols / np.pi * (bed.shape[1] - 1)).astype(int)
             contours = np.concatenate((rings, bed[rows[:, None], cols]), axis=1)
-            for a, b in zip(contours, contours[1:]):
-                solids.append(md.Manifold.hull_points(np.vstack((a, b))))
+            solids.extend(section_hulls(contours, joint_pad))
         solids.append(md.Manifold.hull_points(np.vstack((arm_rings[0], native.vertices[arm[1] - 2]))))
         fused = md.Manifold.batch_boolean(solids, md.OpType.Add).simplify(.000005)
         if fused.status() != md.Error.NoError or len(fused.decompose()) != 1:

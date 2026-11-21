@@ -810,3 +810,33 @@ These measurements cover one reference figure. The pivot lives in the comparison
 ```
 python tools/wing_shoulder_study.py out/shoulder.png --sweep
 ```
+
+### Skin over the folded elbow
+
+The isolated sleeve in the upper row comes to a point when the upper arm and forearm close.
+The red strip shows where the two sides of its skin pass through each other. In the lower row,
+the same bones bend to the same angles under a rounded elbow. The difference is most visible
+with the feathers removed.
+
+![Half-folded and fully folded elbow sleeves, with a view of each under the feathers on the reference figure.](images/wing_elbow_sleeve.png)
+
+The experiment takes the radius of the spread elbow and uses it to shape the skin over the joint.
+As the middle ring flattens, a rounded pad fills the outside of the bend. The sections immediately
+above and below the elbow wrap over it, and the overlapping skin joins into a single solid.
+The upper-arm muscle and humeral shaft fit inside this sleeve in all 17 sampled poses.
+
+| At 32 mm figure scale | Existing half fold | Rounded half fold | Existing full fold | Rounded full fold |
+| --- | ---: | ---: | ---: | ---: |
+| Distance from the sleeve centre to the skin on the outside of the elbow | 0.39 mm | 0.48 mm | 0.16 mm | 0.48 mm |
+| Pairs of triangles crossing within the sleeve | 0 | 0 | 75 | 0 |
+
+Both rows use the seated shoulder and the same ray from the centre of the posed elbow ring
+through the outside of the bend. The rounded sleeve and the complete relief wing had zero
+crossings in all 17 poses. At full fold the complete experimental wing had 61,064 triangles,
+compared with 61,106 before the elbow change. The 32 mm print report passed at spread, half fold
+and full fold. It estimated that 5% of the full-fold wing surface was under 0.2 mm.
+These are mesh checks on the reference figure. The rounded elbow is an option in the relief study.
+
+```
+python tools/wing_elbow_study.py out/elbow.png --sweep
+```
