@@ -775,11 +775,13 @@ the two arm segments fold together. Its narrow diameter is the vertex span along
 principal axis. Of nine equally spaced fold settings, the first to show any sleeve crossings was
 0.875, with 21 pairs. The folded wrist still has direct overlap between the forearm and hand.
 
-The three thumb feathers form the alula. Their supporting rod follows the wrist transform, while the
-feather roots also inherit the thumb rotation. With the wing folded, the first tenth of each feather
-lies 0.98, 0.53 and 0.09 mm from the rod, respectively. Each complete feather still overlaps other
-plumage. In a diagnostic copy, binding the rod to the moving thumb (`thumb_tip` in this child-keyed
-rig) kept it in contact with the hand and all three quills at all nine fold settings.
+The three thumb feathers form the alula. In the original wing their supporting rod followed the wrist
+transform, while the feather roots also inherited the thumb rotation. With that wing folded, the
+first tenth of each feather lay 0.98, 0.53 and 0.09 mm from the rod, respectively. Each complete
+feather still overlapped other plumage. The stock builder now binds the rod to the moving thumb.
+Its base and all three quills shared volume with their supporting pieces at all nine fold settings
+on the reference figure, for both sheet and grown feathers. The [wrist comparison](images/wing_thumb_feather_mount.png)
+shows the quills with the surrounding plumage removed.
 
 ### Folding the relief wing about the shoulder
 

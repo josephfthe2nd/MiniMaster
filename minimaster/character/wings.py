@@ -2514,8 +2514,9 @@ def _alula_mount(sk, roots, height, s) -> Piece:
     p0 = np.array([p0[0], height(p0[0]) - 0.04 * s, p0[2]])     # on its axis (see _feather_bones)
     pts = [p0] + sorted((np.asarray(r) for r in roots), key=lambda r: float(r[0]))
     line = _polyline(pts, 4)
+    # Bones are keyed by their child joint. This segment rotates about thumb_cmc with the quills.
     return Piece("alula_mount", _tube(line, np.linspace(0.030 * s, 0.020 * s, len(line)), 8),
-                 bone="thumb_cmc")
+                 bone="thumb_tip")
 
 
 def _feather_bones(sk, height, s, sleeve: Sleeve | None = None) -> list[Piece]:

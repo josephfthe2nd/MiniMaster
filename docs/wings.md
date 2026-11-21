@@ -230,13 +230,14 @@ feather 0.08 units higher than the one below). Stacked that way the three roots 
 clear of the hand tube and of every covert, so the alula was a **floating island** (the watertight
 gate cannot see it; a slicer prints it as a speck or loses it): the **alula mount**, a thin rod
 (`_alula_mount`, radius 0.03 → 0.02 of the wing scale) from inside the hand at the wrist up through the
-three alula roots, carries them when spread. Its `thumb_cmc` binding follows the wrist as the thumb
-swings. The rod stays in contact with the hand, but the three quills lift away during the fold.
-The [original wing joint views](anatomy_wing.md#the-joints-on-the-original-feathered-wing) show the gap. Nothing the
-alula tests pin moves (roots, 26° / 18° / 10°, 26-32% of the longest primary, the stacking); the rod is
-hidden under the plumage in every view, it is only built with the bones (the draft preview has none) and
-`tests/test_print_report.py` holds the whole spread wing to **one overlap-connected component** in the
-spread and in every preset pose (before the rod: two, the alula being the other).
+three alula roots, turns with the thumb. The rig names bones by their child joint, so the rod binds
+to `thumb_tip`, the segment that rotates about `thumb_cmc`. Its base overlaps the hand and its
+other end carries the quills through the fold. The earlier wrist binding left up to 0.98 mm between
+a quill and the rod on a folded 32 mm figure. The builder includes the rod when bones are enabled.
+`tests/test_print_report.py` checks that the wing forms **one overlap-connected component** when
+spread and in every preset pose. It also checks the three quills directly through the fold.
+
+![The original and corrected thumb-feather mounts on the stock wing, spread, half folded and fully folded.](images/wing_thumb_feather_mount.png)
 
 Total: 275 pieces, ~86k triangles (was 306 pieces, 98k). The humerus's tube ends in a rounded
 blunt tip at the shoulder (`blunt` in `_feather_bones`), and the first marginals are not built

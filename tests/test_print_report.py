@@ -197,13 +197,29 @@ def test_the_alula_mount_is_a_closed_solid_that_ends_inside_the_hand():
     mount = by["alula_mount"].mesh
     rep = mount.integrity_report()
     assert rep["watertight"] and rep["volume"] > 0
-    assert by["alula_mount"].bone == "thumb_cmc"                  # rigid with the alula's own joint
     assert pr.shells_overlap(pr.Solid(mount), pr.Solid(by["hand"].mesh))
     for i in (1, 2, 3):
         assert pr.shells_overlap(pr.Solid(mount), pr.Solid(by[f"alula0{i}"].mesh)), i
     # and the draft preview (no bones) does not grow a floating rod
     _, parts = W.feathered_pieces(bones=False)
     assert "alula_mount" not in [p.name for p in parts]
+
+
+@pytest.mark.parametrize("grown", [0.0, 1.0])
+def test_the_thumb_mount_stays_in_the_hand_and_all_three_quills_through_the_fold(grown):
+    rig = W.feathered_rig(grown=grown)
+    wing = rig.placed(np.eye(4))
+    for fold in np.linspace(0, 1, 9):
+        pose = rig.pose_from_controls(fold=fold)
+        joints = wing.joint_positions(pose)
+        pieces = dict(wing.piece_meshes(pose))
+        mount = pieces["alula_mount"]
+        assert pr.shells_overlap(pr.Solid(mount), pr.Solid(pieces["hand"])), fold
+        for name in ("alula01", "alula02", "alula03"):
+            root = joints[name + "_r"]
+            quill_length = 0.1 * np.linalg.norm(joints[name + "_t"] - root)
+            near_root = np.linalg.norm(mount.vertices - root, axis=1) < quill_length
+            assert pr.Solid(pieces[name]).contains(mount.vertices[near_root]).any(), (fold, name)
 
 
 # -- the report on the real figure --------------------------------------------
